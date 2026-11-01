@@ -91,9 +91,15 @@ class ScannerBase(JSONMixin):
     def build_sample_sets(self):
         freq,  end_freq = self.config.scan_range
         sample_collection = self.sample_collection
-        while freq <= end_freq:
-            sample_set = sample_collection.build_sample_set(mhz_to_hz(freq))
-            freq += self.step_size
+        # Centre frequencies are counted in whole Hz. Adding a float step
+        # again and again (in MHz) piles up rounding errors, and then the
+        # same frequency measured by two tiles no longer looks the same.
+        step_hz = int(round(mhz_to_hz(self.step_size)))
+        freq_hz = int(round(mhz_to_hz(freq)))
+        end_hz = int(round(mhz_to_hz(end_freq)))
+        while freq_hz <= end_hz:
+            sample_set = sample_collection.build_sample_set(float(freq_hz))
+            freq_hz += step_hz
     def run_scan(self):
         self.build_sample_sets()
         running = self._running
@@ -101,6 +107,7 @@ class ScannerBase(JSONMixin):
         self.sample_collection.scan_all_freqs()
         self.sample_collection.stopped.wait()
         if running.is_set():
+            self.crop_spectrum()
             self.save_to_dbstore()
         running.clear()
         self._stopped.set()
@@ -108,6 +115,10 @@ class ScannerBase(JSONMixin):
         self._running.clear()
         self.sample_collection.cancel()
         self._stopped.wait()
+    def crop_spectrum(self):
+        # tiles reach about 1.2 MHz beyond the requested range
+        f_min, f_max = self.config.scan_range
+        self.spectrum.crop(f_min, f_max)
     def save_to_dbstore(self):
         self.spectrum.save_to_dbstore()
     def _serialize(self):

@@ -95,27 +95,58 @@ class SampleArray(JSONMixin):
         else:
             data = self._check_obj_type(other)
             self.data = np.append(self.data, data)
+    @staticmethod
+    def _freq_keys(freqs):
+        """Frequencies (MHz) as integer Hz, so that values which differ only
+        by floating point noise are treated as equal."""
+        return np.rint(np.asarray(freqs, dtype=np.float64) * 1e6).astype(np.int64)
+    def _get_counts(self):
+        """How many measurements were merged into every point (default 1)."""
+        counts = self.__dict__.get('_counts')
+        if counts is None or counts.size != self.data.size:
+            counts = np.ones(self.data.size, dtype=np.float64)
+        return counts
     def insert_sorted(self, other):
+        """Add points, keeping the array sorted by frequency.
+
+        Points with the same frequency (compared in whole Hz) are merged into
+        one. All measurements get the same weight and are averaged as
+        linear power (``magnitude``), not as dB; ``dbFS`` is recalculated
+        from the merged magnitude.
+        """
         data = self._check_obj_type(other)
-        in_ix_self = np.flatnonzero(np.in1d(self.frequency, data['frequency']))
-        in_ix_data = np.flatnonzero(np.in1d(data['frequency'], self.frequency))
-        if in_ix_self.size:
-            self.iq[in_ix_self] = np.mean([
-                self.iq[in_ix_self], data['iq'][in_ix_data]
-            ], axis=0)
-            self.magnitude[in_ix_self] = np.mean([
-                self.magnitude[in_ix_self], data['magnitude'][in_ix_data]
-            ], axis=0)
-            self.dbFS[in_ix_self] = np.mean([
-                self.dbFS[in_ix_self], data['dbFS'][in_ix_data]
-            ], axis=0)
-
-        nin_ix = np.flatnonzero(np.in1d(data['frequency'], self.frequency, invert=True))
-
-        if nin_ix.size:
-            d = np.append(self.data, data[nin_ix])
-            d = np.sort(d, order='frequency')
-            self.data = d
+        if not data.size:
+            return
+        everything = np.concatenate([self.data, data])
+        weights = np.concatenate([self._get_counts(), np.ones(data.size)])
+        keys = self._freq_keys(everything['frequency'])
+        uniq, first, inverse = np.unique(keys, return_index=True, return_inverse=True)
+        if uniq.size == everything.size:
+            order = np.argsort(keys, kind='stable')
+            self.data = everything[order]
+            self._counts = weights[order]
+            return
+        n = uniq.size
+        wsum = np.bincount(inverse, weights=weights, minlength=n)
+        merged = np.bincount(inverse, minlength=n) > 1
+        out = everything[first]
+        mag = np.bincount(inverse, weights=weights * everything['magnitude'], minlength=n) / wsum
+        iq_re = np.bincount(inverse, weights=weights * everything['iq'].real, minlength=n) / wsum
+        iq_im = np.bincount(inverse, weights=weights * everything['iq'].imag, minlength=n) / wsum
+        out['magnitude'][merged] = mag[merged]
+        out['iq'][merged] = (iq_re + 1j * iq_im)[merged]
+        out['dbFS'][merged] = dbmath.to_dB(mag[merged])
+        self.data = out
+        self._counts = wsum
+    def crop(self, start_freq, end_freq):
+        """Keep only points from ``start_freq`` to ``end_freq`` (MHz, inclusive)."""
+        keys = self._freq_keys(self.frequency)
+        lo = int(round(start_freq * 1e6))
+        hi = int(round(end_freq * 1e6))
+        ix = np.flatnonzero((keys >= lo) & (keys <= hi))
+        counts = self._get_counts()
+        self.data = self.data[ix]
+        self._counts = counts[ix]
     def smooth(self, window_size):
         x = self.magnitude
         w = np.hanning(window_size)

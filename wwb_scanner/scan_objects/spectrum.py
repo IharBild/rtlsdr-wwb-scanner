@@ -188,6 +188,16 @@ class Spectrum(JSONMixin):
                 self.samples[freq] = sample
             self.step_size = spacing
         self.set_data_updated()
+    def crop(self, start_freq, end_freq):
+        """Remove points outside of ``start_freq`` - ``end_freq`` (MHz, inclusive)."""
+        with self.data_update_lock:
+            self.sample_data.crop(start_freq, end_freq)
+            self.samples.clear()
+            kwargs = {'spectrum':self, 'init_complete':True}
+            for freq in self.sample_data.frequency:
+                kwargs['frequency'] = freq
+                self._build_sample(**kwargs)
+        self.set_data_updated()
     def scale(self, min_dB, max_dB):
         with self.data_update_lock:
             y = self.sample_data['dbFS']

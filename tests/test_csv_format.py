@@ -114,7 +114,6 @@ def test_csv_roundtrip_still_works(tmpdir):
     assert np.allclose(imp.sample_data['frequency'], np.around(freqs, 3))
 
 
-@pytest.mark.xfail(reason='A3: frequencies are compared exactly as floats', strict=False)
 def test_nearly_equal_frequencies_are_merged():
     base = np.arange(470., 470.5, 0.025)
     a = SampleArray.create(frequency=base, magnitude=np.full(base.size, 1e-6))

@@ -78,8 +78,10 @@ def test_add_sample_set(random_samples):
         overlap_data2 = data2[np.flatnonzero(np.in1d(freqs2, freqs1))]
         avg_data = np.zeros(overlap_data1.size, dtype=overlap_data1.dtype)
         avg_data['frequency'] = overlap_data1['frequency']
-        for key in ['iq', 'magnitude', 'dbFS']:
+        for key in ['iq', 'magnitude']:
             avg_data[key] = np.mean([overlap_data1[key], overlap_data2[key]], axis=0)
+        # overlapping points are averaged as linear power, dB is derived from it
+        avg_data['dbFS'] = 10 * np.log10(avg_data['magnitude'])
         non_overlap_data2 = data2[np.flatnonzero(np.in1d(freqs2, freqs1, invert=True))]
         assert np.array_equal(overlap_data1['frequency'], overlap_data2['frequency'])
 
