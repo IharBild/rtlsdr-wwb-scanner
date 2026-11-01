@@ -61,3 +61,6 @@ target/
 *.sdb2
 
 venv*
+
+# reference files for format tests
+!tests/reference/*.csv

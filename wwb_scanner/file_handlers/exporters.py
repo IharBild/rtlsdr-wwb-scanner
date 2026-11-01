@@ -9,6 +9,20 @@ import numpy as np
 
 EPOCH = datetime.datetime(1970, 1, 1)
 
+# Value used for points without data (same as no_data_value in the sdb2 header)
+NO_DATA_DB = -140.
+# dbmath floors zero power at about -3077 dB; anything below this is "no data"
+IMPOSSIBLE_DB = -1000.
+
+def clean_dB(dB, floor=NO_DATA_DB):
+    """Return a copy of ``dB`` where nan, inf and the "no signal at all"
+    values (below ``IMPOSSIBLE_DB``) are replaced by ``floor``.
+    The spectrum itself is not changed and real values are left as they are.
+    """
+    dB = np.array(dB, dtype=np.float64)
+    dB[~np.isfinite(dB) | (dB < IMPOSSIBLE_DB)] = floor
+    return dB
+
 class BaseExporter(object):
     def __init__(self, **kwargs):
         self.spectrum = kwargs.get('spectrum')
@@ -69,13 +83,19 @@ class CSVExporter(BaseExporter):
         if os.path.splitext(value)[1] == '.CSV':
             value = '.'.join([os.path.splitext(value)[0], 'csv'])
         super(CSVExporter, self).set_filename(value)
+    def write_file(self):
+        s = self.build_data()
+        # newline='' stops Python from translating '\r\n' again on Windows
+        # (which produced '\r\r\n')
+        with open(self.filename, 'w', newline='') as f:
+            f.write(s)
     def build_data(self):
         newline_chars = self.newline_chars
         delim = self.delimiter_char
         frequency_format = self.frequency_format
         lines = []
         freqs = np.around(self.spectrum.sample_data['frequency'], decimals=3)
-        dB = np.around(self.spectrum.sample_data['dbFS'], decimals=1)
+        dB = clean_dB(np.around(self.spectrum.sample_data['dbFS'], decimals=1))
         for f, v in zip(freqs, dB):
             lines.append(delim.join([str(f), str(v)]))
         return newline_chars.join(lines)
@@ -153,7 +173,7 @@ class WWBLegacyExporter(BaseWWBExporter):
         data_sets = root.find('data_sets')
         data_set = ET.SubElement(data_sets, 'data_set', attribs['data_set'])
         freqs = np.around(self.spectrum.sample_data['frequency'], decimals=3)
-        dB = np.around(self.spectrum.sample_data['dbFS'], decimals=1)
+        dB = clean_dB(np.around(self.spectrum.sample_data['dbFS'], decimals=1))
         for val in dB:
             v = ET.SubElement(data_set, 'v')
             v.text = str(val)
@@ -169,9 +189,7 @@ class WWBExporter(BaseWWBExporter):
         freq_set = ET.SubElement(data_sets, 'freq_set')
         data_set = ET.SubElement(data_sets, 'data_set', self.attribs['data_set'])
         freqs = self.spectrum.sample_data['frequency'] * 1000
-        dB = np.around(self.spectrum.sample_data['dbFS'], decimals=1)
-        nanix = np.flatnonzero(np.isnan(dB) | np.isinf(dB))
-        dB[nanix] = -140.
+        dB = clean_dB(np.around(self.spectrum.sample_data['dbFS'], decimals=1))
         for freq, val in zip(freqs, dB):
             f = ET.SubElement(freq_set, 'f')
             f.text = str(int(freq))
