@@ -13,6 +13,7 @@ WIN = 96
 class FakeCollection(object):
     def __init__(self):
         self.done = []
+        self.aborted = False
     def on_sample_set_processed(self, s):
         self.done.append(s)
 
@@ -199,3 +200,28 @@ def test_no_tile_centres_above_tuner_limit():
     obj.step_size = 0.775
     m.ScannerBase.build_sample_sets(obj)
     assert built and max(built) <= m.MAX_TUNER_FREQ_HZ
+
+
+def test_stuck_read_times_out_and_aborts_scan(monkeypatch):
+    import threading
+    monkeypatch.setattr(sp, 'READ_TIMEOUT', 0.3)
+    block = threading.Event()
+    class Stuck(FakeSdr):
+        def read_samples(self, n):
+            block.wait(5)
+    ss, coll = sync_tile(Stuck())
+    block.set()
+    assert ss.complete.is_set() and coll.done == []
+    assert coll.aborted is True
+
+
+def test_stuck_tune_times_out_and_aborts_scan(monkeypatch):
+    import threading
+    monkeypatch.setattr(sp, 'TUNE_TIMEOUT', 0.3)
+    block = threading.Event()
+    class Stuck(FakeSdr):
+        def set_center_freq(self, f):
+            block.wait(5)
+    ss, coll = sync_tile(Stuck())
+    block.set()
+    assert ss.complete.is_set() and coll.aborted is True

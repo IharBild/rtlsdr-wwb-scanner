@@ -40,6 +40,31 @@ def calc_num_samples(num_samples):
 def sort_psd(f, Pxx, onesided=False):
     return np.fft.fftshift(f), np.fft.fftshift(Pxx)
 
+class SdrTimeout(Exception):
+    """The dongle did not answer in time (a USB call that never returns)."""
+
+def run_with_timeout(func, timeout, *args):
+    """Call ``func`` in a helper thread. If it does not return within
+    ``timeout`` seconds raise SdrTimeout, so the scan can stop instead of
+    freezing the program. (A stuck USB call itself cannot be killed.)"""
+    box = {}
+    def target():
+        try:
+            box['result'] = func(*args)
+        except BaseException as exc:
+            box['exc'] = exc
+    t = threading.Thread(target=target, daemon=True)
+    t.start()
+    t.join(timeout)
+    if t.is_alive():
+        raise SdrTimeout('no answer from the dongle in %s s' % timeout)
+    if 'exc' in box:
+        raise box['exc']
+    return box.get('result')
+
+TUNE_TIMEOUT = 10.
+READ_TIMEOUT = 20.
+
 class SampleSet(JSONMixin):
     __slots__ = ('scanner', 'center_frequency', 'raw', 'current_sweep', 'complete',
                  '_frequencies', 'powers', 'collection', 'process_thread', 'samples_discarded')
@@ -76,13 +101,22 @@ class SampleSet(JSONMixin):
         timing = getattr(collection, 'timing', None)
         if timing is not None:
             timing.tick(self.center_frequency, stage)
+    def abort_scan(self):
+        coll = self.collection
+        if coll is not None:
+            coll.aborted = True
+
     def tune(self, sdr, freq):
         """Set the centre frequency. A tuner that cannot lock must not
         kill the whole scan: retry once, then give up on this tile."""
         for attempt in range(2):
             try:
-                sdr.set_center_freq(freq)
+                run_with_timeout(sdr.set_center_freq, TUNE_TIMEOUT, freq)
                 return True
+            except SdrTimeout as exc:
+                logger.error('set_center_freq(%s): %s', freq, exc)
+                self.abort_scan()
+                return False
             except Exception as exc:
                 logger.error('set_center_freq(%s) failed (attempt %d): %s',
                              freq, attempt + 1, exc)
@@ -117,8 +151,12 @@ class SampleSet(JSONMixin):
         iq = None
         for attempt in range(2):
             try:
-                sdr.read_samples(NUM_SAMPLES_DISCARDED)    # old data from before retuning
-                iq = sdr.read_samples(num_samples)
+                run_with_timeout(sdr.read_samples, READ_TIMEOUT, NUM_SAMPLES_DISCARDED)    # old data from before retuning
+                iq = run_with_timeout(sdr.read_samples, READ_TIMEOUT, num_samples)
+                break
+            except SdrTimeout as exc:
+                logger.error('read at %s Hz: %s', self.center_frequency, exc)
+                self.abort_scan()
                 break
             except Exception:
                 logger.exception('read failed at %s Hz (attempt %s)', self.center_frequency, attempt + 1)
@@ -245,6 +283,7 @@ class SampleCollection(JSONMixin):
         self.stopped = threading.Event()
         self.sample_sets = {}
         self.timing = ScanTiming()
+        self.aborted = False
     def calc_progress(self):
         num_sets = len(self.sample_sets)
         if not num_sets:
@@ -263,9 +302,17 @@ class SampleCollection(JSONMixin):
     def scan_all_freqs(self):
         self.scanning.set()
         complete_events = set()
-        for key in sorted(self.sample_sets.keys()):
+        self.aborted = False
+        keys = sorted(self.sample_sets.keys())
+        for n, key in enumerate(keys):
             if not self.scanning.is_set():
                 break
+            if self.aborted:
+                print('!!! Scan stopped: the dongle stopped answering. '
+                      'Unplug and replug it, then start again.', flush=True)
+                break
+            if n % 20 == 0:
+                print('scan tile %d/%d at %.3f MHz' % (n + 1, len(keys), key / 1e6), flush=True)
             sample_set = self.sample_sets[key]
             sample_set.read_samples()
             if not sample_set.complete.is_set():
