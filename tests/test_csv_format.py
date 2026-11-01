@@ -122,9 +122,39 @@ def test_nearly_equal_frequencies_are_merged():
     assert a.size == base.size
 
 
-@pytest.mark.xfail(reason='A5: WWB-style export in kHz is not implemented yet', strict=False)
 def test_khz_export_matches_wwb_format(tmpdir):
     freqs = np.around(np.arange(470., 471., 0.025), 3)
     spectrum = make_spectrum(freqs, np.linspace(1e-6, 1e-3, freqs.size))
     _, raw = export_csv(spectrum, tmpdir, frequency_format='khz')
     assert check_wwb_csv(raw) == []
+
+
+def test_khz_roundtrip_and_autodetect(tmpdir):
+    freqs = np.around(np.arange(470., 471., 0.025), 3)
+    spectrum = make_spectrum(freqs, np.linspace(1e-6, 1e-3, freqs.size))
+    fn, _ = export_csv(spectrum, tmpdir, frequency_format='khz')
+    imp = Spectrum.import_from_file(fn)
+    assert np.allclose(imp.sample_data['frequency'], freqs)
+
+
+def test_khz_export_resamples_uneven_points_to_25khz_grid(tmpdir):
+    freqs = np.array([470.0, 470.0123, 470.0371, 470.0502, 470.0999])
+    spectrum = make_spectrum(freqs, np.full(freqs.size, 1e-6))
+    _, raw = export_csv(spectrum, tmpdir, frequency_format='khz')
+    assert check_wwb_csv(raw) == []
+    assert raw.decode().split('\n')[0].startswith('470000,')
+    assert raw.decode().split('\n')[-1].startswith('470100,')
+
+
+def test_khz_export_zero_power_is_no_data(tmpdir):
+    freqs = np.array([470.0, 470.025, 470.05])
+    spectrum = make_spectrum(freqs, [1e-6, 0., 1e-6])
+    _, raw = export_csv(spectrum, tmpdir, frequency_format='khz')
+    assert raw.decode().split('\n')[1] == '470025,-140.0'
+    assert check_wwb_csv(raw) == []
+
+
+def test_old_mhz_format_unchanged_by_default(tmpdir):
+    spectrum = make_spectrum([470.0, 470.025], [1e-6, 2e-6])
+    _, raw = export_csv(spectrum, tmpdir)
+    assert raw.startswith(b'470.0,') and b'\r\n' in raw

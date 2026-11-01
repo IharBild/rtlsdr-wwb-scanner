@@ -89,6 +89,9 @@ class GraphTableModel(QtCore.QAbstractTableModel):
         br = self.index(data.shape[0]-1, max(change_ix))
         self.dataChanged.emit(tl, br)
 
+# "khz" = Shure WWB style CSV, None = old MHz CSV
+CSV_FREQUENCY_FORMAT = 'khz'
+
 class SpectrumGraphData(QtQuick.QQuickItem):
     _n_model = Signal()
     _n_name = Signal()
@@ -241,7 +244,9 @@ class SpectrumGraphData(QtQuick.QQuickItem):
     @Slot(QtCore.QUrl)
     def save_to_file(self, uri):
         filename = uri.toLocalFile()
-        self.spectrum.export_to_file(filename=filename)
+        # CSV is written in the Shure WWB layout (kHz, 25 kHz step, "\\n").
+        # Change to None to get the old MHz format back.
+        self.spectrum.export_to_file(filename=filename, frequency_format=CSV_FREQUENCY_FORMAT)
 
 class LiveSpectrumGraphData(SpectrumGraphData):
     _n_update_interval = Signal()

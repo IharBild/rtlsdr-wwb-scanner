@@ -63,6 +63,10 @@ class CSVImporter(BaseImporter):
         a = np.fromiter(iter_lines(), dtype=np.float64)
         freqs = a[::2]
         dB = a[1::2]
+        # WWB files hold kHz (470000), our older files hold MHz (470.0).
+        # No real scan starts above 10 GHz, so a value that big means kHz.
+        if freqs.size and np.nanmin(freqs) >= 10000.:
+            freqs = freqs / 1000.
         spectrum.add_sample_set(frequency=freqs, dbFS=dB)
 
 class BaseWWBImporter(BaseImporter):

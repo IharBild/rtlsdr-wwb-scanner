@@ -73,9 +73,18 @@ class NumpyExporter(BaseExporter):
         np.savez(self.filename, sample_data=self.spectrum.sample_data)
 
 class CSVExporter(BaseExporter):
+    """Plain two column CSV.
+
+    ``frequency_format='khz'`` writes the same layout as Shure WWB:
+    frequency in whole kHz, level with one decimal, 25 kHz grid,
+    ``\\n`` line endings and no newline after the last line.
+    Any other value (default) keeps the old format: MHz, ``\\r\\n``.
+    """
     _extension = 'csv'
     newline_chars = '\r\n'
     delimiter_char = ','
+    khz_newline_chars = '\n'
+    khz_step = 25
     def __init__(self, **kwargs):
         super(CSVExporter, self).__init__(**kwargs)
         self.frequency_format = kwargs.get('frequency_format')
@@ -89,10 +98,34 @@ class CSVExporter(BaseExporter):
         # (which produced '\r\r\n')
         with open(self.filename, 'w', newline='') as f:
             f.write(s)
+    @property
+    def is_khz(self):
+        fmt = self.frequency_format
+        return fmt is not None and str(fmt).lower() == 'khz'
+    def build_khz_data(self):
+        """Resample onto a whole-kHz grid (step ``khz_step``) like WWB does."""
+        step = self.khz_step
+        freqs_khz = np.rint(np.asarray(self.spectrum.sample_data['frequency'], dtype=np.float64) * 1000.)
+        dB = clean_dB(self.spectrum.sample_data['dbFS'])
+        if freqs_khz.size == 0:
+            return ''
+        order = np.argsort(freqs_khz, kind='stable')
+        freqs_khz, dB = freqs_khz[order], dB[order]
+        # first/last grid points that lie inside the scanned range
+        first = int(np.ceil(freqs_khz[0] / step)) * step
+        last = int(np.floor(freqs_khz[-1] / step)) * step
+        if last < first:
+            first = last = int(freqs_khz[0])
+        grid = np.arange(first, last + 1, step, dtype=np.int64)
+        values = np.interp(grid, freqs_khz, dB)
+        values = np.around(values, decimals=1)
+        lines = ['%d%s%.1f' % (f, self.delimiter_char, v) for f, v in zip(grid, values)]
+        return self.khz_newline_chars.join(lines)
     def build_data(self):
+        if self.is_khz:
+            return self.build_khz_data()
         newline_chars = self.newline_chars
         delim = self.delimiter_char
-        frequency_format = self.frequency_format
         lines = []
         freqs = np.around(self.spectrum.sample_data['frequency'], decimals=3)
         dB = clean_dB(np.around(self.spectrum.sample_data['dbFS'], decimals=1))
