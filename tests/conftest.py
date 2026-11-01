@@ -1,4 +1,6 @@
 import os
+import sys
+import types
 
 import pytest
 import numpy as np
@@ -51,3 +53,12 @@ def data_files():
         files[fkey][skey] = os.path.join(data_dir, fn)
 
     return files
+
+
+# The dongle driver is not needed by the tests; use a stub if it is not installed.
+try:
+    import rtlsdr  # noqa: F401
+except Exception:
+    _stub = types.ModuleType('rtlsdr')
+    _stub.RtlSdr = object
+    sys.modules['rtlsdr'] = _stub

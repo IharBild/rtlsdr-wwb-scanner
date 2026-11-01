@@ -13,6 +13,12 @@ WINDOW_TYPES = [s for s in WINDOW_TYPES if s != 'get_window']
 
 NPERSEG = 128
 
+# Fraction of the sample rate on each side of the centre that is kept
+# (0.39 -> about +-0.94 MHz of 2.4 MHz). RTL-SDR tile edges roll off by ~3 dB.
+DEFAULT_TILE_KEEP_RATIO = 0.39
+# Bins closer than this to the centre are dropped (RTL DC spike), in Hz.
+DEFAULT_TILE_CENTER_GAP_HZ = 30000.
+
 def next_2_to_pow(val):
     val -= 1
     val |= val >> 1
@@ -120,12 +126,17 @@ class SampleSet(JSONMixin):
         freqs, Pxx = welch(samples, fs=rs, window=win, detrend=False,
             nperseg=win_size, scaling='density', return_onesided=False)
 
-        iPxx = np.fft.irfft(Pxx)
-        iPxx = self.translate_freq(iPxx, fc, rs)
-        Pxx = np.abs(np.fft.rfft(iPxx.real))
-
+        # Plain PSD of the tile, centred on fc. (The old irfft -> translate_freq
+        # -> rfft chain made the result depend on the centre frequency.)
         freqs, Pxx = sort_psd(freqs, Pxx)
         freqs = np.around(freqs)
+
+        # Drop the weak tile edges and the DC spike in the middle of the tile.
+        # Every frequency is also seen by a neighbouring tile at another
+        # position, so nothing is lost as long as step < kept half-width.
+        keep = self.good_bins_mask(freqs, rs)
+        freqs = freqs[keep]
+        Pxx = Pxx[keep]
 
         freqs += fc
         freqs /= 1e6
@@ -137,6 +148,17 @@ class SampleSet(JSONMixin):
         self.raw = None
         self.collection.on_sample_set_processed(self)
         self.complete.set()
+    def good_bins_mask(self, offsets_hz, rs):
+        """True for FFT bins that are used: not near the tile edge, not at DC."""
+        cfg = self.scanner.sampling_config
+        half = getattr(cfg, 'tile_keep_ratio', None)
+        if half is None:
+            half = DEFAULT_TILE_KEEP_RATIO
+        gap = getattr(cfg, 'tile_center_gap_hz', None)
+        if gap is None:
+            gap = DEFAULT_TILE_CENTER_GAP_HZ
+        a = np.abs(offsets_hz)
+        return (a <= half * rs) & (a > gap)
     def calc_expected_freqs(self):
         freq = self.center_frequency
         scanner = self.scanner
@@ -150,6 +172,7 @@ class SampleSet(JSONMixin):
         f_expected, Pxx = sort_psd(f_expected, Pxx)
 
         f_expected = np.around(f_expected)
+        f_expected = f_expected[self.good_bins_mask(f_expected, rs)]
 
         f_expected += freq
         f_expected /= 1e6
