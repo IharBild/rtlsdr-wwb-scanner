@@ -39,55 +39,61 @@ class GraphTableModel(QtCore.QAbstractTableModel):
             return float(self._data[index.row(), index.column()])
         return QtCore.QVariant()
     def _reshape_data(self, d_arr):
+        """Grow the table at its end (a live scan adds points at the top)."""
         new_shape = (2, d_arr.size)
         cur_shape = self._data.shape
-        parent = QtCore.QModelIndex()
-        if cur_shape[-1] > new_shape[-1]:
-            start_col = cur_shape[-1] - 1
-            end_col = new_shape[-1] - 1
-            ix = self.index(0, 0)
-            parent = ix
-            self.beginRemoveColumns(parent, start_col, end_col)
-            self._data = self._data[...,:end_col+1]
+        start_col = cur_shape[-1]
+        end_col = new_shape[-1] - 1
+        if end_col < start_col:
+            return
+        self.beginInsertColumns(QtCore.QModelIndex(), start_col, end_col)
+        data = np.zeros(new_shape, dtype=np.float64)
+        data[:,:start_col] = self._data[:,:]
+        data[0,start_col:] = d_arr['x'][start_col:]
+        data[1,start_col:] = d_arr['y'][start_col:]
+        self._data = data
+        self.endInsertColumns()
+
+    def _rebuild(self, d_arr):
+        """Replace the whole table: remove every column, then insert the
+        new ones. Telling the chart "points 0..N changed" one by one makes
+        it redraw after each point, which freezes the program for a very
+        long time on a full-range scan (70 000 points)."""
+        n_cur = self._data.shape[-1]
+        if n_cur:
+            self.beginRemoveColumns(QtCore.QModelIndex(), 0, n_cur - 1)
+            self._data = np.zeros((2, 0), dtype=np.float64)
             self.endRemoveColumns()
-        elif cur_shape[-1] < new_shape[-1]:
-            start_col = cur_shape[-1]
-            end_col = new_shape[-1] - 1
-            ix = self.index(0, 0)
-            self.beginInsertColumns(parent, start_col, end_col)
-            data = np.zeros(new_shape, dtype=np.float64)
-            data[:,:start_col] = self._data[:,:]
-            data[0,start_col:] = d_arr['x'][start_col:]
-            data[1,start_col:] = d_arr['y'][start_col:]
+        n_new = d_arr.size
+        if n_new:
+            data = np.zeros((2, n_new), dtype=np.float64)
+            data[0] = d_arr['x']
+            data[1] = d_arr['y']
+            self.beginInsertColumns(QtCore.QModelIndex(), 0, n_new - 1)
             self._data = data
             self.endInsertColumns()
 
     def set_from_graph_dtype(self, d_arr):
-        if d_arr.size != self._data.shape[-1]:
+        if d_arr.size < self._data.shape[-1]:
+            self._rebuild(d_arr)
+            return
+        if d_arr.size > self._data.shape[-1]:
             self._reshape_data(d_arr)
-            x_changed = True
-            y_changed = True
-        else:
-            x_changed = not np.array_equal(self._data[0], d_arr['x'])
-            y_changed = not np.array_equal(self._data[1], d_arr['y'])
-        if not x_changed and not y_changed:
-            return
         data = self._data
-
-        change_ix_x = np.flatnonzero(np.not_equal(data[0], d_arr['x']))
-        change_ix_y = np.flatnonzero(np.not_equal(data[1], d_arr['y']))
-
-        change_ix = set(change_ix_x) | set(change_ix_y)
-
-        if not len(change_ix):
+        changed = np.flatnonzero((data[0] != d_arr['x']) | (data[1] != d_arr['y']))
+        if not changed.size:
             return
-
+        if changed[-1] - changed[0] > REBUILD_THRESHOLD:
+            self._rebuild(d_arr)
+            return
         data[0] = d_arr['x']
         data[1] = d_arr['y']
-
-        tl = self.index(0, min(change_ix))
-        br = self.index(data.shape[0]-1, max(change_ix))
+        tl = self.index(0, int(changed[0]))
+        br = self.index(data.shape[0]-1, int(changed[-1]))
         self.dataChanged.emit(tl, br)
+
+# If more columns than this changed in one go, rebuild the model instead
+REBUILD_THRESHOLD = 2000
 
 # "khz" = Shure WWB style CSV, None = old MHz CSV
 CSV_FREQUENCY_FORMAT = 'khz'
