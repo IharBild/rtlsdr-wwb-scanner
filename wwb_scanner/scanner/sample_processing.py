@@ -14,6 +14,11 @@ WINDOW_TYPES = [s for s in WINDOW_TYPES if s != 'get_window']
 
 NPERSEG = 128
 
+# Read every tile with one blocking call (True) or with the old async reader (False)
+USE_SYNC_READ = True
+# Samples thrown away after retuning (about 7 ms at 2.4 MS/s)
+NUM_SAMPLES_DISCARDED = 16384
+
 # Fraction of the sample rate on each side of the centre that is kept
 # (0.39 -> about +-0.94 MHz of 2.4 MHz). RTL-SDR tile edges roll off by ~3 dB.
 DEFAULT_TILE_KEEP_RATIO = 0.39
@@ -82,8 +87,31 @@ class SampleSet(JSONMixin):
         self._tick('tuned')
         self.raw = np.zeros((sweeps_per_scan, samples_per_sweep), 'complex')
         self.powers = np.zeros((sweeps_per_scan, samples_per_sweep), 'float64')
-        sdr.read_samples_async(self.samples_callback, num_samples=samples_per_sweep)
+        if USE_SYNC_READ and hasattr(sdr, 'read_samples'):
+            self.read_samples_sync(sdr, sweeps_per_scan * samples_per_sweep)
+        else:
+            sdr.read_samples_async(self.samples_callback, num_samples=samples_per_sweep)
         self._tick('returned')
+    def read_samples_sync(self, sdr, num_samples):
+        """One blocking read per tile. Starting and cancelling the async
+        reader for every tile cost more time than the reading itself, and
+        a cancel that never completes was one source of hangs."""
+        num_samples = int(-(-num_samples // 512) * 512)   # multiple of 512
+        iq = None
+        for attempt in range(2):
+            try:
+                sdr.read_samples(NUM_SAMPLES_DISCARDED)    # old data from before retuning
+                iq = sdr.read_samples(num_samples)
+                break
+            except Exception:
+                logger.exception('read failed at %s Hz (attempt %s)', self.center_frequency, attempt + 1)
+        if iq is None:
+            self.raw = None
+            self.complete.set()
+            return
+        sweeps, per_sweep = self.raw.shape
+        self.raw = np.asarray(iq[:sweeps * per_sweep], dtype=np.complex128).reshape(sweeps, per_sweep)
+        self.process_samples()
     def samples_callback(self, iq, context):
         samples_per_sweep = self.scanner.samples_per_sweep
         if not self.samples_discarded:

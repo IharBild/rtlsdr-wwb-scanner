@@ -170,6 +170,7 @@ class ScannerInterface(GenericQObject):
         conf.sampling.sweeps_per_scan = self.scanConfig.sweepsPerScan
         conf.sampling.sweep_overlap_ratio = self.scanConfig.sweepOverlapRatio
         conf.sampling.window_size = self.scanConfig.windowSize
+        conf.sampling.window_type = self.scanConfig.windowType
         return conf
 
     @Slot(int, float, result=float)

@@ -115,3 +115,52 @@ def test_stitched_scan_shows_narrow_tone_at_right_place():
     peak = f[np.argmax(d)]
     assert abs(peak - 603.1) <= 0.025
     assert d.max() - np.median(d) > 20
+
+
+class FakeSdr(object):
+    """Hands out the same noise + tone a real tuner would, one blocking read at a time."""
+    def __init__(self, fail_first=False):
+        self.freq = None
+        self.reads = []
+        self.fail_first = fail_first
+    def set_center_freq(self, f):
+        self.freq = f
+    def read_samples(self, n):
+        self.reads.append(n)
+        if self.fail_first:
+            self.fail_first = False
+            raise IOError('usb')
+        rng = np.random.RandomState(3)
+        return (rng.randn(n) + 1j * rng.randn(n)) * 0.01
+
+
+def sync_tile(sdr):
+    scanner = FakeScanner()
+    scanner.sdr = sdr
+    coll = FakeCollection()
+    ss = sp.SampleSet(scanner=scanner, collection=coll, center_frequency=600e6)
+    ss.read_samples()
+    return ss, coll
+
+
+def test_sync_read_gives_a_processed_tile():
+    sdr = FakeSdr()
+    ss, coll = sync_tile(sdr)
+    assert ss.complete.is_set() and coll.done == [ss]
+    assert sdr.reads[0] == sp.NUM_SAMPLES_DISCARDED
+    assert sdr.reads[1] % 512 == 0 and sdr.reads[1] >= 20 * 8192
+    assert np.ptp(10 * np.log10(ss.powers)) < 1.0
+
+
+def test_sync_read_retries_once_after_usb_error():
+    sdr = FakeSdr(fail_first=True)
+    ss, coll = sync_tile(sdr)
+    assert coll.done == [ss]
+
+
+def test_sync_read_gives_up_without_hanging():
+    class Dead(FakeSdr):
+        def read_samples(self, n):
+            raise IOError('gone')
+    ss, coll = sync_tile(Dead())
+    assert ss.complete.is_set() and coll.done == []
