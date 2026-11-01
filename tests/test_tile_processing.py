@@ -164,3 +164,38 @@ def test_sync_read_gives_up_without_hanging():
             raise IOError('gone')
     ss, coll = sync_tile(Dead())
     assert ss.complete.is_set() and coll.done == []
+
+
+def test_tune_failure_does_not_raise_and_completes_tile():
+    class NoLock(FakeSdr):
+        def set_center_freq(self, f):
+            raise IOError('Could not set center_freq')
+    ss, coll = sync_tile(NoLock())
+    assert ss.complete.is_set() and coll.done == []
+
+
+def test_tune_retries_once():
+    class Flaky(FakeSdr):
+        n = 0
+        def set_center_freq(self, f):
+            Flaky.n += 1
+            if Flaky.n == 1:
+                raise IOError('pll')
+    ss, coll = sync_tile(Flaky())
+    assert coll.done == [ss]
+
+
+def test_no_tile_centres_above_tuner_limit():
+    from wwb_scanner.scanner import main as m
+    built = []
+    class Coll(object):
+        def build_sample_set(self, f):
+            built.append(f)
+    class Fake(object):
+        pass
+    obj = Fake()
+    obj.config = Fake(); obj.config.scan_range = [1700., 2000.]
+    obj.sample_collection = Coll()
+    obj.step_size = 0.775
+    m.ScannerBase.build_sample_sets(obj)
+    assert built and max(built) <= m.MAX_TUNER_FREQ_HZ

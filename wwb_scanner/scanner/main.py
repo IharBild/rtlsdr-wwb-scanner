@@ -5,6 +5,9 @@ import numpy as np
 import logging
 logger = logging.getLogger(__name__)
 
+# The R828D tuner in the RTL-SDR Blog V4 cannot lock its PLL above this.
+MAX_TUNER_FREQ_HZ = 1766000000
+
 from wwb_scanner.core import JSONMixin
 from wwb_scanner.utils.dbstore import db_store
 from wwb_scanner.scanner.sdrwrapper import SdrWrapper
@@ -98,6 +101,11 @@ class ScannerBase(JSONMixin):
         freq_hz = int(round(mhz_to_hz(freq)))
         end_hz = int(round(mhz_to_hz(end_freq)))
         while freq_hz <= end_hz:
+            if freq_hz > MAX_TUNER_FREQ_HZ:
+                logger.warning(
+                    'Tile centres above %.1f MHz skipped: tuner cannot reach them',
+                    MAX_TUNER_FREQ_HZ / 1e6)
+                break
             sample_set = sample_collection.build_sample_set(float(freq_hz))
             freq_hz += step_hz
     def run_scan(self):
