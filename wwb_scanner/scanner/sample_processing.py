@@ -8,6 +8,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 from wwb_scanner.core import JSONMixin
+from wwb_scanner.scanner.scan_timing import ScanTiming
 
 WINDOW_TYPES = [s for s in WINDOW_TYPES if s != 'get_window']
 
@@ -65,16 +66,24 @@ class SampleSet(JSONMixin):
     @property
     def window_size(self):
         return getattr(self.scanner, 'window_size', NPERSEG)
+    def _tick(self, stage):
+        collection = self.collection
+        timing = getattr(collection, 'timing', None)
+        if timing is not None:
+            timing.tick(self.center_frequency, stage)
     def read_samples(self):
+        self._tick('start')
         scanner = self.scanner
         freq = self.center_frequency
         sweeps_per_scan = scanner.sweeps_per_scan
         samples_per_sweep = scanner.samples_per_sweep
         sdr = scanner.sdr
         sdr.set_center_freq(freq)
+        self._tick('tuned')
         self.raw = np.zeros((sweeps_per_scan, samples_per_sweep), 'complex')
         self.powers = np.zeros((sweeps_per_scan, samples_per_sweep), 'float64')
         sdr.read_samples_async(self.samples_callback, num_samples=samples_per_sweep)
+        self._tick('returned')
     def samples_callback(self, iq, context):
         samples_per_sweep = self.scanner.samples_per_sweep
         if not self.samples_discarded:
@@ -116,6 +125,7 @@ class SampleSet(JSONMixin):
         samples *= xlator
         return samples
     def process_samples(self):
+        self._tick('got_data')
         rs = self.scanner.sample_rate
         fc = self.center_frequency
 
@@ -146,7 +156,9 @@ class SampleSet(JSONMixin):
             logger.warning('freq not equal: %s, %s' % (self.frequencies.size, freqs.size))
             self.frequencies = freqs
         self.raw = None
+        self._tick('processed')
         self.collection.on_sample_set_processed(self)
+        self._tick('inserted')
         self.complete.set()
     def good_bins_mask(self, offsets_hz, rs):
         """True for FFT bins that are used: not near the tile edge, not at DC."""
@@ -187,6 +199,7 @@ class SampleCollection(JSONMixin):
         self.scanning = threading.Event()
         self.stopped = threading.Event()
         self.sample_sets = {}
+        self.timing = ScanTiming()
     def calc_progress(self):
         num_sets = len(self.sample_sets)
         if not num_sets:
@@ -219,6 +232,7 @@ class SampleCollection(JSONMixin):
                 else:
                     e.wait()
         self.scanning.clear()
+        self.timing.write_report()
         self.stopped.set()
     def stop(self):
         if self.scanning.is_set():
