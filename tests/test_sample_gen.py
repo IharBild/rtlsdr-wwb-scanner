@@ -15,4 +15,4 @@ def test_sample_gen(random_samples):
             print('------')
             ix = np.argwhere(Pxx==0)
             print(ix, sig[ix], Pxx[ix])
-        assert z is True
+        assert z

@@ -32,7 +32,7 @@ def test_sample_array(random_samples):
     a.set_fields(frequency=freqs, iq=ff)
     c = SampleArray.create(frequency=freqs, iq=ff)
 
-    ix = np.flatnonzero(np.in1d(a.frequency, c.frequency))
+    ix = np.flatnonzero(np.isin(a.frequency, c.frequency))
     assert np.array_equal(a.data[ix], c.data)
 
 def test_spectrum(random_samples):
@@ -74,15 +74,15 @@ def test_add_sample_set(random_samples):
     def get_overlap_arrays(data1, data2):
         freqs1 = data1['frequency']
         freqs2 = data2['frequency']
-        overlap_data1 = data1[np.flatnonzero(np.in1d(freqs1, freqs2))]
-        overlap_data2 = data2[np.flatnonzero(np.in1d(freqs2, freqs1))]
+        overlap_data1 = data1[np.flatnonzero(np.isin(freqs1, freqs2))]
+        overlap_data2 = data2[np.flatnonzero(np.isin(freqs2, freqs1))]
         avg_data = np.zeros(overlap_data1.size, dtype=overlap_data1.dtype)
         avg_data['frequency'] = overlap_data1['frequency']
         for key in ['iq', 'magnitude']:
             avg_data[key] = np.mean([overlap_data1[key], overlap_data2[key]], axis=0)
         # overlapping points are averaged as linear power, dB is derived from it
         avg_data['dbFS'] = 10 * np.log10(avg_data['magnitude'])
-        non_overlap_data2 = data2[np.flatnonzero(np.in1d(freqs2, freqs1, invert=True))]
+        non_overlap_data2 = data2[np.flatnonzero(np.isin(freqs2, freqs1, invert=True))]
         assert np.array_equal(overlap_data1['frequency'], overlap_data2['frequency'])
 
         return avg_data, non_overlap_data2
@@ -104,9 +104,9 @@ def test_add_sample_set(random_samples):
     fc += 1e6
 
     freqs2, ff2 = build_data(fc)
-    assert np.any(np.in1d(freqs, freqs2))
+    assert np.any(np.isin(freqs, freqs2))
 
-    print('in1d: ', np.nonzero(np.in1d(spectrum.sample_data['frequency'], freqs2)))
+    print('in1d: ', np.nonzero(np.isin(spectrum.sample_data['frequency'], freqs2)))
     print('spectrum size: ', spectrum.sample_data['frequency'].size)
 
     spectrum.add_sample_set(frequency=freqs2, iq=ff2, center_frequency=fc, force_lower_freq=True)
@@ -137,7 +137,7 @@ def test_add_sample_set(random_samples):
 
     fc = 800e6
     freqs3, ff3 = build_data(fc)
-    assert not np.any(np.in1d(spectrum.sample_data['frequency'], freqs3))
+    assert not np.any(np.isin(spectrum.sample_data['frequency'], freqs3))
 
     spectrum.add_sample_set(frequency=freqs3, iq=ff3, center_frequency=fc, force_lower_freq=True)
     print('spectrum size: ', spectrum.sample_data['frequency'].size)
