@@ -1,0 +1,6 @@
+=== orig
+470-800    tiles  426 | USB ctrl per retune avg 23.0 max 23 | tuner I2C wr 19.0 rd 2.0 | set_freq errors 0 | max LO error 400.4 Hz
+30-1766    tiles 2241 | USB ctrl per retune avg 23.0 max 32 | tuner I2C wr 19.0 rd 2.0 | set_freq errors 0 | max LO error 644.5 Hz
+T1 PLL write fails : 1st -1, retry 0, LO error after retry 10 Hz
+T2 input switch fails: 1st -1, retry 0, reg05 cable1=1 air_in_off=1 (want 0 0 = UHF input)
+tuner I2C transfers while the repeater was off: 0
