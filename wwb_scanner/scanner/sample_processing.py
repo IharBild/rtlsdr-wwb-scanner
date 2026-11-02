@@ -337,6 +337,8 @@ class SampleCollection(JSONMixin):
         self.timing = ScanTiming()
         self.aborted = False
         self.tile_errors = 0
+        self.processed_keys = set()
+        self.missing_tiles = []
     def calc_progress(self):
         num_sets = len(self.sample_sets)
         if not num_sets:
@@ -357,6 +359,7 @@ class SampleCollection(JSONMixin):
         complete_events = set()
         self.aborted = False
         self.tile_errors = 0
+        self.processed_keys = set()
         keys = sorted(self.sample_sets.keys())
         for n, key in enumerate(keys):
             if not self.scanning.is_set():
@@ -381,6 +384,7 @@ class SampleCollection(JSONMixin):
                     self.aborted = True
             if not sample_set.complete.is_set():
                 complete_events.add(sample_set.complete)
+        self.retry_failed_tiles(keys)
         if self.scanning.is_set():
             for e in complete_events.copy():
                 if e.is_set():
@@ -391,6 +395,37 @@ class SampleCollection(JSONMixin):
         self.report_pll()
         self.timing.write_report()
         self.stopped.set()
+    def retry_failed_tiles(self, keys):
+        """One more try for tiles that gave no data (PLL not locked, USB
+        error). Without it the WWB file gets a straight line there and a
+        signal in that place is lost without notice."""
+        done = self.processed_keys
+        failed = [k for k in keys if k not in done]
+        if not failed or self.aborted or not self.scanning.is_set():
+            self.missing_tiles = failed
+            return
+        if len(failed) > max(3, 0.2 * len(keys)):
+            # most tiles failed: something is wrong with the dongle itself,
+            # measuring them all again would only double the time
+            self.missing_tiles = failed
+            print('!!! %d of %d tiles have no data: check the dongle' % (len(failed), len(keys)), flush=True)
+            return
+        print('retrying %d tile(s) without data' % len(failed), flush=True)
+        for key in failed:
+            if self.aborted or not self.scanning.is_set():
+                break
+            sample_set = self.sample_sets[key]
+            sample_set.complete.clear()
+            try:
+                sample_set.read_samples()
+            except Exception:
+                logger.exception('tile at %s Hz failed again', key)
+                sample_set.complete.set()
+        self.missing_tiles = [k for k in keys if k not in done]
+        if self.missing_tiles:
+            print('!!! %d tile(s) have no data, e.g. %.3f MHz: the scan has a gap there'
+                  % (len(self.missing_tiles), self.missing_tiles[0] / 1e6), flush=True)
+
     def report_pll(self):
         sdr = getattr(getattr(self, 'scanner', None), 'sdr', None)
         try:
@@ -408,6 +443,7 @@ class SampleCollection(JSONMixin):
             self.scanning.clear()
             self.stopped.wait()
     def on_sample_set_processed(self, sample_set):
+        self.processed_keys.add(sample_set.center_frequency)
         self.scanner.on_sample_set_processed(sample_set)
     def _serialize(self):
         return {'sample_sets':

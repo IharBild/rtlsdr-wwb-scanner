@@ -101,6 +101,8 @@ class ScannerBase(JSONMixin):
         # again and again (in MHz) piles up rounding errors, and then the
         # same frequency measured by two tiles no longer looks the same.
         step_hz = int(round(mhz_to_hz(self.step_size)))
+        if step_hz <= 0:
+            raise ValueError('tile step must be above 0 (check Overlap Ratio)')
         freq_hz = int(round(mhz_to_hz(freq)))
         end_hz = int(round(mhz_to_hz(end_freq)))
         while freq_hz <= end_hz:
@@ -139,6 +141,10 @@ class ScannerBase(JSONMixin):
             self.save_to_dbstore()
             print('saved, total %.1f s' % (time.time() - t0), flush=True)
     def stop_scan(self):
+        if not self._running.is_set():
+            # not started yet or already finished: nothing to wait for
+            # (waiting here used to hang forever before the first scan)
+            return
         self._running.clear()
         self.sample_collection.cancel()
         self._stopped.wait()
@@ -220,6 +226,11 @@ class Scanner(ScannerBase):
             logger.warning('Overlap Ratio %s gives holes in the scan; step limited to %.3f MHz',
                            overlap, max_step / 1e6)
             step_size = self._step_size = max_step
+        if step_size < resolution:
+            # Overlap Ratio 0 gave step 0: the tile list never ended (hang)
+            logger.warning('Overlap Ratio %s is too small; step set to %.4f MHz',
+                           overlap, resolution / 1e6)
+            step_size = self._step_size = resolution
         self._equal_spacing = is_equal_spacing(nfft, rs, step_size)
         if not self.equal_spacing:
             step_size -= step_size % resolution
@@ -242,7 +253,12 @@ class Scanner(ScannerBase):
     @property
     def window_size(self):
         c = self.config
-        return c.sampling.get('window_size')
+        w = c.sampling.get('window_size')
+        if not w:
+            # not set: 25 kHz bins, like the UI default (None used to stop the scan)
+            rs = c.sampling.get('sample_rate') or 2.4e6
+            w = int(round(rs / 25e3))
+        return w
     @window_size.setter
     def window_size(self, value):
         if value == self.sampling_config.get('window_size'):
@@ -283,6 +299,11 @@ class Scanner(ScannerBase):
     def run_scan(self):
         with self.sdr_wrapper:
             super(Scanner, self).run_scan()
+    def _run_scan(self, running):
+        if self.sdr is None:
+            raise IOError('RTL-SDR dongle not found or busy (unplug/replug it, '
+                          'close other SDR programs)')
+        super(Scanner, self)._run_scan(running)
     def on_sample_set_processed(self, sample_set):
         powers = sample_set.powers
         freqs = sample_set.frequencies
