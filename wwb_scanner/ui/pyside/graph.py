@@ -95,6 +95,24 @@ class GraphTableModel(QtCore.QAbstractTableModel):
 # If more columns than this changed in one go, rebuild the model instead
 REBUILD_THRESHOLD = 2000
 
+# The chart redraws once per point it is given, so its cost grows with the
+# square of the number of points. A full-range scan has 70 000 points and
+# froze the window. Above this many points the chart gets one point per
+# small group (the strongest one, so narrow peaks stay visible); the scan
+# data and the saved CSV always keep every point.
+MAX_GRAPH_POINTS = 15000
+
+def decimate_max(d_arr):
+    n = d_arr.size
+    if n <= MAX_GRAPH_POINTS:
+        return d_arr
+    k = -(-n // MAX_GRAPH_POINTS)
+    m = n // k * k
+    ix = np.argmax(d_arr['y'][:m].reshape(-1, k), axis=1) + np.arange(0, m, k)
+    if m < n:
+        ix = np.append(ix, m + np.argmax(d_arr['y'][m:]))
+    return d_arr[ix]
+
 # "khz" = Shure WWB style CSV, None = old MHz CSV
 CSV_FREQUENCY_FORMAT = 'khz'
 
@@ -237,7 +255,7 @@ class SpectrumGraphData(QtQuick.QQuickItem):
     def _set_series_from_data(self):
         if self.model is None:
             return
-        self.model.set_from_graph_dtype(self.xy_data)
+        self.model.set_from_graph_dtype(decimate_max(self.xy_data))
 
     @Slot(QtCore.QUrl)
     def load_from_file(self, uri):

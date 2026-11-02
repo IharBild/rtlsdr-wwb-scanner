@@ -107,3 +107,22 @@ def test_shift_of_whole_scan_rebuilds_not_per_point(model):
     m.set_from_graph_dtype(arr(g, 70000, start=1.0))
     assert [e[0] for e in m.log] == ['rem', 'ins']
     assert len(m.dataChanged.calls) == n_emits
+
+
+def test_decimate_keeps_peaks_and_limits_points(model):
+    m, g = model
+    a = arr(g, 70640)
+    a['y'] = -100.
+    a['y'][12345] = -50.
+    a['y'][70639] = -60.
+    d = g.decimate_max(a)
+    assert d.size <= g.MAX_GRAPH_POINTS + 1
+    assert d['y'].max() == -50.
+    assert -60. in d['y']
+    assert np.all(np.diff(d['x']) > 0)
+
+
+def test_small_scan_is_not_decimated(model):
+    m, g = model
+    a = arr(g, 13000)
+    assert g.decimate_max(a) is a

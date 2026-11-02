@@ -1,4 +1,5 @@
 import threading
+import time
 
 import numpy as np
 
@@ -115,8 +116,12 @@ class ScannerBase(JSONMixin):
         self.sample_collection.scan_all_freqs()
         self.sample_collection.stopped.wait()
         if running.is_set():
+            t0 = time.time()
+            print('scan finished, cropping...', flush=True)
             self.crop_spectrum()
+            print('cropped in %.1f s, saving...' % (time.time() - t0), flush=True)
             self.save_to_dbstore()
+            print('saved, total %.1f s' % (time.time() - t0), flush=True)
         running.clear()
         self._stopped.set()
     def stop_scan(self):
