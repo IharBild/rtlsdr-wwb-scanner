@@ -117,6 +117,24 @@ class SampleArray(JSONMixin):
         data = self._check_obj_type(other)
         if not data.size:
             return
+        # Scans add tiles in frequency order: only the end of the array can
+        # overlap the new tile. Merge that part and keep the rest as it is
+        # (copying the whole array for every tile made merging 16 times
+        # slower at the end of a full-range scan).
+        if self.data.size > 4 * data.size:
+            new_keys = self._freq_keys(data['frequency'])
+            old_keys = self._freq_keys(self.data['frequency'])
+            split = int(np.searchsorted(old_keys, new_keys.min(), side='left'))
+            if split > 0:
+                head, head_counts = self.data[:split], self._get_counts()[:split]
+                tail = SampleArray.__new__(SampleArray)
+                tail.__dict__.update(self.__dict__)
+                tail.data = self.data[split:]
+                tail._counts = self._get_counts()[split:]
+                tail.insert_sorted(data)
+                self.data = np.concatenate([head, tail.data])
+                self._counts = np.concatenate([head_counts, tail._get_counts()])
+                return
         everything = np.concatenate([self.data, data])
         weights = np.concatenate([self._get_counts(), np.ones(data.size)])
         keys = self._freq_keys(everything['frequency'])

@@ -105,3 +105,43 @@ def test_simulated_full_scan_has_one_point_per_25khz_step(tmp_db_store):
     assert f.size == (end_hz - start_hz) // 25000 + 1 == 21201
     assert f[0] == 470.0 and f[-1] == 1000.0
     assert np.all(np.diff(np.rint(f * 1e6).astype(np.int64)) == 25000)
+
+
+def test_fast_tail_merge_equals_full_merge():
+    """QA P2: merging only the overlapping tail gives the same result as
+    merging the whole array, also when a tile goes back in frequency."""
+    from wwb_scanner.scan_objects.samplearray import SampleArray
+    rng = np.random.RandomState(7)
+    fast, ref = SampleArray(), SampleArray()
+    f0 = 470.0
+    for k in range(120):
+        f = np.round(f0 + np.arange(-37, 38) * 0.025, 6)
+        m = 10 ** (rng.randn(f.size) - 10)
+        fast.insert_sorted(SampleArray.create(frequency=f, magnitude=m))
+        tile = SampleArray.create(frequency=f, magnitude=m)
+        if ref.data.size:
+            _full_merge(ref, tile)
+        else:
+            ref.insert_sorted(tile)
+        f0 = round(f0 + (0.775 if k % 17 else -1.55), 6)
+    assert np.array_equal(np.round(fast.data['frequency'], 6), np.round(ref.data['frequency'], 6))
+    assert np.allclose(fast.data['magnitude'], ref.data['magnitude'], rtol=1e-12)
+    assert np.allclose(fast._get_counts(), ref._get_counts())
+
+def _full_merge(arr, other):
+    """The original whole-array merge (reference)."""
+    from wwb_scanner.utils import dbmath
+    data = other.data
+    everything = np.concatenate([arr.data, data])
+    weights = np.concatenate([arr._get_counts(), np.ones(data.size)])
+    keys = arr._freq_keys(everything['frequency'])
+    uniq, first, inverse = np.unique(keys, return_index=True, return_inverse=True)
+    n = uniq.size
+    wsum = np.bincount(inverse, weights=weights, minlength=n)
+    merged = np.bincount(inverse, minlength=n) > 1
+    out = everything[first]
+    mag = np.bincount(inverse, weights=weights * everything['magnitude'], minlength=n) / wsum
+    out['magnitude'][merged] = mag[merged]
+    out['dbFS'][merged] = dbmath.to_dB(mag[merged])
+    arr.data = out
+    arr._counts = wsum

@@ -343,6 +343,11 @@ class SampleCollection(JSONMixin):
         num_sets = len(self.sample_sets)
         if not num_sets:
             return 0
+        done = getattr(self, 'processed_keys', None)
+        if done is not None and self.scanning.is_set():
+            # counting the "complete" flag of every tile for every tile was
+            # O(n^2): 1.1 s of Python time on a full-range scan
+            return min(1., len(done) / float(num_sets))
         num_complete = 0.
         for sample_set in self.sample_sets.values():
             if sample_set.complete.is_set():
