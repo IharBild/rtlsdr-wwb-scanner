@@ -1,0 +1,233 @@
+diff -ruN rtl-sdr-blog/src/librtlsdr.c scan-src/src/librtlsdr.c
+--- rtl-sdr-blog/src/librtlsdr.c	2026-11-02 13:20:09.582069762 +0100
++++ scan-src/src/librtlsdr.c	2026-11-02 13:22:45.207036038 +0100
+@@ -117,6 +117,10 @@
+ 	struct r82xx_priv r82xx_p;
+ 	/* status */
+ 	int dev_lost;
++	/* wwbscan */
++	int fast_tune;
++	int demod_reg1;	/* last value written to demod page 1 reg 0x01, -1 = unknown */
++	unsigned int read_timeout_ms;	/* 0 = wait forever (original) */
+ 	int driver_active;
+ 	unsigned int xfer_errors;
+ 	char manufact[256];
+@@ -535,6 +539,7 @@
+ 	int r;
+ 	unsigned char data[2];
+ 	uint16_t index = 0x10 | page;
++	int track_reg1 = (page == 1 && addr == 0x01 && len == 1);	/* wwbscan */
+ 	addr = (addr << 8) | 0x20;
+ 
+ 	if (len == 1)
+@@ -551,6 +556,9 @@
+ 
+ 	rtlsdr_demod_read_reg(dev, 0x0a, 0x01, 1);
+ 
++	if (track_reg1)
++		dev->demod_reg1 = (r == len) ? (val & 0xff) : -1;
++
+ 	return (r == len) ? 0 : -1;
+ }
+ 
+@@ -577,7 +585,11 @@
+ 
+ void rtlsdr_set_i2c_repeater(rtlsdr_dev_t *dev, int on)
+ {
+-	rtlsdr_demod_write_reg(dev, 1, 0x01, on ? 0x18 : 0x10, 1);
++	uint16_t val = on ? 0x18 : 0x10;
++	/* wwbscan fast tune: repeater already in this state */
++	if (dev->fast_tune && dev->demod_reg1 == val)
++		return;
++	rtlsdr_demod_write_reg(dev, 1, 0x01, val, 1);
+ }
+ 
+ int rtlsdr_set_fir(rtlsdr_dev_t *dev)
+@@ -1773,7 +1785,50 @@
+ 	if (!dev)
+ 		return -1;
+ 
+-	return libusb_bulk_transfer(dev->devh, 0x81, buf, len, n_read, BULK_TIMEOUT);
++	/* wwbscan: optional timeout, so a dongle that stops streaming returns
++	 * LIBUSB_ERROR_TIMEOUT (-7) instead of blocking forever. */
++	return libusb_bulk_transfer(dev->devh, 0x81, buf, len, n_read,
++				    dev->read_timeout_ms ? dev->read_timeout_ms : BULK_TIMEOUT);
++}
++
++/* ---- wwbscan scan edition API ---- */
++
++const char *rtlsdr_wwbscan_version(void)
++{
++	return "wwbscan-1";
++}
++
++int rtlsdr_set_fast_tune(rtlsdr_dev_t *dev, int on)
++{
++	if (!dev)
++		return -1;
++	dev->fast_tune = on ? 1 : 0;
++	dev->r82xx_p.fast_tune = dev->fast_tune;
++	return 0;
++}
++
++int rtlsdr_get_fast_tune(rtlsdr_dev_t *dev)
++{
++	if (!dev)
++		return -1;
++	return dev->fast_tune;
++}
++
++int rtlsdr_get_tuner_lock(rtlsdr_dev_t *dev)
++{
++	if (!dev)
++		return -1;
++	if (dev->tuner_type == RTLSDR_TUNER_R820T || dev->tuner_type == RTLSDR_TUNER_R828D)
++		return dev->r82xx_p.has_lock ? 1 : 0;
++	return -1;	/* unknown for other tuners */
++}
++
++int rtlsdr_set_read_timeout(rtlsdr_dev_t *dev, unsigned int timeout_ms)
++{
++	if (!dev)
++		return -1;
++	dev->read_timeout_ms = timeout_ms;
++	return 0;
+ }
+ 
+ static void LIBUSB_CALL _libusb_callback(struct libusb_transfer *xfer)
+diff -ruN rtl-sdr-blog/src/tuner_r82xx.c scan-src/src/tuner_r82xx.c
+--- rtl-sdr-blog/src/tuner_r82xx.c	2026-11-02 13:20:09.582069762 +0100
++++ scan-src/src/tuner_r82xx.c	2026-11-02 13:23:02.950012563 +0100
+@@ -292,6 +292,14 @@
+ 
+ static int r82xx_write_reg(struct r82xx_priv *priv, uint8_t reg, uint8_t val)
+ {
++	/* wwbscan fast tune: the register already holds this value (shadow copy),
++	 * so the I2C write (a USB control transfer, 1-2 ms on Windows) is skipped.
++	 * Only after init, so calibration sequences are untouched. */
++	if (priv->fast_tune && priv->init_done) {
++		int idx = reg - REG_SHADOW_START;
++		if (idx >= 0 && idx < NUM_REGS && priv->regs[idx] == val)
++			return 0;
++	}
+ 	return r82xx_write(priv, reg, &val, 1);
+ }
+ 
+@@ -315,6 +323,9 @@
+ 
+ 	val = (rc & ~bit_mask) | (val & bit_mask);
+ 
++	if (priv->fast_tune && priv->init_done && val == rc)
++		return 0;	/* wwbscan fast tune: unchanged */
++
+ 	return r82xx_write(priv, reg, &val, 1);
+ }
+ 
+@@ -509,9 +520,11 @@
+ 	ni = (nint - 13) / 4;
+ 	si = nint - 4 * ni - 13;
+ 
+-	rc = r82xx_write_reg(priv, 0x14, ni + (si << 6));
+-	if (rc < 0)
+-		return rc;
++	if (!priv->fast_tune) {
++		rc = r82xx_write_reg(priv, 0x14, ni + (si << 6));
++		if (rc < 0)
++			return rc;
++	}
+ 
+ 	/* pw_sdm */
+ 	if (!vco_fra)
+@@ -534,14 +547,28 @@
+ 		n_sdm <<= 1;
+ 	}
+ 
+-	rc = r82xx_write_reg(priv, 0x16, sdm >> 8);
+-	if (rc < 0)
+-		return rc;
+-	rc = r82xx_write_reg(priv, 0x15, sdm & 0xff);
+-	if (rc < 0)
+-		return rc;
++	if (priv->fast_tune) {
++		/* wwbscan: N divider and SDM (0x14..0x16) in one I2C transfer */
++		uint8_t pll_regs[3];
++		pll_regs[0] = ni + (si << 6);
++		pll_regs[1] = sdm & 0xff;
++		pll_regs[2] = sdm >> 8;
++		rc = r82xx_write(priv, 0x14, pll_regs, 3);
++		if (rc < 0)
++			return rc;
++	} else {
++		rc = r82xx_write_reg(priv, 0x16, sdm >> 8);
++		if (rc < 0)
++			return rc;
++		rc = r82xx_write_reg(priv, 0x15, sdm & 0xff);
++		if (rc < 0)
++			return rc;
++	}
+ 
+-	for (i = 0; i < 2; i++) {
++	/* wwbscan fast tune: fewer writes means less time between the PLL
++	 * update and the lock check, so allow more checks (each check is an
++	 * I2C read, about 2-4 ms) before declaring "not locked". */
++	for (i = 0; i < (priv->fast_tune ? 6 : 2); i++) {
+ //		usleep_range(sleep_time, sleep_time + 1000);
+ 
+ 		/* Check if PLL has locked */
+@@ -1430,6 +1457,9 @@
+ {
+ 	int rc;
+ 
++	/* wwbscan: no write skipping while (re)initialising */
++	priv->init_done = 0;
++
+ 	/* TODO: R828D might need r82xx_xtal_check() */
+ 	priv->xtal_cap_sel = XTAL_HIGH_CAP_0P;
+ 
+diff -ruN rtl-sdr-blog/include/rtl-sdr.h scan-src/include/rtl-sdr.h
+--- rtl-sdr-blog/include/rtl-sdr.h	2026-11-02 13:20:09.581253872 +0100
++++ scan-src/include/rtl-sdr.h	2026-11-02 13:22:45.207584749 +0100
+@@ -409,6 +409,32 @@
+ 
+ RTLSDR_API int rtlsdr_check_dongle_model(void *dev, char *manufact_check, char *product_check);
+ 
++/* ---- wwbscan scan edition (rtlsdr-wwb-scanner) ---- */
++
++/*!
++ * Version string of the scan edition, e.g. "wwbscan-1".
++ */
++RTLSDR_API const char *rtlsdr_wwbscan_version(void);
++
++/*!
++ * Fast retune: skip tuner register writes whose value did not change and
++ * write the PLL registers in one I2C transfer. Off by default.
++ */
++RTLSDR_API int rtlsdr_set_fast_tune(rtlsdr_dev_t *dev, int on);
++RTLSDR_API int rtlsdr_get_fast_tune(rtlsdr_dev_t *dev);
++
++/*!
++ * PLL lock state after the last rtlsdr_set_center_freq().
++ * \return 1 locked, 0 not locked, -1 unknown (non-R82xx tuner or error)
++ */
++RTLSDR_API int rtlsdr_get_tuner_lock(rtlsdr_dev_t *dev);
++
++/*!
++ * Timeout for rtlsdr_read_sync() in milliseconds, 0 = wait forever
++ * (original behaviour). On timeout rtlsdr_read_sync() returns -7.
++ */
++RTLSDR_API int rtlsdr_set_read_timeout(rtlsdr_dev_t *dev, unsigned int timeout_ms);
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff -ruN rtl-sdr-blog/include/tuner_r82xx.h scan-src/include/tuner_r82xx.h
+--- rtl-sdr-blog/include/tuner_r82xx.h	2026-11-02 13:20:09.581253872 +0100
++++ scan-src/include/tuner_r82xx.h	2026-11-02 13:22:31.397465400 +0100
+@@ -84,6 +84,7 @@
+ 	uint8_t				fil_cal_code;
+ 	uint8_t				input;
+ 	int				has_lock;
++	int				fast_tune;	/* wwbscan: skip unchanged register writes */
+ 	int				init_done;
+ 
+ 	/* Store current mode */

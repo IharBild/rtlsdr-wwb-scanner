@@ -8,6 +8,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 from wwb_scanner.core import JSONMixin
+from wwb_scanner import scan_dll
 from wwb_scanner.scanner.scan_timing import ScanTiming
 
 WINDOW_TYPES = [s for s in WINDOW_TYPES if s != 'get_window']
@@ -112,6 +113,11 @@ class SampleSet(JSONMixin):
         for attempt in range(2):
             try:
                 run_with_timeout(sdr.set_center_freq, TUNE_TIMEOUT, freq)
+                # scan edition DLL: the stock library says "OK" even when
+                # the tuner PLL did not lock; such a tile would be garbage
+                if scan_dll.tuner_locked(sdr) is False:
+                    logger.error('PLL not locked at %s Hz (attempt %d)', freq, attempt + 1)
+                    continue
                 return True
             except SdrTimeout as exc:
                 logger.error('set_center_freq(%s): %s', freq, exc)

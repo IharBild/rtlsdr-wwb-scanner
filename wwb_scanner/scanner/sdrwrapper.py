@@ -2,6 +2,8 @@ import threading
 import traceback
 
 from rtlsdr import RtlSdr
+
+from wwb_scanner import scan_dll
 try:
     from rtlsdr import RtlSdrTcpClient
 except ImportError:
@@ -66,6 +68,11 @@ class SdrWrapper(object):
             sdr = RtlSdr(serial_number=serial_number)
         except IOError:
             sdr = None
+        if sdr is not None:
+            try:
+                scan_dll.configure(sdr)
+            except Exception:
+                traceback.print_exc()
         return sdr
     def _open_sdr_remote(self):
         try:
