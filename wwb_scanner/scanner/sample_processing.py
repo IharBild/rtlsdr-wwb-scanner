@@ -102,6 +102,16 @@ class SampleSet(JSONMixin):
         timing = getattr(collection, 'timing', None)
         if timing is not None:
             timing.tick(self.center_frequency, stage)
+    def device_closed(self, sdr):
+        """pyrtlsdr closes the device after any library error. Another call
+        on a closed device uses a freed handle (can crash the program), so
+        the scan has to stop instead of retrying."""
+        if getattr(sdr, 'device_opened', True):
+            return False
+        logger.error('the dongle was closed after an error, stopping the scan')
+        self.abort_scan()
+        return True
+
     def abort_scan(self):
         coll = self.collection
         if coll is not None:
@@ -126,6 +136,8 @@ class SampleSet(JSONMixin):
             except Exception as exc:
                 logger.error('set_center_freq(%s) failed (attempt %d): %s',
                              freq, attempt + 1, exc)
+                if self.device_closed(sdr):
+                    return False
         return False
 
     def read_samples(self):
@@ -166,6 +178,8 @@ class SampleSet(JSONMixin):
                 break
             except Exception:
                 logger.exception('read failed at %s Hz (attempt %s)', self.center_frequency, attempt + 1)
+                if self.device_closed(sdr):
+                    break
         if iq is None:
             self.raw = None
             self.complete.set()

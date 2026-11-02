@@ -225,3 +225,28 @@ def test_stuck_tune_times_out_and_aborts_scan(monkeypatch):
     ss, coll = sync_tile(Stuck())
     block.set()
     assert ss.complete.is_set() and coll.aborted is True
+
+
+def test_closed_device_stops_scan_without_retry():
+    """pyrtlsdr closes the device on any library error: no second call."""
+    class Closing(FakeSdr):
+        device_opened = True
+        def set_center_freq(self, f):
+            self.calls = getattr(self, 'calls', 0) + 1
+            self.device_opened = False
+            raise IOError('LIBUSB_ERROR_IO')
+    sdr = Closing()
+    ss, coll = sync_tile(sdr)
+    assert sdr.calls == 1
+    assert ss.complete.is_set() and coll.aborted is True
+
+
+def test_closed_device_after_read_error_stops_scan():
+    class Closing(FakeSdr):
+        device_opened = True
+        def read_samples(self, n):
+            self.device_opened = False
+            raise IOError('LIBUSB_ERROR_TIMEOUT')
+    sdr = Closing()
+    ss, coll = sync_tile(sdr)
+    assert len(sdr.reads) == 0 and coll.aborted is True and coll.done == []
