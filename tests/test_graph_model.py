@@ -117,6 +117,7 @@ def test_decimate_keeps_peaks_and_limits_points(model):
     a['y'][70639] = -60.
     d = g.decimate_max(a)
     assert d.size <= g.MAX_GRAPH_POINTS + 1
+    assert g.group_size_for(70640) == 5
     assert d['y'].max() == -50.
     assert -60. in d['y']
     assert np.all(np.diff(d['x']) > 0)
@@ -126,3 +127,13 @@ def test_small_scan_is_not_decimated(model):
     m, g = model
     a = arr(g, 13000)
     assert g.decimate_max(a) is a
+
+
+def test_group_size_stays_fixed_while_scan_grows(model):
+    m, g = model
+    k = g.group_size_for(70640)
+    sizes = [g.decimate_max(arr(g, n), k).size for n in (5000, 20000, 40000, 70640)]
+    assert sizes == sorted(sizes)
+    a = arr(g, 20000); b = arr(g, 20009)
+    da, db = g.decimate_max(a, k), g.decimate_max(b, k)
+    assert np.array_equal(da['x'][:-1], db['x'][:da.size - 1])

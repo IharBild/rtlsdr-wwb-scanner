@@ -62,8 +62,8 @@ def run_with_timeout(func, timeout, *args):
         raise box['exc']
     return box.get('result')
 
-TUNE_TIMEOUT = 10.
-READ_TIMEOUT = 20.
+TUNE_TIMEOUT = 30.
+READ_TIMEOUT = 40.
 
 class SampleSet(JSONMixin):
     __slots__ = ('scanner', 'center_frequency', 'raw', 'current_sweep', 'complete',

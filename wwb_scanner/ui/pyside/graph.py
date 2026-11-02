@@ -1,3 +1,4 @@
+import time
 from bisect import bisect_left
 import numpy as np
 
@@ -102,11 +103,18 @@ REBUILD_THRESHOLD = 2000
 # data and the saved CSV always keep every point.
 MAX_GRAPH_POINTS = 15000
 
-def decimate_max(d_arr):
+def group_size_for(num_points):
+    """Points per chart point for a scan of ``num_points`` points. It is
+    worked out once from the planned scan size, so it does not change
+    while the scan is running (a change would rebuild the whole chart)."""
+    return max(1, -(-int(num_points) // MAX_GRAPH_POINTS))
+
+def decimate_max(d_arr, k=None):
     n = d_arr.size
-    if n <= MAX_GRAPH_POINTS:
+    if k is None:
+        k = group_size_for(n)
+    if k <= 1 or n < k:
         return d_arr
-    k = -(-n // MAX_GRAPH_POINTS)
     m = n // k * k
     ix = np.argmax(d_arr['y'][:m].reshape(-1, k), axis=1) + np.arange(0, m, k)
     if m < n:
@@ -133,6 +141,7 @@ class SpectrumGraphData(QtQuick.QQuickItem):
         self._name = None
         self._color = None
         self._graphVisible = True
+        self._decim_k = None
         super().__init__(*args)
 
     def _g_model(self): return self._model
@@ -255,7 +264,11 @@ class SpectrumGraphData(QtQuick.QQuickItem):
     def _set_series_from_data(self):
         if self.model is None:
             return
-        self.model.set_from_graph_dtype(decimate_max(self.xy_data))
+        t0 = time.time()
+        self.model.set_from_graph_dtype(decimate_max(self.xy_data, self._decim_k))
+        dt = time.time() - t0
+        if dt > 0.5:
+            print('chart update took %.1f s (%d points)' % (dt, self.xy_data.size), flush=True)
 
     @Slot(QtCore.QUrl)
     def load_from_file(self, uri):
@@ -294,8 +307,10 @@ class LiveSpectrumGraphData(SpectrumGraphData):
         self._n_scanner.emit()
         if self._scanner is not None:
             self.spectrum = self._scanner.spectrum
+            total = (self._scanner.endFreq - self._scanner.startFreq) / 0.025
+            self._decim_k = group_size_for(total)
             self._scanner.scannerRunState.connect(self.on_scanner_run_state)
-            self.update_interval = .1
+            self.update_interval = .5 if total > 20000 else .1
         else:
             self.update_interval = -1
     scanner = Property(QtCore.QObject, _g_scanner, _s_scanner, notify=_n_scanner)
