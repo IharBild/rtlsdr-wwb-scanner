@@ -14,6 +14,8 @@ from wwb_scanner.utils.dbstore import db_store
 from wwb_scanner.scanner.sdrwrapper import SdrWrapper
 from wwb_scanner.scanner.config import ScanConfig
 from wwb_scanner.scanner.sample_processing import (
+    DEFAULT_TILE_KEEP_RATIO,
+    DEFAULT_TILE_CENTER_GAP_HZ,
     SampleCollection,
     calc_num_samples,
     WINDOW_TYPES,
@@ -110,8 +112,22 @@ class ScannerBase(JSONMixin):
             sample_set = sample_collection.build_sample_set(float(freq_hz))
             freq_hz += step_hz
     def run_scan(self):
-        self.build_sample_sets()
+        """Never raises: an error ends the scan (what was measured is kept),
+        so the window does not stay in the "running" state."""
         running = self._running
+        self.error = None
+        try:
+            self._run_scan(running)
+        except Exception as exc:
+            self.error = exc
+            logger.exception('scan failed')
+            print('!!! Scan failed: %r' % (exc,), flush=True)
+        finally:
+            running.clear()
+            self.sample_collection.stopped.set()
+            self._stopped.set()
+    def _run_scan(self, running):
+        self.build_sample_sets()
         running.set()
         self.sample_collection.scan_all_freqs()
         self.sample_collection.stopped.wait()
@@ -122,8 +138,6 @@ class ScannerBase(JSONMixin):
             print('cropped in %.1f s, saving...' % (time.time() - t0), flush=True)
             self.save_to_dbstore()
             print('saved, total %.1f s' % (time.time() - t0), flush=True)
-        running.clear()
-        self._stopped.set()
     def stop_scan(self):
         self._running.clear()
         self.sample_collection.cancel()
@@ -197,6 +211,15 @@ class Scanner(ScannerBase):
         resolution = get_freq_resolution(nfft, rs)
 
         step_size = self._step_size = rs / 2. * overlap
+        # Each tile keeps +-KEEP_RATIO*rs around its centre but not +-GAP at
+        # the centre (DC spike). The neighbour tile must cover that gap, so
+        # the step may not exceed KEEP*rs - GAP (0.9 MHz at 2.4 MS/s);
+        # Overlap Ratio 0.8 gave holes next to the tile centres.
+        max_step = ((DEFAULT_TILE_KEEP_RATIO * rs - DEFAULT_TILE_CENTER_GAP_HZ) // resolution) * resolution
+        if step_size > max_step:
+            logger.warning('Overlap Ratio %s gives holes in the scan; step limited to %.3f MHz',
+                           overlap, max_step / 1e6)
+            step_size = self._step_size = max_step
         self._equal_spacing = is_equal_spacing(nfft, rs, step_size)
         if not self.equal_spacing:
             step_size -= step_size % resolution

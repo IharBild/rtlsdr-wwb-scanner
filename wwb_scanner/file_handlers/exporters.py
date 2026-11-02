@@ -5,7 +5,11 @@ import uuid
 import xml.etree.ElementTree as ET
 import xml.dom.minidom as minidom
 
+import logging
+
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 EPOCH = datetime.datetime(1970, 1, 1)
 
@@ -13,6 +17,58 @@ EPOCH = datetime.datetime(1970, 1, 1)
 NO_DATA_DB = -140.
 # dbmath floors zero power at about -3077 dB; anything below this is "no data"
 IMPOSSIBLE_DB = -1000.
+
+# Shure WWB refuses files outside 30-2000 MHz (reported by the user)
+WWB_MIN_KHZ = 30000
+WWB_MAX_KHZ = 2000000
+WWB_STEP_KHZ = 25
+
+
+def wwb_grid(spectrum, step=WWB_STEP_KHZ, lo=WWB_MIN_KHZ, hi=WWB_MAX_KHZ):
+    """Scan values on a whole-kHz grid (``step`` kHz) inside ``lo``..``hi`` kHz,
+    as WWB expects. Returns (grid_khz int64 array, dB array). The spectrum is
+    not changed."""
+    freqs_khz = np.rint(np.asarray(spectrum.sample_data['frequency'], dtype=np.float64) * 1000.)
+    dB = clean_dB(spectrum.sample_data['dbFS'])
+    if freqs_khz.size == 0:
+        return np.zeros(0, np.int64), np.zeros(0)
+    order = np.argsort(freqs_khz, kind='stable')
+    freqs_khz, dB = freqs_khz[order], dB[order]
+    first = int(np.ceil(max(freqs_khz[0], lo) / step)) * step
+    last = int(np.floor(min(freqs_khz[-1], hi) / step)) * step
+    if freqs_khz[0] < lo or freqs_khz[-1] > hi:
+        logger.warning('WWB accepts only %d-%d MHz: export clipped to %.3f-%.3f MHz',
+                       lo // 1000, hi // 1000, first / 1000., last / 1000.)
+    if last < first:
+        raise ValueError('scan %.3f-%.3f MHz is outside the %d-%d MHz range WWB accepts'
+                         % (freqs_khz[0] / 1000., freqs_khz[-1] / 1000., lo // 1000, hi // 1000))
+    grid = np.arange(first, last + 1, step, dtype=np.int64)
+    values = np.around(np.interp(grid, freqs_khz, dB), decimals=1)
+    return grid, values
+
+
+def wwb_points(spectrum, lo=WWB_MIN_KHZ, hi=WWB_MAX_KHZ):
+    """Scan points for sdb2: the scan's own grid when it is regular (sdb2
+    lists every frequency, other steps such as 50 kHz are fine), else the
+    25 kHz grid. Always inside the range WWB accepts. Returns
+    (freqs_khz int64, dB, step_khz)."""
+    freqs_khz = np.rint(np.asarray(spectrum.sample_data['frequency'], dtype=np.float64) * 1000.)
+    dB = clean_dB(np.around(spectrum.sample_data['dbFS'], decimals=1))
+    order = np.argsort(freqs_khz, kind='stable')
+    freqs_khz, dB = freqs_khz[order], dB[order]
+    inside = (freqs_khz >= lo) & (freqs_khz <= hi)
+    if freqs_khz.size and not inside.all():
+        logger.warning('WWB accepts only %d-%d MHz: export clipped', lo // 1000, hi // 1000)
+    freqs_khz, dB = freqs_khz[inside], dB[inside]
+    if freqs_khz.size == 0:
+        raise ValueError('scan has no points inside the %d-%d MHz range WWB accepts'
+                         % (lo // 1000, hi // 1000))
+    steps = np.unique(np.diff(freqs_khz))
+    if steps.size == 1 and steps[0] > 0:
+        return freqs_khz.astype(np.int64), dB, float(steps[0])
+    grid, values = wwb_grid(spectrum, lo=lo, hi=hi)
+    return grid, values, float(WWB_STEP_KHZ)
+
 
 def clean_dB(dB, floor=NO_DATA_DB):
     """Return a copy of ``dB`` where nan, inf and the "no signal at all"
@@ -103,22 +159,11 @@ class CSVExporter(BaseExporter):
         fmt = self.frequency_format
         return fmt is not None and str(fmt).lower() == 'khz'
     def build_khz_data(self):
-        """Resample onto a whole-kHz grid (step ``khz_step``) like WWB does."""
-        step = self.khz_step
-        freqs_khz = np.rint(np.asarray(self.spectrum.sample_data['frequency'], dtype=np.float64) * 1000.)
-        dB = clean_dB(self.spectrum.sample_data['dbFS'])
-        if freqs_khz.size == 0:
+        """Resample onto a whole-kHz grid (step ``khz_step``) like WWB does,
+        only inside 30-2000 MHz (WWB refuses anything else)."""
+        if self.spectrum.sample_data['frequency'].size == 0:
             return ''
-        order = np.argsort(freqs_khz, kind='stable')
-        freqs_khz, dB = freqs_khz[order], dB[order]
-        # first/last grid points that lie inside the scanned range
-        first = int(np.ceil(freqs_khz[0] / step)) * step
-        last = int(np.floor(freqs_khz[-1] / step)) * step
-        if last < first:
-            first = last = int(freqs_khz[0])
-        grid = np.arange(first, last + 1, step, dtype=np.int64)
-        values = np.interp(grid, freqs_khz, dB)
-        values = np.around(values, decimals=1)
+        grid, values = wwb_grid(self.spectrum, step=self.khz_step)
         lines = ['%d%s%.1f' % (f, self.delimiter_char, v) for f, v in zip(grid, values)]
         return self.khz_newline_chars.join(lines)
     def build_data(self):
@@ -160,16 +205,18 @@ class BaseWWBExporter(BaseExporter):
                 no_data_value='-140',
             ),
         )
-        if spectrum.step_size is None:
-            spectrum.smooth(11)
-            spectrum.interpolate()
+        # The scan's own points, clipped to what WWB accepts. (This used to
+        # smooth and re-interpolate the scan itself when step_size was
+        # unknown, i.e. exporting sdb2 changed the data shown in the program.)
+        grid, values, step = wwb_points(spectrum)
+        self.grid = grid, values
         d['data_set'] = dict(
             index='0',
             freq_units='KHz',
             ampl_units='dBm',
-            start_freq=str(min(spectrum.samples.keys()) * 1000),
-            stop_freq=str(max(spectrum.samples.keys()) * 1000),
-            step_freq=str(spectrum.step_size * 1000),
+            start_freq='%.1f' % grid[0],
+            stop_freq='%.1f' % grid[-1],
+            step_freq='%.3f' % (step,),
             res_bandwidth='TODO',
             scale_factor='1',
             date=d['scan_data_source']['date'],
@@ -205,8 +252,7 @@ class WWBLegacyExporter(BaseWWBExporter):
         attribs = self.attribs
         data_sets = root.find('data_sets')
         data_set = ET.SubElement(data_sets, 'data_set', attribs['data_set'])
-        freqs = np.around(self.spectrum.sample_data['frequency'], decimals=3)
-        dB = clean_dB(np.around(self.spectrum.sample_data['dbFS'], decimals=1))
+        grid, dB = self.grid
         for val in dB:
             v = ET.SubElement(data_set, 'v')
             v.text = str(val)
@@ -221,11 +267,10 @@ class WWBExporter(BaseWWBExporter):
         data_sets = root.find('data_sets')
         freq_set = ET.SubElement(data_sets, 'freq_set')
         data_set = ET.SubElement(data_sets, 'data_set', self.attribs['data_set'])
-        freqs = self.spectrum.sample_data['frequency'] * 1000
-        dB = clean_dB(np.around(self.spectrum.sample_data['dbFS'], decimals=1))
+        freqs, dB = self.grid
         for freq, val in zip(freqs, dB):
             f = ET.SubElement(freq_set, 'f')
-            f.text = str(int(freq))
+            f.text = '%d' % freq
             v = ET.SubElement(data_set, 'v')
             v.text = str(val)
         return tree

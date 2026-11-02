@@ -13,6 +13,37 @@ from wwb_scanner.scanner.scan_timing import ScanTiming
 
 WINDOW_TYPES = [s for s in WINDOW_TYPES if s != 'get_window']
 
+# Windows that scipy cannot build from a name alone get usual parameters;
+# old names get their new name. Anything that still fails becomes hann.
+WINDOW_ALIASES = {'hanning': 'hann'}
+def _window_spec(name, size):
+    return {
+        'kaiser': ('kaiser', 8.6),
+        'kaiser_bessel_derived': ('kaiser_bessel_derived', 8.6),
+        'gaussian': ('gaussian', size / 6.),
+        'general_gaussian': ('general_gaussian', 1.5, size / 6.),
+        'general_cosine': ('general_cosine', [0.5, 0.5]),
+        'general_hamming': ('general_hamming', 0.54),
+        'chebwin': ('chebwin', 100),
+        'dpss': ('dpss', 3),
+    }.get(name, name)
+
+_window_cache = {}
+def make_window(name, size):
+    """Window array for ``name``; never raises (falls back to hann)."""
+    key = (name, size)
+    w = _window_cache.get(key)
+    if w is not None:
+        return w
+    n = WINDOW_ALIASES.get(name or 'hann', name or 'hann')
+    try:
+        w = get_window(_window_spec(n, size), size)
+    except Exception as exc:
+        logger.warning('window %r cannot be used (%s), using hann', name, exc)
+        w = get_window('hann', size)
+    _window_cache[key] = w
+    return w
+
 NPERSEG = 128
 
 # Read every tile with one blocking call (True) or with the old async reader (False)
@@ -63,6 +94,7 @@ def run_with_timeout(func, timeout, *args):
         raise box['exc']
     return box.get('result')
 
+MAX_TILE_ERRORS = 5
 TUNE_TIMEOUT = 30.
 READ_TIMEOUT = 40.
 
@@ -235,7 +267,7 @@ class SampleSet(JSONMixin):
         samples = self.raw.flatten()
 
         win_size = self.window_size
-        win = get_window(self.scanner.sampling_config.window_type, win_size)
+        win = make_window(self.scanner.sampling_config.window_type, win_size)
         freqs, Pxx = welch(samples, fs=rs, window=win, detrend=False,
             nperseg=win_size, scaling='density', return_onesided=False)
 
@@ -304,6 +336,7 @@ class SampleCollection(JSONMixin):
         self.sample_sets = {}
         self.timing = ScanTiming()
         self.aborted = False
+        self.tile_errors = 0
     def calc_progress(self):
         num_sets = len(self.sample_sets)
         if not num_sets:
@@ -323,6 +356,7 @@ class SampleCollection(JSONMixin):
         self.scanning.set()
         complete_events = set()
         self.aborted = False
+        self.tile_errors = 0
         keys = sorted(self.sample_sets.keys())
         for n, key in enumerate(keys):
             if not self.scanning.is_set():
@@ -334,7 +368,17 @@ class SampleCollection(JSONMixin):
             if n % 20 == 0:
                 print('scan tile %d/%d at %.3f MHz' % (n + 1, len(keys), key / 1e6), flush=True)
             sample_set = self.sample_sets[key]
-            sample_set.read_samples()
+            try:
+                sample_set.read_samples()
+            except Exception:
+                # one bad tile must not kill the scan thread: the program
+                # would stay "running" forever and Stop would hang
+                logger.exception('tile at %s Hz failed', key)
+                sample_set.complete.set()
+                self.tile_errors += 1
+                if self.tile_errors >= MAX_TILE_ERRORS:
+                    print('!!! Scan stopped: %d tiles failed, see the log.' % self.tile_errors, flush=True)
+                    self.aborted = True
             if not sample_set.complete.is_set():
                 complete_events.add(sample_set.complete)
         if self.scanning.is_set():

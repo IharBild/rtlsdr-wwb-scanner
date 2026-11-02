@@ -36,6 +36,15 @@ def test_exporters(data_files, tmpdir):
                 src_spectrum.export_to_file(filename=str(exp_fn))
                 imp_spectrum = Spectrum.import_from_file(str(exp_fn))
 
+                if ext == 'sdb2':
+                    # sdb2 gets the scan's own grid when it is regular, else the
+                    # 25 kHz grid (the source spectrum itself is not changed;
+                    # this test used to pass only because export smoothed it)
+                    from wwb_scanner.file_handlers.exporters import wwb_points
+                    fk, vals, step = wwb_points(src_spectrum)
+                    assert np.allclose(fk / 1000., imp_spectrum.sample_data['frequency'])
+                    assert np.array_equal(np.around(vals, 1), np.around(imp_spectrum.sample_data['dbFS'], 1))
+                    continue
                 # Account for frequency units in KHz for sdb2
                 assert np.allclose(src_spectrum.sample_data['frequency'], imp_spectrum.sample_data['frequency'])
                 # sdb2 stores dB values rounded to the first decimal

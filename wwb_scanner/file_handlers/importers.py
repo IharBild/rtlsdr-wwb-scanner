@@ -1,4 +1,6 @@
+import os
 import os.path
+import logging
 import datetime
 import xml.etree.ElementTree as ET
 import itertools
@@ -6,6 +8,8 @@ import itertools
 import numpy as np
 
 from wwb_scanner.scan_objects import Spectrum
+
+logger = logging.getLogger(__name__)
 
 class BaseImporter(object):
     def __init__(self, **kwargs):
@@ -52,20 +56,36 @@ class CSVImporter(BaseImporter):
     def parse_file_data(self):
         spectrum = self.spectrum
         spectrum.name = os.path.basename(self.filename)
+        bad = []
         def iter_lines():
-            for line in self.file_data.splitlines():
-                line = line.rstrip('\n').rstrip('\r')
-                if ',' not in line:
+            for n, line in enumerate(self.file_data.splitlines(), 1):
+                line = line.strip()
+                if not line:
                     continue
-                f, v = line.split(',')
-                yield float(f)
-                yield float(v)
+                parts = line.split(',')
+                try:
+                    if len(parts) != 2:
+                        raise ValueError(line)
+                    f, v = float(parts[0]), float(parts[1])
+                except ValueError:
+                    bad.append((n, line[:40]))
+                    continue
+                yield f
+                yield v
         a = np.fromiter(iter_lines(), dtype=np.float64)
+        if bad:
+            logger.warning('%s: %d lines skipped (first: line %d %r)',
+                           self.filename, len(bad), bad[0][0], bad[0][1])
+        if a.size < 4:
+            raise ValueError('%s: no scan data found (expected lines like "470000,-95.5")'
+                             % (os.path.basename(self.filename),))
         freqs = a[::2]
         dB = a[1::2]
         # WWB files hold kHz (470000), our older files hold MHz (470.0).
-        # No real scan starts above 10 GHz, so a value that big means kHz.
-        if freqs.size and np.nanmin(freqs) >= 10000.:
+        # No scan goes above 10 GHz, so a top value that big means kHz.
+        # (The lowest value can be 0 kHz - a scan from 0 MHz - so it must
+        # not decide: that file was read as MHz up to 1 766 000 MHz.)
+        if freqs.size and np.nanmax(freqs) >= 10000.:
             freqs = freqs / 1000.
         spectrum.add_sample_set(frequency=freqs, dbFS=dB)
 

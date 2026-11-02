@@ -17,9 +17,26 @@ class JSONStorage(tinydb.JSONStorage):
         if not size:
             # File is empty
             return None
-        else:
-            self._handle.seek(0)
+        self._handle.seek(0)
+        try:
             return numpyjson.load(self._handle)
+        except ValueError as exc:
+            # A cut-off file (power loss, crash while saving) used to stop
+            # the program from starting. Keep a copy and start a new one.
+            path = getattr(self._handle, 'name', None)
+            backup = None
+            if path:
+                backup = '%s.broken-%s' % (path, datetime.datetime.now().strftime('%Y%m%d-%H%M%S'))
+                try:
+                    import shutil
+                    shutil.copyfile(path, backup)
+                except Exception:
+                    backup = None
+            print('!!! database file is damaged (%s), saved as %s, starting a new one'
+                  % (exc, backup), flush=True)
+            self._handle.seek(0)
+            self._handle.truncate()
+            return None
     def write(self, data):
         self._handle.seek(0)
         serialized = numpyjson.dumps(data)
