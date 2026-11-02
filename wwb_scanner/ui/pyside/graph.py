@@ -1,4 +1,3 @@
-import os
 import time
 import logging
 logger = logging.getLogger(__name__)
@@ -38,9 +37,7 @@ class GraphTableModel(QtCore.QAbstractTableModel):
         return self._data.shape[0]
     def flags(self, index):
         return QtCore.Qt.ItemFlags.ItemIsEnabled
-    _data_calls = 0
     def data(self, index, role):
-        GraphTableModel._data_calls += 1
         if role == QtCore.Qt.DisplayRole or role == QtCore.Qt.EditRole:
             return float(self._data[index.row(), index.column()])
         return QtCore.QVariant()
@@ -75,16 +72,11 @@ class GraphTableModel(QtCore.QAbstractTableModel):
             self.bulk_series = None
             return self._rebuild_columns(d_arr)
         try:
-            _t0 = time.time()
             self._rebuild_columns(d_arr)
-            _t1 = time.time()
         finally:
             try:
                 series.blockSignals(False)
                 QtCore.QMetaObject.invokeMethod(series, 'pointsReplaced')
-                if os.environ.get('QA_GRAPH_TIMING'):
-                    print('QA rebuild: columns %.2f s, redraw %.2f s, series type %s, data() calls %d'
-                          % (_t1 - _t0, time.time() - _t1, type(series).__name__, self._data_calls), flush=True)
             except RuntimeError:
                 self.bulk_series = None
 
