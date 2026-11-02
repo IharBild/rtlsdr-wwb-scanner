@@ -1,87 +1,96 @@
 import ctypes
-import os
-import sys
-
-import pytest
 
 from wwb_scanner import scan_dll
 from wwb_scanner.scanner import sample_processing as sp
 
-LINUX_SO = '/home/claude/work/dll/out-scan/librtlsdr_wwbscan.so'
+SV4_SO = '/home/claude/work/dll/out-sv4/librtlsdr_sv4.so'
 
 
-@pytest.mark.skipif(not os.path.exists(LINUX_SO), reason='scan edition .so not built')
-def test_real_library_exports_scan_api():
-    lib = ctypes.CDLL(LINUX_SO)
-    assert scan_dll._setup_prototypes(lib)
-    assert lib.rtlsdr_wwbscan_version() == b'wwbscan-1'
-    # no device: every call must fail cleanly, not crash
-    assert lib.rtlsdr_get_tuner_lock(None) == -1
-    assert lib.rtlsdr_set_fast_tune(None, 1) == -1
-    assert lib.rtlsdr_set_read_timeout(None, 2000) == -1
-
-
-def test_install_is_a_no_op_off_windows():
-    if sys.platform == 'win32':
-        pytest.skip('Windows')
-    assert scan_dll.install() is None
+class FakeFn(object):
+    def __init__(self, fn):
+        self.fn = fn
+        self.restype = self.argtypes = None
+    def __call__(self, *a):
+        return self.fn(*a)
 
 
 class FakeLib(object):
-    def __init__(self, lock=1):
-        self.lock = lock
-        self.calls = []
-    def rtlsdr_wwbscan_version(self):
-        return b'wwbscan-1'
-    def rtlsdr_set_fast_tune(self, dev, on):
-        self.calls.append(('fast', on)); return 0
-    def rtlsdr_set_read_timeout(self, dev, ms):
-        self.calls.append(('timeout', ms)); return 0
-    def rtlsdr_get_tuner_lock(self, dev):
-        return self.lock
+    def __init__(self, lock=1, late=0, unlocks=0):
+        def pll(dev, late_p, unl_p):
+            late_p._obj.value = late
+            unl_p._obj.value = unlocks
+            return lock
+        self.rtlsdr_get_tuner_pll_lock = FakeFn(pll)
+        self.rtlsdr_get_build_info = FakeFn(lambda: b'rtl-sdr-blog aed0ea1 + scanner-v4')
 
 
 class FakeSdr(object):
     dev_p = 12345
+    device_opened = True
     def __init__(self):
         self.tuned = []
     def set_center_freq(self, f):
         self.tuned.append(f)
 
 
-def test_configure_turns_on_fast_tune_and_timeout(monkeypatch):
-    lib = FakeLib()
-    monkeypatch.setattr(scan_dll, '_lib', lambda: lib)
-    assert scan_dll.configure(FakeSdr())
-    assert ('fast', 1) in lib.calls and ('timeout', scan_dll.READ_TIMEOUT_MS) in lib.calls
-
-
-def test_stock_library_is_not_configured(monkeypatch):
-    monkeypatch.setattr(scan_dll, '_lib', lambda: None)
-    assert scan_dll.configure(FakeSdr()) is False
-    assert scan_dll.tuner_locked(FakeSdr()) is None
+def use(monkeypatch, lib):
+    monkeypatch.setitem(scan_dll._cache, 'lib', lib)
 
 
 def _tile():
-    class S(object):
-        center_frequency = 600e6
-        collection = None
     s = sp.SampleSet.__new__(sp.SampleSet)
     s.center_frequency = 600e6
     s.collection = None
     return s
 
 
-def test_unlocked_pll_skips_tile_after_retry(monkeypatch):
-    monkeypatch.setattr(scan_dll, '_lib', lambda: FakeLib(lock=0))
+def test_stock_library_changes_nothing(monkeypatch):
+    use(monkeypatch, None)
+    assert scan_dll.configure(FakeSdr()) is False
+    assert scan_dll.tuner_locked(FakeSdr()) is None
+    sdr = FakeSdr()
+    assert _tile().tune(sdr, 600e6) is True and len(sdr.tuned) == 1
+
+
+def test_scanner_build_is_reported(monkeypatch, capsys):
+    use(monkeypatch, FakeLib())
+    assert scan_dll.configure(FakeSdr()) is True
+    assert 'scanner-v4' in capsys.readouterr().out
+
+
+def test_unlocked_pll_retunes_once_then_skips_tile(monkeypatch):
+    use(monkeypatch, FakeLib(lock=0))
     sdr = FakeSdr()
     assert _tile().tune(sdr, 600e6) is False
     assert len(sdr.tuned) == 2
 
 
-def test_locked_pll_and_stock_library_tune_normally(monkeypatch):
-    monkeypatch.setattr(scan_dll, '_lib', lambda: FakeLib(lock=1))
+def test_locked_pll_tunes_once(monkeypatch):
+    use(monkeypatch, FakeLib(lock=1))
     sdr = FakeSdr()
     assert _tile().tune(sdr, 600e6) is True and len(sdr.tuned) == 1
-    monkeypatch.setattr(scan_dll, '_lib', lambda: None)
-    assert _tile().tune(FakeSdr(), 600e6) is True
+
+
+def test_pll_stats(monkeypatch):
+    use(monkeypatch, FakeLib(lock=1, late=3, unlocks=1))
+    assert scan_dll.pll_stats(FakeSdr()) == (3, 1)
+
+
+def test_closed_device_is_not_queried(monkeypatch):
+    use(monkeypatch, FakeLib(lock=0))
+    sdr = FakeSdr()
+    sdr.device_opened = False
+    assert scan_dll.tuner_locked(sdr) is None
+
+
+def test_real_scanner_v4_library_on_linux():
+    import os, pytest
+    if not os.path.exists(SV4_SO):
+        pytest.skip('scanner-v4 .so not built')
+    lib = ctypes.CDLL(SV4_SO)
+    lib.rtlsdr_get_build_info.restype = ctypes.c_char_p
+    assert b'scanner-v4' in lib.rtlsdr_get_build_info()
+    f = lib.rtlsdr_get_tuner_pll_lock
+    f.restype = ctypes.c_int
+    f.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32), ctypes.POINTER(ctypes.c_uint32)]
+    assert f(None, None, None) == -1

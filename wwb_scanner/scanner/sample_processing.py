@@ -344,8 +344,17 @@ class SampleCollection(JSONMixin):
                 else:
                     e.wait()
         self.scanning.clear()
+        self.report_pll()
         self.timing.write_report()
         self.stopped.set()
+    def report_pll(self):
+        sdr = getattr(getattr(self, 'scanner', None), 'sdr', None)
+        try:
+            stats = scan_dll.pll_stats(sdr) if sdr is not None else None
+        except Exception:
+            stats = None
+        if stats is not None:
+            print('tuner PLL: locked late %d times, not locked %d times' % stats, flush=True)
     def stop(self):
         if self.scanning.is_set():
             self.scanning.clear()
