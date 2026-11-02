@@ -89,6 +89,8 @@ Item {
     LiveSpectrumGraphData {
         id: graphData
         model: tblModel
+        series: modelMapper.series
+        mapper: modelMapper
 
         onColorChanged: {
             if (root.series){

@@ -1,4 +1,7 @@
+import os
 import time
+import logging
+logger = logging.getLogger(__name__)
 from bisect import bisect_left
 import numpy as np
 
@@ -35,7 +38,9 @@ class GraphTableModel(QtCore.QAbstractTableModel):
         return self._data.shape[0]
     def flags(self, index):
         return QtCore.Qt.ItemFlags.ItemIsEnabled
+    _data_calls = 0
     def data(self, index, role):
+        GraphTableModel._data_calls += 1
         if role == QtCore.Qt.DisplayRole or role == QtCore.Qt.EditRole:
             return float(self._data[index.row(), index.column()])
         return QtCore.QVariant()
@@ -55,7 +60,35 @@ class GraphTableModel(QtCore.QAbstractTableModel):
         self._data = data
         self.endInsertColumns()
 
+    bulk_series = None   # chart series fed by this model (set by SpectrumGraphData)
+
     def _rebuild(self, d_arr):
+        series = self.bulk_series
+        if series is None:
+            return self._rebuild_columns(d_arr)
+        # The chart redraws after every point it is told about: 14 000 points
+        # took 18 s. Keep the series quiet while the mapper refills it, then
+        # tell the chart once that all points changed.
+        try:
+            series.blockSignals(True)
+        except RuntimeError:          # series already deleted by QML
+            self.bulk_series = None
+            return self._rebuild_columns(d_arr)
+        try:
+            _t0 = time.time()
+            self._rebuild_columns(d_arr)
+            _t1 = time.time()
+        finally:
+            try:
+                series.blockSignals(False)
+                QtCore.QMetaObject.invokeMethod(series, 'pointsReplaced')
+                if os.environ.get('QA_GRAPH_TIMING'):
+                    print('QA rebuild: columns %.2f s, redraw %.2f s, series type %s, data() calls %d'
+                          % (_t1 - _t0, time.time() - _t1, type(series).__name__, self._data_calls), flush=True)
+            except RuntimeError:
+                self.bulk_series = None
+
+    def _rebuild_columns(self, d_arr):
         """Replace the whole table: remove every column, then insert the
         new ones. Telling the chart "points 0..N changed" one by one makes
         it redraw after each point, which freezes the program for a very
@@ -142,14 +175,56 @@ class SpectrumGraphData(QtQuick.QQuickItem):
         self._color = None
         self._graphVisible = True
         self._decim_k = None
+        self._series = None
+        self._mapper = None
+        self._mapper_detached = False
         super().__init__(*args)
 
     def _g_model(self): return self._model
     def _s_model(self, value):
         self._model = value
+        if value is not None:
+            value.bulk_series = self._series
         self._n_model.emit()
         self._on_model_changed()
     model = Property(QtCore.QObject, _g_model, _s_model, notify=_n_model)
+
+    def _replace_series(self, pts):
+        """All points to the chart in one call. The model mapper is
+        disconnected the first time (it would add the points again, one by
+        one through Python)."""
+        series = self._series
+        if series is None or not hasattr(series, 'replace'):
+            return False
+        try:
+            if not self._mapper_detached:
+                mapper = self._mapper
+                if mapper is not None:
+                    mapper.setProperty('model', None)
+                self._mapper_detached = True
+            P = QtCore.QPointF
+            series.replace([P(x, y) for x, y in zip(pts['x'].tolist(), pts['y'].tolist())])
+            return True
+        except (RuntimeError, TypeError) as exc:
+            logger.warning('direct chart update failed (%s), using the model', exc)
+            self._series = None
+            return False
+
+    _n_mapper = Signal()
+    def _g_mapper(self): return self._mapper
+    def _s_mapper(self, value):
+        self._mapper = value
+        self._n_mapper.emit()
+    mapper = Property(QtCore.QObject, _g_mapper, _s_mapper, notify=_n_mapper)
+
+    _n_series = Signal()
+    def _g_series(self): return self._series
+    def _s_series(self, value):
+        self._series = value
+        if self._model is not None:
+            self._model.bulk_series = value
+        self._n_series.emit()
+    series = Property(QtCore.QObject, _g_series, _s_series, notify=_n_series)
 
     def _g_name(self):
         name = self._name
@@ -265,7 +340,9 @@ class SpectrumGraphData(QtQuick.QQuickItem):
         if self.model is None:
             return
         t0 = time.time()
-        self.model.set_from_graph_dtype(decimate_max(self.xy_data, self._decim_k))
+        pts = decimate_max(self.xy_data, self._decim_k)
+        if not self._replace_series(pts):
+            self.model.set_from_graph_dtype(pts)
         dt = time.time() - t0
         if dt > 0.5:
             print('chart update took %.1f s (%d points)' % (dt, self.xy_data.size), flush=True)
