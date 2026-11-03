@@ -1,7 +1,10 @@
 """QA plan group S: stability, faults, long runs."""
 import gc
 import os
-import resource
+try:
+    import resource
+except ImportError:          # Windows
+    resource = None
 import threading
 import time
 
@@ -165,7 +168,23 @@ def rss_mb():
                 if line.startswith('VmRSS'):
                     return int(line.split()[1]) / 1024.
     except OSError:
+        pass
+    if resource is not None:
         return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.
+    try:                         # Windows
+        import ctypes
+        from ctypes import wintypes
+        class PMC(ctypes.Structure):
+            _fields_ = [('cb', wintypes.DWORD), ('PageFaultCount', wintypes.DWORD),
+                        ('PeakWorkingSetSize', ctypes.c_size_t), ('WorkingSetSize', ctypes.c_size_t),
+                        ('a', ctypes.c_size_t), ('b', ctypes.c_size_t), ('c', ctypes.c_size_t),
+                        ('d', ctypes.c_size_t), ('e', ctypes.c_size_t), ('f', ctypes.c_size_t)]
+        pmc = PMC(); pmc.cb = ctypes.sizeof(PMC)
+        ctypes.windll.psapi.GetProcessMemoryInfo(ctypes.windll.kernel32.GetCurrentProcess(),
+                                                 ctypes.byref(pmc), pmc.cb)
+        return pmc.WorkingSetSize / 1048576.
+    except Exception:
+        return 0.
 
 
 # S8 + S10: many scans in a row: time, memory, threads

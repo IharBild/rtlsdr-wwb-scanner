@@ -11,7 +11,7 @@ import pytest
 from wwb_scanner.scan_objects import Spectrum
 from wwb_scanner.file_handlers import BaseImporter
 
-ATT = '/mnt/user-data/attachments/050ccbf1-1a7a-5f20-9122-2d859dde1399'
+ATT = os.environ.get('WWBSCAN_USER_FILES', '/mnt/user-data/attachments/050ccbf1-1a7a-5f20-9122-2d859dde1399')
 WWB_REF = sorted(glob.glob(os.path.join(ATT, '*AD600*.csv')) +
                  glob.glob(os.path.join(ATT, '*Polsat*.csv')) +
                  glob.glob(os.path.join(ATT, '*Opener*.csv')))
@@ -179,7 +179,7 @@ def test_F11_unwritable_target(tmpdir):
     ro = tmpdir.mkdir('ro')
     os.chmod(str(ro), 0o500)
     try:
-        if os.geteuid() != 0:
+        if hasattr(os, 'geteuid') and os.geteuid() != 0:
             with pytest.raises(OSError):
                 write_csv(ro, sp)
     finally:

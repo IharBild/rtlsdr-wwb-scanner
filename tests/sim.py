@@ -17,7 +17,9 @@ import numpy as np
 R828D_GAINS = [0, 9, 14, 27, 37, 77, 87, 125, 144, 157, 166, 197, 207, 229, 254,
                280, 297, 328, 338, 364, 372, 386, 402, 421, 434, 439, 445, 480, 496]
 
-IQ_DIR = os.environ.get('WWBSCAN_IQ_DIR', '/tmp/iqchk')
+_HERE = os.path.dirname(os.path.abspath(__file__))
+IQ_DIR = os.environ.get('WWBSCAN_IQ_DIR') or (
+    os.path.join(_HERE, 'iq') if os.path.isdir(os.path.join(_HERE, 'iq')) else '/tmp/iqchk')
 
 
 class Air(object):

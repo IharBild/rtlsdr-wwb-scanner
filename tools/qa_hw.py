@@ -1,0 +1,616 @@
+# -*- coding: utf-8 -*-
+"""Проверка rtlsdr-wwb-scanner на живом RTL-SDR V4 и отчёт.
+
+Запуск (сканер закрыт, донгл с антенной на обычном месте):
+    python qa_hw.py              всё: окружение, автотесты, сканы на донгле (~25 мин)
+    python qa_hw.py --quick      без полного скана 31-1766 и без серии из 10 сканов (~6 мин)
+    python qa_hw.py --no-pytest  только донгл
+    python qa_hw.py --unplug     в конце тест "выдернуть донгл посреди скана" (с подсказкой)
+    python qa_hw.py --simulate   без донгла, на имитаторе (проверка самого скрипта)
+Порядок: окружение (E), автотесты на имитаторе (T), окно программы на имитаторе (U),
+затем реальные сканы на донгле (H).
+
+Результат: папка qa_hw_report_<дата-время> рядом со скриптом:
+    report.md (итог), console.txt, pytest.txt, CSV и sdb2 сканов, отчёты времени.
+Заархивируйте папку и пришлите.
+
+Python 3.7+. Код сканера берётся из установленного пакета (site-packages),
+тесты - из папки tests рядом со скриптом.
+"""
+from __future__ import print_function
+
+import argparse
+import datetime
+import io
+import os
+import platform
+import re
+import shutil
+import subprocess
+import sys
+import threading
+import time
+import traceback
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+KIT = HERE if os.path.isdir(os.path.join(HERE, 'tests')) else os.path.dirname(HERE)
+TESTS = os.path.join(KIT, 'tests')
+
+RESULTS = []      # (id, status, title, detail)   status: PASS / FAIL / WARN / INFO / SKIP
+LOG = None
+
+
+class Tee(object):
+    def __init__(self, *streams):
+        self.streams = streams
+    def write(self, s):
+        for st in self.streams:
+            try:
+                st.write(s)
+                st.flush()
+            except Exception:
+                pass
+    def flush(self):
+        for st in self.streams:
+            try:
+                st.flush()
+            except Exception:
+                pass
+
+
+def result(tid, status, title, detail=''):
+    RESULTS.append((tid, status, title, detail))
+    print('[%s] %-4s %s%s' % (tid, status, title, (' - ' + detail) if detail else ''), flush=True)
+
+
+def guard(tid, title):
+    """Decorator: a crashing check becomes FAIL instead of stopping the run."""
+    def deco(fn):
+        def wrapper(*a, **kw):
+            try:
+                return fn(*a, **kw)
+            except KeyboardInterrupt:
+                raise
+            except Exception as exc:
+                result(tid, 'FAIL', title, 'ошибка скрипта/программы: %r' % (exc,))
+                traceback.print_exc()
+                return None
+        return wrapper
+    return deco
+
+
+# ---------------------------------------------------------------- environment
+
+def check_environment(args):
+    import numpy, scipy
+    info = {
+        'python': sys.version.split()[0] + (' 64-bit' if sys.maxsize > 2 ** 32 else ' 32-bit'),
+        'os': platform.platform(),
+        'numpy': numpy.__version__,
+        'scipy': scipy.__version__,
+    }
+    for mod in ('rtlsdr', 'PySide2', 'tinydb', 'pytest'):
+        try:
+            m = __import__(mod)
+            info[mod] = getattr(m, '__version__', 'есть')
+        except Exception as exc:
+            info[mod] = 'нет (%s)' % type(exc).__name__
+    try:
+        import pkg_resources
+        info['pyrtlsdr'] = pkg_resources.get_distribution('pyrtlsdr').version
+    except Exception:
+        info['pyrtlsdr'] = '?'
+    import wwb_scanner
+    info['wwb_scanner'] = os.path.dirname(wwb_scanner.__file__)
+    result('E1', 'INFO', 'окружение', ', '.join('%s %s' % kv for kv in info.items()))
+
+    # pyrtlsdr >= 0.4 needs rtlsdr_set_dithering (not in RTL-SDR Blog / scanner-v4 DLL)
+    v = info.get('pyrtlsdr', '?')
+    try:
+        major_minor = tuple(int(x) for x in v.split('.')[:2])
+        if major_minor >= (0, 4):
+            result('E2', 'WARN', 'версия pyrtlsdr', '%s: нужна DLL с rtlsdr_set_dithering; держите pyrtlsdr<0.4' % v)
+        else:
+            result('E2', 'PASS', 'версия pyrtlsdr', v)
+    except ValueError:
+        result('E2', 'INFO', 'версия pyrtlsdr', v)
+
+    # which V-version of the scanner files is installed (markers of V9/V10 fixes)
+    base = info['wwb_scanner']
+    marks = {
+        'V9 scan_dll': os.path.exists(os.path.join(base, 'scan_dll', '__init__.py')),
+        'V10 окна/ошибки плиток': 'make_window' in read(os.path.join(base, 'scanner', 'sample_processing.py')),
+        'V10 30-2000 МГц': 'WWB_MIN_KHZ' in read(os.path.join(base, 'file_handlers', 'exporters.py')),
+        'V10 график': '_replace_series' in read(os.path.join(base, 'ui', 'pyside', 'graph.py')),
+        'V10 повтор плиток': 'retry_failed_tiles' in read(os.path.join(base, 'scanner', 'sample_processing.py')),
+    }
+    missing = [k for k, v in marks.items() if not v]
+    result('E3', 'FAIL' if missing else 'PASS', 'установлены файлы V9/V10',
+           ('нет: ' + ', '.join(missing)) if missing else 'все отметки найдены')
+    return info
+
+
+def read(p):
+    try:
+        with io.open(p, encoding='utf-8') as f:
+            return f.read()
+    except Exception:
+        return ''
+
+
+# ---------------------------------------------------------------- pytest
+
+def run_pytest(outdir):
+    if not os.path.isdir(TESTS):
+        result('T1', 'SKIP', 'автотесты', 'нет папки tests рядом со скриптом')
+        return
+    try:
+        import pytest  # noqa: F401
+    except ImportError:
+        result('T1', 'SKIP', 'автотесты', 'pytest не установлен: python -m pip install pytest')
+        return
+    env = dict(os.environ)
+    env.setdefault('QA_SCANS', '20')
+    env['PYTHONIOENCODING'] = 'utf-8'
+    t0 = time.time()
+    cmd = [sys.executable, '-m', 'pytest', TESTS, '-q', '-rfEs', '-p', 'no:cacheprovider',
+           '--junitxml', os.path.join(outdir, 'pytest.xml')]
+    p = subprocess.run(cmd, cwd=outdir, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    out = p.stdout.decode('utf-8', 'replace')
+    with io.open(os.path.join(outdir, 'pytest.txt'), 'w', encoding='utf-8') as f:
+        f.write(out)
+    tail = [l for l in out.splitlines() if re.search(r'\d+ (passed|failed)', l)]
+    summary = tail[-1].strip('= ') if tail else 'нет итоговой строки'
+    failed = [l for l in out.splitlines() if l.startswith('FAILED') or l.startswith('ERROR')]
+    result('T1', 'PASS' if p.returncode == 0 else 'FAIL', 'автотесты (имитатор, ~210 шт.)',
+           '%s за %.0f с%s' % (summary, time.time() - t0,
+                               ('; первые: ' + '; '.join(failed[:3])) if failed else ''))
+
+
+# ---------------------------------------------------------------- window (Qt) with the simulator
+
+def run_ui_check(outdir):
+    ui = os.path.join(KIT, 'tools', 'qa_ui.py')
+    if not os.path.exists(ui):
+        result('U', 'SKIP', 'окно программы (Qt)', 'нет tools/qa_ui.py')
+        return
+    env = dict(os.environ)
+    env['QT_QPA_PLATFORM'] = 'offscreen'
+    env['PYTHONIOENCODING'] = 'utf-8'
+    t0 = time.time()
+    try:
+        p = subprocess.run([sys.executable, ui, '0', '1766'], cwd=outdir, env=env,
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=1200)
+        out = p.stdout.decode('utf-8', 'replace')
+    except subprocess.TimeoutExpired as exc:
+        out = (exc.output or b'').decode('utf-8', 'replace') + '\nTIMEOUT'
+    with io.open(os.path.join(outdir, 'ui.txt'), 'w', encoding='utf-8') as f:
+        f.write(out)
+    checks = [l for l in out.splitlines() if re.match(r'^U\d', l)]
+    bad = [l for l in checks if ' FAIL ' in l]
+    if not checks:
+        result('U', 'FAIL', 'окно программы (Qt, имитатор, 0-1766)', 'окно не запустилось, см. ui.txt')
+        return
+    result('U', 'FAIL' if bad else 'PASS', 'окно программы (Qt, имитатор, 0-1766), %.0f с' % (time.time() - t0),
+           '; '.join(l.split(None, 2)[0] + ' ' + l.split(None, 2)[2][:70] for l in (bad or checks)))
+
+
+# ---------------------------------------------------------------- dongle scans
+
+class Lab(object):
+    """Runs real scans through the installed scanner (Scanner.run_scan)."""
+    def __init__(self, outdir, simulate=False):
+        self.outdir = outdir
+        self.simulate = simulate
+        if simulate:
+            sys.path.insert(0, TESTS)
+            import conftest  # noqa: F401  (rtlsdr stub if needed)
+            import sim
+            from wwb_scanner.scanner import sdrwrapper
+            air = sim.Air(noise=0.03)
+            for st in (88.0, 91.3, 95.1, 100.6, 104.9):
+                air.tone(st * 1e6, 0.05)
+            for lo in (474.19, 490.19, 554.19, 698.19):
+                air.band(lo * 1e6, (lo + 7.62) * 1e6, 0.05)
+            self.sim_air = air
+            self.made = []
+            def factory(serial_number=None):
+                s = sim.FakeRtlSdr(air=air, tune_delay=0.002)
+                self.made.append(s)
+                return s
+            sdrwrapper.RtlSdr = factory
+        from wwb_scanner.scan_objects import spectrum as spmod
+        # do not fill the user's scan database with test scans
+        spmod.Spectrum.save_to_dbstore = lambda self: None
+        self.home_report = os.path.join(os.path.expanduser('~'), 'wwb_scan_timing.txt')
+
+    def config(self, start, end, window_type='hann', overlap=0.65, sweeps=40):
+        return {
+            'scan_range': [float(start), float(end)],
+            'device': {'gain': 33.8},
+            'sampling': {'sample_rate': 2.4e6, 'sweep_overlap_ratio': overlap,
+                         'sweeps_per_scan': sweeps, 'samples_per_sweep': 2048,
+                         'window_size': 96, 'window_type': window_type},
+        }
+
+    def scan(self, name, start, end, timeout=1200, **kw):
+        from wwb_scanner.scanner import main
+        import numpy as np
+        print('\n--- скан %s: %.1f-%.1f МГц %s' % (name, start, end, kw or ''), flush=True)
+        sc = main.Scanner(config=self.config(start, end, **kw))
+        buf = io.StringIO()
+        old = sys.stdout
+        sys.stdout = Tee(old, buf)
+        t0 = time.time()
+        th = threading.Thread(target=sc.run_scan)
+        th.daemon = True
+        th.start()
+        th.join(timeout)
+        dt = time.time() - t0
+        sys.stdout = old
+        hung = th.is_alive()
+        sd = sc.spectrum.sample_data
+        f = np.asarray(sd.frequency, float)
+        y = np.asarray(sd['dbFS'], float)
+        coll = sc.sample_collection
+        out = buf.getvalue()
+        m = re.search(r'tuner PLL: locked late (\d+) times, not locked (\d+) times', out)
+        info = {
+            'name': name, 'time': dt, 'hung': hung, 'f': f, 'y': y,
+            'tiles': len(coll.sample_sets),
+            'processed': (len(coll.processed_keys) if hasattr(coll, 'processed_keys')
+                          else sum(1 for x in coll.sample_sets.values()
+                                   if getattr(x, 'powers', None) is not None)),   # before V10
+            'missing': list(getattr(coll, 'missing_tiles', []) or []),
+            'aborted': bool(getattr(coll, 'aborted', False)),
+            'error': getattr(sc, 'error', None),
+            'pll_late': int(m.group(1)) if m else None, 'pll_unlocked': int(m.group(2)) if m else None,
+            'lib': (re.findall(r'rtlsdr library: (.*)', out) or ['?'])[-1],
+            'scanner': sc, 'console': out,
+        }
+        if os.path.exists(self.home_report):
+            shutil.copy(self.home_report, os.path.join(self.outdir, 'timing_%s.txt' % name))
+            info['timing'] = read(self.home_report)
+        return info
+
+    def save(self, s, name):
+        p_csv = os.path.join(self.outdir, name + '.csv')
+        p_sdb = os.path.join(self.outdir, name + '.sdb2')
+        s['scanner'].spectrum.export_to_file(filename=p_csv, frequency_format='khz')
+        try:
+            s['scanner'].spectrum.export_to_file(filename=p_sdb)
+        except Exception as exc:
+            print('sdb2 export failed: %r' % (exc,))
+            p_sdb = None
+        return p_csv, p_sdb
+
+
+# ---------------------------------------------------------------- analysis helpers
+
+def per_tile(s):
+    return s['time'] / max(1, s['tiles'])
+
+
+def quiet_floor(f, y, lo, hi):
+    """std of the floor in a band, after removing signals (points > median+3 dB)."""
+    import numpy as np
+    m = (f >= lo) & (f <= hi)
+    v = y[m]
+    if v.size < 50:
+        return None
+    med = np.median(v)
+    q = v[v < med + 3]
+    d = np.diff(q)
+    return {'median': med, 'std': float(np.std(q)), 'step_max': float(np.max(np.abs(d))) if d.size else 0.,
+            'share_signal': 1 - q.size / float(v.size)}
+
+
+def tile_ripple(f, y, lo, hi, period=31):
+    import numpy as np
+    m = (f >= lo) & (f <= hi)
+    v = y[m]
+    if v.size < 5 * period:
+        return None
+    base = np.convolve(v, np.ones(201) / 201., 'same')
+    r = (v - base)[100:-100]
+    n = (r.size // period) * period
+    ph = r[:n].reshape(-1, period)
+    ph = np.median(ph, axis=0)
+    return float(np.ptp(ph))
+
+
+def fm_raster(f, y):
+    import numpy as np
+    m = (f >= 87.5) & (f <= 108.0)
+    ff, yy = f[m], y[m]
+    if ff.size < 100:
+        return None
+    med = np.median(yy)
+    peaks = [i for i in range(2, ff.size - 2)
+             if yy[i] > med + 10 and yy[i] == yy[i - 2:i + 3].max()]
+    on = sum(1 for i in peaks if abs(round(ff[i] * 10) / 10. - ff[i]) < 0.001)
+    return len(peaks), on
+
+
+def tv_edges(f, y, lo=470., hi=790.):
+    import numpy as np
+    m = (f >= lo) & (f <= hi)
+    ff = f[m]
+    sm = np.convolve(y[m], np.ones(5) / 5., 'same')
+    rise, fall = [], []
+    for k in range(int((hi - lo) // 8)):
+        e = lo + 8 * k
+        i0 = int(np.argmin(np.abs(ff - e)))
+        a = max(i0 - 100, 0)
+        seg, fs = sm[a:i0 + 100], ff[a:i0 + 100]
+        if seg.size < 20 or seg.max() - seg.min() < 12:
+            continue
+        mid = (seg.max() + seg.min()) / 2
+        for c in np.flatnonzero((seg[:-1] < mid) & (seg[1:] >= mid)):
+            rise.append(fs[c] - e)
+        for c in np.flatnonzero((seg[:-1] >= mid) & (seg[1:] < mid)):
+            fall.append(fs[c] - e)
+    if len(rise) < 3 or len(fall) < 3:
+        return None
+    return float(np.median(rise)), float(np.median(fall)), len(rise), len(fall)
+
+
+def csv_format(path, lo_khz=None, hi_khz=None):
+    import numpy as np
+    b = open(path, 'rb').read()
+    lines = b.split(b'\n')
+    bad = [l for l in lines if not re.match(rb'^\d+,-?\d+\.\d$', l)]
+    k = np.array([int(l.split(b',')[0]) for l in lines if l and not l in bad])
+    steps = sorted(set(np.diff(k).tolist())) if k.size > 1 else []
+    problems = []
+    if b.count(b'\r'):
+        problems.append('есть \\r')
+    if bad:
+        problems.append('%d плохих строк' % len(bad))
+    if b.endswith(b'\n'):
+        problems.append('перевод строки в конце')
+    if steps != [25]:
+        problems.append('шаг %s' % steps[:5])
+    if k.size and (k.min() < 30000 or k.max() > 2000000):
+        problems.append('вне 30-2000 МГц')
+    return problems, (k.min() / 1000. if k.size else 0), (k.max() / 1000. if k.size else 0), k.size
+
+
+# ---------------------------------------------------------------- hardware checks
+
+@guard('H1', 'донгл найден, какая DLL')
+def h1_dongle(lab):
+    s = lab.scan('h1_smoke', 470, 480)
+    ok = s['tiles'] > 0 and s['processed'] == s['tiles'] and not s['error']
+    result('H1', 'PASS' if ok else 'FAIL', 'донгл найден, короткий скан 470-480',
+           'библиотека: %s; плиток %d/%d; ошибка %r' % (s['lib'], s['processed'], s['tiles'], s['error']))
+    return s
+
+
+@guard('H2', 'три скана 470-800')
+def h2_three_scans(lab):
+    import numpy as np
+    scans = [lab.scan('h2_470_800_%d' % i, 470, 800) for i in (1, 2, 3)]
+    lab.save(scans[0], 'scan_470-800_1')
+    times = [s['time'] for s in scans]
+    pt = [per_tile(s) for s in scans]
+    unl = [s['pll_unlocked'] for s in scans]
+    miss = [len(s['missing']) for s in scans]
+    hung = any(s['hung'] for s in scans)
+    status = 'FAIL' if hung or any(s['error'] for s in scans) else ('WARN' if any(miss) else 'PASS')
+    result('H2a', status, 'скорость 470-800 (3 скана)',
+           'время %s с (у V7 было ~48 с), %s с/плитку; PLL не захвачен %s; плиток без данных %s'
+           % (['%.1f' % t for t in times], ['%.3f' % p for p in pt], unl, miss))
+    # floor and stitching on the first scan, in the quietest 50 MHz window
+    f, y = scans[0]['f'], scans[0]['y']
+    best = None
+    for lo in np.arange(470, 751, 10):
+        q = quiet_floor(f, y, lo, lo + 50)
+        if q and (best is None or q['share_signal'] < best[1]['share_signal']):
+            best = (lo, q)
+    if best:
+        lo, q = best
+        rip = tile_ripple(f, y, lo, lo + 50)
+        st = 'PASS' if q['std'] <= 0.5 and (rip or 0) <= 0.8 else 'WARN'
+        result('H2b', st, 'ровность шума (самая тихая полоса %.0f-%.0f МГц)' % (lo, lo + 50),
+               'std %.2f дБ (у V7 0,16-0,21), рябь на периоде плитки %s дБ (у V7 0,4-0,7), макс. скачок %.2f дБ'
+               % (q['std'], '%.2f' % rip if rip is not None else '?', q['step_max']))
+    # repeatability between scan 1 and 2 on common grid, quiet points only
+    a, b = scans[0], scans[1]
+    if a['f'].size and a['f'].size == b['f'].size and np.allclose(a['f'], b['f']):
+        d = a['y'] - b['y']
+        quiet = a['y'] < np.median(a['y']) + 3
+        result('H2c', 'PASS' if np.std(d[quiet]) <= 0.5 else 'WARN', 'повторяемость скан 1 / скан 2',
+               'тихие точки: среднее %+.2f дБ, std %.2f дБ (у NEW6-2 0,12); все точки std %.2f дБ'
+               % (np.mean(d[quiet]), np.std(d[quiet]), np.std(d)))
+    else:
+        result('H2c', 'FAIL', 'повторяемость', 'сетки частот сканов не совпали')
+    p_csv = os.path.join(lab.outdir, 'scan_470-800_1.csv')
+    problems, fmin, fmax, n = csv_format(p_csv)
+    result('H2d', 'FAIL' if problems else 'PASS', 'CSV для WWB (470-800)',
+           '%s; %.3f-%.3f МГц, %d строк' % (', '.join(problems) or 'формат как у WWB', fmin, fmax, n))
+    return scans
+
+
+@guard('H3', 'полный скан 31-1766')
+def h3_full(lab):
+    s = lab.scan('h3_full', 31, 1766, timeout=1800)
+    lab.save(s, 'scan_31-1766')
+    f, y = s['f'], s['y']
+    status = 'FAIL' if s['hung'] or s['error'] else ('WARN' if s['missing'] else 'PASS')
+    result('H3a', status, 'полный скан 31-1766',
+           '%.0f с (у V7 259 с), %d плиток, %.3f с/плитку; PLL поздно %s / не захвачен %s; без данных %d%s'
+           % (s['time'], s['tiles'], per_tile(s), s['pll_late'], s['pll_unlocked'], len(s['missing']),
+              (' (напр. %.3f МГц)' % (s['missing'][0] / 1e6)) if s['missing'] else ''))
+    t = s.get('timing', '')
+    m = re.search(r'first 20%: ([\d.]+), last 20%: ([\d.]+)', t)
+    if m:
+        a, b = float(m.group(1)), float(m.group(2))
+        result('H3b', 'PASS' if b <= a * 1.3 else 'WARN', 'нет замедления к концу скана',
+               'первые 20 %%: %.3f с, последние 20 %%: %.3f с на плитку' % (a, b))
+    fm = fm_raster(f, y)
+    if fm:
+        n, on = fm
+        result('H3c', 'PASS' if n and on == n else ('WARN' if n else 'INFO'), 'частота: FM на сетке 100 кГц',
+               '%d из %d станций точно на сетке' % (on, n))
+    tv = tv_edges(f, y)
+    if tv:
+        r, fa, nr, nf = tv
+        sym = abs(r + fa) / 2 <= 0.1      # rough: FM raster (H3c) is the exact check
+        result('H3d', 'PASS' if sym else 'WARN', 'частота: края ТВ-каналов симметричны',
+               'начала %+.3f МГц (%d), концы %+.3f МГц (%d); сдвиг частоты ~%+.3f МГц'
+               % (r, nr, fa, nf, (r + fa) / 2))
+    q = quiet_floor(f, y, 1000, 1700)
+    if q:
+        result('H3e', 'PASS' if q['std'] <= 0.5 else 'WARN', 'шум 1000-1700 МГц',
+               'медиана %.1f дБ, std %.2f дБ (у NEW6-2 0,30 на всей полосе)' % (q['median'], q['std']))
+    p_csv = os.path.join(lab.outdir, 'scan_31-1766.csv')
+    problems, fmin, fmax, n = csv_format(p_csv)
+    result('H3f', 'FAIL' if problems else 'PASS', 'CSV для WWB (полный)',
+           '%s; %.3f-%.3f МГц, %d строк' % (', '.join(problems) or 'формат как у WWB', fmin, fmax, n))
+    return s
+
+
+@guard('H4', 'окна')
+def h4_windows(lab):
+    out = []
+    bad = False
+    for w in ('hann', 'blackmanharris', 'general_hamming', 'general_cosine', 'flattop'):
+        s = lab.scan('h4_%s' % w, 470, 500, window_type=w)
+        ok = not s['hung'] and not s['error'] and s['f'].size > 1000
+        bad = bad or not ok
+        out.append('%s %s (%d точек, %.0f с)' % (w, 'ok' if ok else 'СБОЙ', s['f'].size, s['time']))
+    result('H4', 'FAIL' if bad else 'PASS', 'все окна из меню работают (470-500)', '; '.join(out))
+
+
+@guard('H5', 'Overlap Ratio')
+def h5_overlap(lab):
+    import numpy as np
+    out = []
+    bad = False
+    for ov in (0.0, 0.8, 0.9):
+        # Overlap 0 -> step of one bin: ~200 tiles even for 5 MHz
+        s = lab.scan('h5_ov%.1f' % ov, 470, 475 if ov == 0 else 490, overlap=ov, timeout=300)
+        d = np.diff(s['f'])
+        holes = int((d > 0.026).sum())
+        ok = not s['hung'] and holes == 0 and s['f'].size > 150
+        bad = bad or not ok
+        out.append('%.1f: %d плиток, %d дыр, %.0f с%s' % (ov, s['tiles'], holes, s['time'], ' ЗАВИС' if s['hung'] else ''))
+    result('H5', 'FAIL' if bad else 'PASS', 'Overlap Ratio 0 / 0,8 / 0,9 без дыр и зависаний', '; '.join(out))
+
+
+@guard('H6', 'серия сканов')
+def h6_series(lab, n=10):
+    times = []
+    bad = 0
+    for i in range(n):
+        s = lab.scan('h6_series_%d' % (i + 1), 470, 520)
+        times.append(s['time'])
+        if s['hung'] or s['error'] or s['aborted']:
+            bad += 1
+    result('H6', 'PASS' if bad == 0 and times[-1] <= times[0] * 1.5 + 1 else 'FAIL',
+           '%d сканов подряд 470-520' % n,
+           'сбоев %d; время первого %.1f с, последнего %.1f с, max %.1f с' % (bad, times[0], times[-1], max(times)))
+
+
+@guard('H7', 'выдернуть донгл')
+def h7_unplug(lab):
+    print('\n>>> Тест H7: через 10 секунд после начала скана ВЫДЕРНИТЕ донгл из USB.')
+    print('>>> Нажмите Enter, чтобы начать...')
+    try:
+        input()
+    except EOFError:
+        pass
+    s = lab.scan('h7_unplug', 470, 1000, timeout=180)
+    ok = not s['hung']
+    result('H7', 'PASS' if ok else 'FAIL', 'донгл выдернут посреди скана',
+           'скан закончился за %.0f с, aborted %s, ошибка %r, точек сохранено %d'
+           % (s['time'], s['aborted'], s['error'], s['f'].size))
+    print('>>> Вставьте донгл обратно.')
+
+
+# ---------------------------------------------------------------- report
+
+def write_report(outdir, args, started):
+    counts = {}
+    for r in RESULTS:
+        counts[r[1]] = counts.get(r[1], 0) + 1
+    lines = ['# Проверка rtlsdr-wwb-scanner на железе', '',
+             'Дата: %s; длительность %.0f мин; режим: %s' % (
+                 started.strftime('%Y-%m-%d %H:%M'), (time.time() - started_ts) / 60.,
+                 'ИМИТАТОР' if args.simulate else ('быстрый' if args.quick else 'полный')),
+             '', 'Итог: ' + ', '.join('%s %d' % kv for kv in sorted(counts.items())), '',
+             '| № | Итог | Проверка | Подробности |', '|---|---|---|---|']
+    for tid, st, title, det in RESULTS:
+        lines.append('| %s | %s | %s | %s |' % (tid, st, title, det.replace('|', '/')))
+    lines += ['', 'Файлы: console.txt (весь вывод), pytest.txt (автотесты), scan_*.csv/.sdb2 (сканы), timing_*.txt (время по этапам).']
+    with io.open(os.path.join(outdir, 'report.md'), 'w', encoding='utf-8') as f:
+        f.write('\n'.join(lines) + '\n')
+    return counts
+
+
+started_ts = time.time()
+
+
+def main():
+    global LOG
+    ap = argparse.ArgumentParser(description='Проверка сканера на RTL-SDR V4')
+    ap.add_argument('--quick', action='store_true')
+    ap.add_argument('--no-pytest', action='store_true')
+    ap.add_argument('--unplug', action='store_true')
+    ap.add_argument('--simulate', action='store_true')
+    ap.add_argument('--out', default=None)
+    args = ap.parse_args()
+    started = datetime.datetime.now()
+    outdir = args.out or os.path.join(KIT, 'qa_hw_report_' + started.strftime('%Y%m%d-%H%M%S'))
+    if not os.path.isdir(outdir):
+        os.makedirs(outdir)
+    LOG = io.open(os.path.join(outdir, 'console.txt'), 'w', encoding='utf-8')
+    sys.stdout = Tee(sys.__stdout__, LOG)
+    sys.stderr = Tee(sys.__stderr__, LOG)
+    print('Отчёт: %s' % outdir)
+    try:
+        for st in (sys.__stdout__, sys.__stderr__):
+            try:
+                st.reconfigure(errors='replace')     # Windows console without UTF-8
+            except Exception:
+                pass
+        check_environment(args)
+        if not args.no_pytest:
+            print('\n=== Автотесты (несколько минут) ===', flush=True)
+            run_pytest(outdir)
+            print('\n=== Окно программы с имитатором ===', flush=True)
+            run_ui_check(outdir)
+        print('\n=== Донгл ===', flush=True)
+        lab = Lab(outdir, simulate=args.simulate)
+        if h1_dongle(lab) is not None and not any(r[0] == 'H1' and r[1] == 'FAIL' for r in RESULTS):
+            h2_three_scans(lab)
+            v10 = any(r[0] == 'E3' and r[1] == 'PASS' for r in RESULTS)
+            if v10:
+                h4_windows(lab)
+                h5_overlap(lab)
+            else:
+                # without V10 these settings hang the old version (by design of the test)
+                result('H4', 'SKIP', 'окна', 'сначала установите V10 (E3)')
+                result('H5', 'SKIP', 'Overlap Ratio', 'сначала установите V10 (E3)')
+            if not args.quick:
+                h3_full(lab)
+                h6_series(lab)
+            if args.unplug and not args.simulate:
+                h7_unplug(lab)
+        else:
+            print('Донгл не работает - остальные проверки пропущены.')
+    except KeyboardInterrupt:
+        result('X', 'WARN', 'прервано пользователем (Ctrl+C)')
+    finally:
+        counts = write_report(outdir, args, started)
+        print('\nГотово: %s' % ', '.join('%s %d' % kv for kv in sorted(counts.items())))
+        print('Отчёт: %s' % os.path.join(outdir, 'report.md'))
+        print('Заархивируйте папку %s и пришлите.' % outdir)
+        sys.stdout = sys.__stdout__
+        LOG.close()
+    os._exit(0)
+
+
+if __name__ == '__main__':
+    main()
