@@ -8,8 +8,8 @@ FileDialog {
     folder: shortcuts.home
     selectMultiple: false
     selectExisting: false
-    // The extension is added in Python from the chosen filter
-    // (graph.py save_to_file_as), so no defaultSuffix here.
+    // The extension is added from the chosen filter (withExtension below),
+    // so no defaultSuffix here.
     nameFilters: [
         'Shure WWB CSV (*.csv)',
         'Shure WWB native (*.sdb2)',
@@ -24,8 +24,27 @@ FileDialog {
         }
     }
 
-    // Called on OK. Prints what it does to the console (lines "qml: export ...")
-    // and falls back to the old CSV export if anything goes wrong.
+    // Name typed without our extension -> add the one of the chosen format
+    // ("Shure WWB native (*.sdb2)" -> .sdb2). The file format is then chosen
+    // by the extension in Python (save_to_file), as before V11.
+    function withExtension(url, filt) {
+        var s = String(url);
+        var low = s.toLowerCase();
+        var exts = ['.csv', '.sdb2', '.npz'];
+        for (var i = 0; i < exts.length; i++) {
+            if (low.slice(-exts[i].length) === exts[i])
+                return s;
+        }
+        var m = /\*\.(\w+)/.exec(filt);
+        var ext = m ? '.' + m[1].toLowerCase() : '.csv';
+        if (exts.indexOf(ext) < 0)
+            ext = '.csv';
+        return s + ext;
+    }
+
+    // Called on OK. Prints what it does to the console (lines "qml: export ...").
+    // Uses only save_to_file(url): the two-argument slot of V11 is not
+    // visible from QML on the user's PySide2 (V11.1 console, 04.11.2026).
     function doExport(url, filt) {
         var f = (filt === undefined || filt === null) ? '' : String(filt);
         console.log('export dialog: file ' + url + ', format "' + f + '"');
@@ -33,22 +52,14 @@ FileDialog {
             console.log('export: nothing to export (no scan in the graph)');
             return false;
         }
+        var target = withExtension(url, f);
+        if (target !== String(url))
+            console.log('export: extension added -> ' + target);
         try {
-            if (typeof root.graphData.save_to_file_as === 'function') {
-                root.graphData.save_to_file_as(url, f);
-            } else {
-                console.log('export: graph.py without save_to_file_as (V10), CSV only');
-                root.graphData.save_to_file(url);
-            }
+            root.graphData.save_to_file(Qt.resolvedUrl(target));
             return true;
         } catch (e) {
-            console.log('export FAILED in QML: ' + e + ' - trying the old CSV export');
-            try {
-                root.graphData.save_to_file(url);
-                return true;
-            } catch (e2) {
-                console.log('export FAILED again: ' + e2);
-            }
+            console.log('export FAILED in QML: ' + e);
         }
         return false;
     }

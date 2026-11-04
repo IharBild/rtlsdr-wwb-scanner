@@ -149,12 +149,12 @@ def check_environment(args):
     m11 = {
         'график без анимации': 'NoAnimation' in read(os.path.join(qml, 'Graph.qml'))
                                and 'SeriesAnimations' not in read(os.path.join(qml, 'Graph.qml')),
-        'экспорт sdb2 (V11.1)': 'doExport' in read(os.path.join(qml, 'ExportDialog.qml')),
+        'экспорт sdb2 (V11.2)': 'withExtension' in read(os.path.join(qml, 'ExportDialog.qml')),
         'graph.py V11': 'save_to_file_as' in read(os.path.join(base, 'ui', 'pyside', 'graph.py')),
     }
     miss11 = [k for k, v in m11.items() if not v]
-    result('E3b', 'WARN' if miss11 else 'PASS', 'установлены файлы V11.1 (график, экспорт)',
-           ('нет: ' + ', '.join(miss11) + ' - поставьте fix-V11.1-pip-files.zip') if miss11 else 'все отметки найдены')
+    result('E3b', 'WARN' if miss11 else 'PASS', 'установлены файлы V11.2 (график, экспорт)',
+           ('нет: ' + ', '.join(miss11) + ' - поставьте fix-V11.2-pip-files.zip') if miss11 else 'все отметки найдены')
     result('E4', 'INFO', 'какую DLL загружает pyrtlsdr', loaded_dll())
     return info
 
@@ -657,13 +657,14 @@ def h8_no_antenna(lab):
         kk = round(fr / 28.8)
         (own if abs(fr - kk * 28.8) <= 0.06 else other).append((fr, ex))
     lost = [r for r in sorted(REF_SPURS) if REF_SPURS[r] >= 5 and not any(abs(r - fr) < 0.06 for fr, _ in own)]
-    edge = [p for p in other if p[0] > 1750]
-    other = [p for p in other if p[0] <= 1750]
+    # 1700-1766: top of the tuner range and LTE 1800 uplink (phones nearby), not counted
+    edge = [p for p in other if p[0] > 1700]
+    other = [p for p in other if p[0] <= 1700]
     result('H8b', 'WARN' if other else 'PASS', 'все пики без антенны - кратные 28,8 МГц',
            'кратных 28,8: %d (%s); других: %s%s' % (
                len(own), ', '.join('%.1f %+.1f' % p for p in own[:8]),
                ', '.join('%.3f %+.1f' % p for p in other[:10]) or 'нет',
-               ('; у края 1750-1766: ' + ', '.join('%.3f' % p[0] for p in edge)) if edge else ''))
+               ('; 1700-1766 (край тюнера / LTE 1800 uplink, не считаются): ' + ', '.join('%.3f' % p[0] for p in edge)) if edge else ''))
     diffs = ['%.1f %+.1f' % (fr, ex - REF_SPURS[round(fr, 1)]) for fr, ex in own if round(fr, 1) in REF_SPURS]
     result('H8c', 'INFO' if not lost else 'WARN', 'спуры против эталона (дБ над полом, разница)',
            '%s%s' % (', '.join(diffs[:16]), ('; пропали: ' + ', '.join('%.1f' % r for r in lost)) if lost else ''))
