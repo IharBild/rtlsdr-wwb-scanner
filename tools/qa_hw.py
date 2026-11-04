@@ -6,9 +6,14 @@
     python qa_hw.py --quick      без полного скана 31-1766 и без серии из 10 сканов (~6 мин)
     python qa_hw.py --no-pytest  только донгл
     python qa_hw.py --unplug     в конце тест "выдернуть донгл посреди скана" (с подсказкой)
+    python qa_hw.py --no-antenna --no-pytest
+                                 АНТЕННА ОТКРУЧЕНА: собственный шум и спуры донгла
+                                 против эталона V10 + scanner-v4 (~5 мин)
     python qa_hw.py --simulate   без донгла, на имитаторе (проверка самого скрипта)
 Порядок: окружение (E), автотесты на имитаторе (T), окно программы на имитаторе (U),
-затем реальные сканы на донгле (H).
+прогрев донгла (H0), затем реальные сканы на донгле (H).
+Сообщения самой DLL (stderr драйвера, напр. "i2c wr failed") ловятся отдельно (D1):
+скрипт запускает себя дочерним процессом и пишет весь вывод в console.txt.
 
 Результат: папка qa_hw_report_<дата-время> рядом со скриптом:
     report.md (итог), console.txt, pytest.txt, CSV и sdb2 сканов, отчёты времени.
@@ -37,6 +42,19 @@ KIT = HERE if os.path.isdir(os.path.join(HERE, 'tests')) else os.path.dirname(HE
 TESTS = os.path.join(KIT, 'tests')
 
 RESULTS = []      # (id, status, title, detail)   status: PASS / FAIL / WARN / INFO / SKIP
+
+# Reference numbers of the user's dongle, V10 + rtlsdr.dll scanner-v4 (04.11.2026)
+REF_TILE_S = 0.078            # s per tile, 31-1766 MHz scan (173.7 s, 2239 tiles)
+REF_FULL_S = 173.7
+# antenna disconnected, gain 33.8: median level per band, dB (v10_test_no_antenna.csv)
+REF_NOANT = [(31, 88, -100.7), (88, 108, -100.6), (108, 174, -100.3), (174, 240, -99.7),
+             (240, 300, -100.8), (300, 470, -100.7), (470, 700, -100.2), (700, 800, -100.4),
+             (800, 1000, -100.8), (1000, 1250, -101.6), (1250, 1500, -102.6), (1500, 1766, -103.3)]
+# own spurs of the dongle (antenna disconnected): k x 28.8 MHz, dB above the local floor
+REF_SPURS = {86.4: 14.0, 115.2: 8.8, 144.0: 4.7, 172.8: 9.4, 201.6: 6.2, 230.4: 5.6, 259.2: 11.9,
+             288.0: 3.6, 316.8: 4.8, 345.6: 7.4, 374.4: 9.6, 403.2: 8.9, 432.0: 5.7, 460.8: 5.9,
+             489.6: 4.8, 518.4: 3.2}
+DRIVER_MSG = re.compile(r'(i2c wr failed|i2c rd failed|PLL not locked|No valid PLL|LIBUSB_ERROR|usb_claim_interface)', re.I)
 LOG = None
 
 
@@ -127,7 +145,41 @@ def check_environment(args):
     missing = [k for k, v in marks.items() if not v]
     result('E3', 'FAIL' if missing else 'PASS', 'установлены файлы V9/V10',
            ('нет: ' + ', '.join(missing)) if missing else 'все отметки найдены')
+    qml = os.path.join(base, 'ui', 'pyside', 'qml')
+    m11 = {
+        'график без анимации': 'NoAnimation' in read(os.path.join(qml, 'Graph.qml'))
+                               and 'SeriesAnimations' not in read(os.path.join(qml, 'Graph.qml')),
+        'экспорт sdb2 (V11.1)': 'doExport' in read(os.path.join(qml, 'ExportDialog.qml')),
+        'graph.py V11': 'save_to_file_as' in read(os.path.join(base, 'ui', 'pyside', 'graph.py')),
+    }
+    miss11 = [k for k, v in m11.items() if not v]
+    result('E3b', 'WARN' if miss11 else 'PASS', 'установлены файлы V11.1 (график, экспорт)',
+           ('нет: ' + ', '.join(miss11) + ' - поставьте fix-V11.1-pip-files.zip') if miss11 else 'все отметки найдены')
+    result('E4', 'INFO', 'какую DLL загружает pyrtlsdr', loaded_dll())
     return info
+
+
+def loaded_dll():
+    """Path of the rtlsdr library pyrtlsdr loaded (Windows), and its build."""
+    try:
+        import ctypes
+        from rtlsdr.librtlsdr import librtlsdr as L
+        path = '?'
+        if os.name == 'nt':
+            buf = ctypes.create_unicode_buffer(1024)
+            k32 = ctypes.WinDLL('kernel32', use_last_error=True)
+            k32.GetModuleFileNameW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint32]
+            if k32.GetModuleFileNameW(ctypes.c_void_p(L._handle), buf, 1024):
+                path = buf.value
+        else:
+            path = getattr(L, '_name', '?')
+        build = 'штатная (без rtlsdr_get_build_info)'
+        if hasattr(L, 'rtlsdr_get_build_info'):
+            L.rtlsdr_get_build_info.restype = ctypes.c_char_p
+            build = L.rtlsdr_get_build_info().decode('ascii', 'replace')
+        return '%s; %s' % (path, build)
+    except Exception as exc:
+        return 'не удалось определить: %r' % (exc,)
 
 
 def read(p):
@@ -162,7 +214,7 @@ def run_pytest(outdir):
     tail = [l for l in out.splitlines() if re.search(r'\d+ (passed|failed)', l)]
     summary = tail[-1].strip('= ') if tail else 'нет итоговой строки'
     failed = [l for l in out.splitlines() if l.startswith('FAILED') or l.startswith('ERROR')]
-    result('T1', 'PASS' if p.returncode == 0 else 'FAIL', 'автотесты (имитатор, ~210 шт.)',
+    result('T1', 'PASS' if p.returncode == 0 else 'FAIL', 'автотесты (имитатор)',
            '%s за %.0f с%s' % (summary, time.time() - t0,
                                ('; первые: ' + '; '.join(failed[:3])) if failed else ''))
 
@@ -384,7 +436,38 @@ def h1_dongle(lab):
     ok = s['tiles'] > 0 and s['processed'] == s['tiles'] and not s['error']
     result('H1', 'PASS' if ok else 'FAIL', 'донгл найден, короткий скан 470-480',
            'библиотека: %s; плиток %d/%d; ошибка %r' % (s['lib'], s['processed'], s['tiles'], s['error']))
+    if ok:
+        v4 = 'scanner-v4' in s['lib']
+        result('H1b', 'PASS' if v4 else 'WARN', 'DLL scanner-v4 загружена',
+               'да (перестройка ~22 мс, уровни выше штатной DLL 2023 г. на ~5,4 дБ)' if v4 else
+               'нет: %s. Время и уровни не сравнимы с эталоном V10 + scanner-v4' % s['lib'])
     return s
+
+
+def h0_warmup(lab, seconds=90):
+    """Stream for a while so the dongle is warm before measured scans
+    (dll-bisect: after 90 s the level drifts 0.01 dB)."""
+    if lab.simulate:
+        result('H0', 'SKIP', 'прогрев донгла', 'имитатор')
+        return
+    print('\n--- прогрев донгла %d с (ничего не меряется)' % seconds, flush=True)
+    try:
+        from rtlsdr import RtlSdr
+        sdr = RtlSdr()
+        try:
+            sdr.sample_rate = 2.4e6
+            sdr.center_freq = 600e6
+            sdr.gain = 33.8
+            t_end = time.time() + seconds
+            n = 0
+            while time.time() < t_end:
+                sdr.read_samples(262144)
+                n += 1
+        finally:
+            sdr.close()
+        result('H0', 'PASS', 'прогрев донгла', '%d с, %d блоков' % (seconds, n))
+    except Exception as exc:
+        result('H0', 'WARN', 'прогрев донгла', 'не удалось: %r (сканы идут без прогрева)' % (exc,))
 
 
 @guard('H2', 'три скана 470-800')
@@ -397,10 +480,11 @@ def h2_three_scans(lab):
     unl = [s['pll_unlocked'] for s in scans]
     miss = [len(s['missing']) for s in scans]
     hung = any(s['hung'] for s in scans)
-    status = 'FAIL' if hung or any(s['error'] for s in scans) else ('WARN' if any(miss) else 'PASS')
+    slow = max(pt) > REF_TILE_S * 1.3
+    status = 'FAIL' if hung or any(s['error'] for s in scans) else ('WARN' if any(miss) or slow else 'PASS')
     result('H2a', status, 'скорость 470-800 (3 скана)',
-           'время %s с (у V7 было ~48 с), %s с/плитку; PLL не захвачен %s; плиток без данных %s'
-           % (['%.1f' % t for t in times], ['%.3f' % p for p in pt], unl, miss))
+           'время %s с, %s с/плитку (эталон V10+scanner-v4 %.3f, у V7 0,114); PLL не захвачен %s; плиток без данных %s'
+           % (['%.1f' % t for t in times], ['%.3f' % p for p in pt], REF_TILE_S, unl, miss))
     # floor and stitching on the first scan, in the quietest 50 MHz window
     f, y = scans[0]['f'], scans[0]['y']
     best = None
@@ -437,9 +521,10 @@ def h3_full(lab):
     s = lab.scan('h3_full', 31, 1766, timeout=1800)
     lab.save(s, 'scan_31-1766')
     f, y = s['f'], s['y']
-    status = 'FAIL' if s['hung'] or s['error'] else ('WARN' if s['missing'] else 'PASS')
+    status = 'FAIL' if s['hung'] or s['error'] else (
+        'WARN' if s['missing'] or s['time'] > REF_FULL_S * 1.25 else 'PASS')
     result('H3a', status, 'полный скан 31-1766',
-           '%.0f с (у V7 259 с), %d плиток, %.3f с/плитку; PLL поздно %s / не захвачен %s; без данных %d%s'
+           '%.0f с (эталон V10+scanner-v4 174 с, у V7 259 с), %d плиток, %.3f с/плитку; PLL поздно %s / не захвачен %s; без данных %d%s'
            % (s['time'], s['tiles'], per_tile(s), s['pll_late'], s['pll_unlocked'], len(s['missing']),
               (' (напр. %.3f МГц)' % (s['missing'][0] / 1e6)) if s['missing'] else ''))
     t = s.get('timing', '')
@@ -529,6 +614,61 @@ def h7_unplug(lab):
     print('>>> Вставьте донгл обратно.')
 
 
+@guard('H8', 'без антенны: шум и спуры донгла')
+def h8_no_antenna(lab):
+    """Antenna disconnected: own floor per band and own spurs against the
+    reference of this dongle (V10 + scanner-v4, gain 33.8)."""
+    import numpy as np
+    s = lab.scan('h8_no_antenna', 31, 1766, timeout=1800)
+    lab.save(s, 'scan_no_antenna_31-1766')
+    f, y = s['f'], s['y']
+    if f.size < 1000 or s['hung'] or s['error']:
+        result('H8a', 'FAIL', 'скан без антенны', 'скан не получился: hung %s, ошибка %r' % (s['hung'], s['error']))
+        return
+    rows, worst = [], 0.0
+    for lo, hi, ref in REF_NOANT:
+        m = (f >= lo) & (f < hi)
+        if m.sum() < 50:
+            continue
+        d = float(np.median(y[m])) - ref
+        worst = max(worst, abs(d))
+        rows.append('%d-%d %+.1f' % (lo, hi, d))
+    result('H8a', 'PASS' if worst <= 1.5 else 'WARN', 'собственный шум по полосам против эталона',
+           'отличие, дБ: %s (норма +-1,5; больше - другое усиление/DLL, нагрев или антенна не откручена)' % ', '.join(rows))
+    # peaks > 3 dB above the local floor
+    k = 161
+    pad = np.pad(y, k // 2, mode='edge')
+    try:
+        from numpy.lib.stride_tricks import sliding_window_view
+        base = np.median(sliding_window_view(pad, k), axis=1)
+    except ImportError:            # numpy < 1.20
+        base = np.array([np.median(pad[i:i + k]) for i in range(y.size)])
+    e = y - base
+    idx = np.where(e > 3)[0]
+    groups = []
+    for i in idx:
+        if groups and i - groups[-1][-1] <= 4:
+            groups[-1].append(i)
+        else:
+            groups.append([i])
+    peaks = [(float(f[g[int(np.argmax(e[g]))]]), float(e[g].max())) for g in groups]
+    own, other = [], []
+    for fr, ex in peaks:
+        kk = round(fr / 28.8)
+        (own if abs(fr - kk * 28.8) <= 0.06 else other).append((fr, ex))
+    lost = [r for r in sorted(REF_SPURS) if REF_SPURS[r] >= 5 and not any(abs(r - fr) < 0.06 for fr, _ in own)]
+    edge = [p for p in other if p[0] > 1750]
+    other = [p for p in other if p[0] <= 1750]
+    result('H8b', 'WARN' if other else 'PASS', 'все пики без антенны - кратные 28,8 МГц',
+           'кратных 28,8: %d (%s); других: %s%s' % (
+               len(own), ', '.join('%.1f %+.1f' % p for p in own[:8]),
+               ', '.join('%.3f %+.1f' % p for p in other[:10]) or 'нет',
+               ('; у края 1750-1766: ' + ', '.join('%.3f' % p[0] for p in edge)) if edge else ''))
+    diffs = ['%.1f %+.1f' % (fr, ex - REF_SPURS[round(fr, 1)]) for fr, ex in own if round(fr, 1) in REF_SPURS]
+    result('H8c', 'INFO' if not lost else 'WARN', 'спуры против эталона (дБ над полом, разница)',
+           '%s%s' % (', '.join(diffs[:16]), ('; пропали: ' + ', '.join('%.1f' % r for r in lost)) if lost else ''))
+
+
 # ---------------------------------------------------------------- report
 
 def write_report(outdir, args, started):
@@ -559,13 +699,18 @@ def main():
     ap.add_argument('--no-pytest', action='store_true')
     ap.add_argument('--unplug', action='store_true')
     ap.add_argument('--simulate', action='store_true')
+    ap.add_argument('--no-antenna', action='store_true')
     ap.add_argument('--out', default=None)
+    ap.add_argument('--child', action='store_true', help=argparse.SUPPRESS)
     args = ap.parse_args()
     started = datetime.datetime.now()
-    outdir = args.out or os.path.join(KIT, 'qa_hw_report_' + started.strftime('%Y%m%d-%H%M%S'))
+    outdir = args.out or os.path.join(KIT, 'qa_hw_report_' + started.strftime('%Y%m%d-%H%M%S')
+                                      + ('_no_antenna' if args.no_antenna else ''))
     if not os.path.isdir(outdir):
         os.makedirs(outdir)
-    LOG = io.open(os.path.join(outdir, 'console.txt'), 'w', encoding='utf-8')
+    if not args.child:
+        return parent(args, outdir)
+    LOG = io.open(os.path.join(outdir, 'console_python.txt'), 'w', encoding='utf-8')
     sys.stdout = Tee(sys.__stdout__, LOG)
     sys.stderr = Tee(sys.__stderr__, LOG)
     print('Отчёт: %s' % outdir)
@@ -583,7 +728,19 @@ def main():
             run_ui_check(outdir)
         print('\n=== Донгл ===', flush=True)
         lab = Lab(outdir, simulate=args.simulate)
-        if h1_dongle(lab) is not None and not any(r[0] == 'H1' and r[1] == 'FAIL' for r in RESULTS):
+        if args.no_antenna:
+            print('\n>>> АНТЕННА ДОЛЖНА БЫТЬ ОТКРУЧЕНА (пустой разъём). Enter - начать...', flush=True)
+            try:
+                input()
+            except EOFError:
+                pass
+        if h1_dongle(lab) is None or any(r[0] == 'H1' and r[1] == 'FAIL' for r in RESULTS):
+            print('Донгл не работает - остальные проверки пропущены.')
+        elif args.no_antenna:
+            h0_warmup(lab)
+            h8_no_antenna(lab)
+        else:
+            h0_warmup(lab)
             h2_three_scans(lab)
             v10 = any(r[0] == 'E3' and r[1] == 'PASS' for r in RESULTS)
             if v10:
@@ -598,18 +755,63 @@ def main():
                 h6_series(lab)
             if args.unplug and not args.simulate:
                 h7_unplug(lab)
-        else:
-            print('Донгл не работает - остальные проверки пропущены.')
     except KeyboardInterrupt:
         result('X', 'WARN', 'прервано пользователем (Ctrl+C)')
     finally:
         counts = write_report(outdir, args, started)
-        print('\nГотово: %s' % ', '.join('%s %d' % kv for kv in sorted(counts.items())))
-        print('Отчёт: %s' % os.path.join(outdir, 'report.md'))
-        print('Заархивируйте папку %s и пришлите.' % outdir)
+        print('\nГотово (без D1): %s' % ', '.join('%s %d' % kv for kv in sorted(counts.items())))
         sys.stdout = sys.__stdout__
         LOG.close()
     os._exit(0)
+
+
+def parent(args, outdir):
+    """Run the checks in a child process and keep everything it prints,
+    including what the rtlsdr DLL writes to stderr from C (that does not go
+    through Python's sys.stderr). Then add D1 to the report."""
+    cmd = [sys.executable, '-u', os.path.abspath(__file__)] + sys.argv[1:] + ['--child', '--out', outdir]
+    env = dict(os.environ)
+    env['PYTHONIOENCODING'] = 'utf-8'
+    env['PYTHONUNBUFFERED'] = '1'
+    out = sys.__stdout__
+    try:
+        out.reconfigure(errors='replace')
+    except Exception:
+        pass
+    msgs = []
+    with io.open(os.path.join(outdir, 'console.txt'), 'w', encoding='utf-8') as log:
+        p = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        try:
+            for raw in iter(p.stdout.readline, b''):
+                line = raw.decode('utf-8', 'replace')
+                log.write(line)
+                log.flush()
+                try:
+                    out.write(line)
+                    out.flush()
+                except Exception:
+                    pass
+                if DRIVER_MSG.search(line):
+                    msgs.append(line.strip())
+            p.wait()
+        except KeyboardInterrupt:
+            p.wait()
+    rep = os.path.join(outdir, 'report.md')
+    if os.path.exists(rep):
+        uniq = []
+        for m in msgs:
+            if m not in uniq:
+                uniq.append(m)
+        det = ('%d сообщ.: %s' % (len(msgs), '; '.join(uniq[:6]))) if msgs else 'нет'
+        row = '| D1 | %s | сообщения драйвера (DLL) в консоли | %s |' % ('INFO' if msgs else 'PASS', det.replace('|', '/'))
+        text = read(rep)
+        marker = '\nФайлы:'
+        text = text.replace(marker, row + '\n' + marker, 1) if marker in text else text + row + '\n'
+        with io.open(rep, 'w', encoding='utf-8') as f:
+            f.write(text)
+    print('\nОтчёт: %s' % rep)
+    print('Заархивируйте папку %s и пришлите.' % outdir)
+    return 0
 
 
 if __name__ == '__main__':

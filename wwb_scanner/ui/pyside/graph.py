@@ -3,6 +3,7 @@ import logging
 logger = logging.getLogger(__name__)
 from bisect import bisect_left
 import os
+import sys
 
 import numpy as np
 
@@ -354,15 +355,30 @@ class SpectrumGraphData(QtQuick.QQuickItem):
         filename = uri.toLocalFile()
         # CSV is written in the Shure WWB layout (kHz, 25 kHz step, "\\n").
         # Change to None to get the old MHz format back.
+        print('export to %s' % filename, flush=True)
         self.spectrum.export_to_file(filename=filename, frequency_format=CSV_FREQUENCY_FORMAT)
+        print('export done: %s' % filename, flush=True)
 
     @Slot(QtCore.QUrl, str)
     def save_to_file_as(self, uri, name_filter):
         """Export from the dialog: add the extension of the chosen filter
         when the typed name has none of ours (.csv, .sdb2, .npz)."""
-        filename = add_export_extension(uri.toLocalFile(), name_filter)
-        print('export to %s' % filename, flush=True)
-        self.spectrum.export_to_file(filename=filename, frequency_format=CSV_FREQUENCY_FORMAT)
+        try:
+            path = uri.toLocalFile() if hasattr(uri, 'toLocalFile') else str(uri)
+            if not path and hasattr(uri, 'toString'):
+                path = uri.toString()
+            filename = add_export_extension(path, name_filter)
+            print('export to %s (format %r)' % (filename, name_filter), flush=True)
+            if self.spectrum is None:
+                print('export FAILED: no scan in the graph', flush=True)
+                return
+            self.spectrum.export_to_file(filename=filename, frequency_format=CSV_FREQUENCY_FORMAT)
+            print('export done: %s, %d bytes' % (filename, os.path.getsize(filename)), flush=True)
+        except Exception:
+            import traceback
+            print('export FAILED:', flush=True)
+            traceback.print_exc()
+            sys.stdout.flush()
 
 EXPORT_EXTENSIONS = ('.csv', '.sdb2', '.npz')
 

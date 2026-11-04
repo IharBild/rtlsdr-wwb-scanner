@@ -24,8 +24,37 @@ FileDialog {
         }
     }
 
+    // Called on OK. Prints what it does to the console (lines "qml: export ...")
+    // and falls back to the old CSV export if anything goes wrong.
+    function doExport(url, filt) {
+        var f = (filt === undefined || filt === null) ? '' : String(filt);
+        console.log('export dialog: file ' + url + ', format "' + f + '"');
+        if (!root.graphData) {
+            console.log('export: nothing to export (no scan in the graph)');
+            return false;
+        }
+        try {
+            if (typeof root.graphData.save_to_file_as === 'function') {
+                root.graphData.save_to_file_as(url, f);
+            } else {
+                console.log('export: graph.py without save_to_file_as (V10), CSV only');
+                root.graphData.save_to_file(url);
+            }
+            return true;
+        } catch (e) {
+            console.log('export FAILED in QML: ' + e + ' - trying the old CSV export');
+            try {
+                root.graphData.save_to_file(url);
+                return true;
+            } catch (e2) {
+                console.log('export FAILED again: ' + e2);
+            }
+        }
+        return false;
+    }
+
     onAccepted: {
-        root.graphData.save_to_file_as(root.fileUrl, root.selectedNameFilter);
+        doExport(root.fileUrl, root.selectedNameFilter);
         root.close();
     }
 

@@ -5,6 +5,8 @@ Run with Python 3.8 + PySide2 5.15:
 Prints one line per check; exit code 1 if a check failed.
 """
 import os
+import json
+import re
 import sys
 import time
 import types
@@ -204,6 +206,29 @@ def main():
         except Exception as exc:
             ok6.append('%s %r' % (ext, exc))
     check('U6', all('bytes' in s for s in ok6), 'export: %s' % ok6)
+
+    # U9: File > Export the way the dialog does it (ExportDialog.doExport in QML,
+    # scan of the window as graphData, every format of the dialog, name typed
+    # without extension)
+    dlg = find(win, lambda o: o.metaObject().indexOfProperty('nameFilters') >= 0
+               and 'sdb2' in ' '.join(o.property('nameFilters') or []) and o.metaObject().indexOfMethod('doExport(QVariant,QVariant)') >= 0)
+    ok9 = []
+    if not dlg or not live:
+        ok9.append('no export dialog with doExport (V11.1 QML not installed?)')
+    else:
+        d = dlg[0]
+        d.setProperty('graphData', live[-1])
+        ctx = QtQml.QQmlEngine.contextForObject(d)
+        for filt in list(d.property('nameFilters')):
+            ext = re.search(r'\*\.(\w+)', filt).group(1)
+            base = os.path.join(TMP, 'ui_dialog_export_' + ext)
+            js = 'doExport(%s, %s)' % (json.dumps(QtCore.QUrl.fromLocalFile(base).toString()), json.dumps(filt))
+            e = QtQml.QQmlExpression(ctx, d, js)
+            v = e.evaluate()
+            err = e.error().toString() if e.hasError() else ''
+            p = base + '.' + ext
+            ok9.append('%s %s' % (ext, ('%d bytes' % os.path.getsize(p)) if os.path.exists(p) else 'NOT SAVED %r %s' % (v, err)))
+    check('U9', bool(ok9) and all('bytes' in s for s in ok9), 'File > Export via dialog code: %s' % ok9)
 
     # U4: import a 70 000-point CSV into the window
     att = '/mnt/user-data/attachments/050ccbf1-1a7a-5f20-9122-2d859dde1399/387d523b-NEW6-2_SDR_RTL_470-800_test.csv'
