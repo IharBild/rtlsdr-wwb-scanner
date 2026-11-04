@@ -8,9 +8,11 @@ FileDialog {
     folder: shortcuts.home
     selectMultiple: false
     selectExisting: false
-    defaultSuffix: 'csv'
+    // The extension is added in Python from the chosen filter
+    // (graph.py save_to_file_as), so no defaultSuffix here.
     nameFilters: [
-        'Scan Files (*.csv)',
+        'Shure WWB CSV (*.csv)',
+        'Shure WWB native (*.sdb2)',
         'Numpy Files (*.npz)',
     ]
     property var graphData
@@ -23,7 +25,7 @@ FileDialog {
     }
 
     onAccepted: {
-        root.graphData.save_to_file(root.fileUrl);
+        root.graphData.save_to_file_as(root.fileUrl, root.selectedNameFilter);
         root.close();
     }
 

@@ -137,3 +137,34 @@ def test_group_size_stays_fixed_while_scan_grows(model):
     a = arr(g, 20000); b = arr(g, 20009)
     da, db = g.decimate_max(a, k), g.decimate_max(b, k)
     assert np.array_equal(da['x'][:-1], db['x'][:da.size - 1])
+
+
+# Export dialog: extension from the chosen filter (sdb2 offered since V11)
+@pytest.mark.parametrize('name,filt,expect', [
+    ('C:/scans/torwar', 'Shure WWB native (*.sdb2)', 'C:/scans/torwar.sdb2'),
+    ('C:/scans/torwar', 'Shure WWB CSV (*.csv)', 'C:/scans/torwar.csv'),
+    ('C:/scans/torwar', 'Numpy Files (*.npz)', 'C:/scans/torwar.npz'),
+    ('C:/scans/torwar', '', 'C:/scans/torwar.csv'),
+    ('C:/scans/torwar.csv', 'Shure WWB native (*.sdb2)', 'C:/scans/torwar.csv'),
+    ('C:/scans/torwar.SDB2', 'Shure WWB CSV (*.csv)', 'C:/scans/torwar.SDB2'),
+    ('C:/scans/v1.2 test', 'Shure WWB native (*.sdb2)', 'C:/scans/v1.2 test.sdb2'),
+])
+def test_export_extension(name, filt, expect):
+    from wwb_scanner.ui.pyside import graph
+    assert graph.add_export_extension(name, filt) == expect
+
+
+def test_export_sdb2_via_dialog_slot(tmpdir):
+    import xml.etree.ElementTree as ET
+    from wwb_scanner.ui.pyside import graph
+    from wwb_scanner.scan_objects import Spectrum
+    f = np.round(np.arange(470.0, 471.0001, 0.025), 6)
+    sp = Spectrum()
+    sp.add_sample_set(frequency=f, dbFS=-100 + np.zeros(f.size))
+    gd = graph.SpectrumGraphData()
+    gd._spectrum = sp
+    url = types.SimpleNamespace(toLocalFile=lambda: str(tmpdir.join('scan')))
+    gd.save_to_file_as(url, 'Shure WWB native (*.sdb2)')
+    p = str(tmpdir.join('scan.sdb2'))
+    fs = [int(t.text) for t in ET.parse(p).getroot().find('*/freq_set')]
+    assert fs[0] == 470000 and fs[-1] == 471000

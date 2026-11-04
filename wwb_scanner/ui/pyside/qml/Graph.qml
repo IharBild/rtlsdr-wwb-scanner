@@ -159,7 +159,10 @@ Item {
                 anchors.fill: parent
                 antialiasing: true
                 legend.visible: false
-                animationOptions: ChartView.SeriesAnimations
+                // No series animation: the graph data is replaced as a whole
+                // (fast update, V10), and an animation then replays the
+                // whole line from the left edge on every update (flicker).
+                animationOptions: ChartView.NoAnimation
                 property var activeSeries
 
                 ValueAxis {
@@ -181,18 +184,6 @@ Item {
                     return series;
                 }
 
-                states: [
-                    State {
-                        name: 'NORMAL'
-                        when: !hViewControls.scrolling
-                        PropertyChanges { target:chart; animationOptions:ChartView.SeriesAnimations }
-                    },
-                    State {
-                        name: 'SCROLLING'
-                        when: hViewControls.scrolling
-                        PropertyChanges { target:chart; animationOptions:ChartView.NoAnimation }
-                    }
-                ]
             }
 
             UHFChannels {

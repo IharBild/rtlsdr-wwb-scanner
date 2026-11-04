@@ -2,6 +2,8 @@ import time
 import logging
 logger = logging.getLogger(__name__)
 from bisect import bisect_left
+import os
+
 import numpy as np
 
 from PySide2 import QtCore, QtQml, QtQuick, QtGui
@@ -353,6 +355,29 @@ class SpectrumGraphData(QtQuick.QQuickItem):
         # CSV is written in the Shure WWB layout (kHz, 25 kHz step, "\\n").
         # Change to None to get the old MHz format back.
         self.spectrum.export_to_file(filename=filename, frequency_format=CSV_FREQUENCY_FORMAT)
+
+    @Slot(QtCore.QUrl, str)
+    def save_to_file_as(self, uri, name_filter):
+        """Export from the dialog: add the extension of the chosen filter
+        when the typed name has none of ours (.csv, .sdb2, .npz)."""
+        filename = add_export_extension(uri.toLocalFile(), name_filter)
+        print('export to %s' % filename, flush=True)
+        self.spectrum.export_to_file(filename=filename, frequency_format=CSV_FREQUENCY_FORMAT)
+
+EXPORT_EXTENSIONS = ('.csv', '.sdb2', '.npz')
+
+
+def add_export_extension(filename, name_filter):
+    """'scan' + 'Shure WWB native (*.sdb2)' -> 'scan.sdb2'. A name that
+    already ends with one of our extensions is kept as typed."""
+    if os.path.splitext(filename)[1].lower() in EXPORT_EXTENSIONS:
+        return filename
+    nf = (name_filter or '').lower()
+    for ext in ('.sdb2', '.npz', '.csv'):
+        if '*' + ext in nf:
+            return filename + ext
+    return filename + '.csv'
+
 
 class LiveSpectrumGraphData(SpectrumGraphData):
     _n_update_interval = Signal()

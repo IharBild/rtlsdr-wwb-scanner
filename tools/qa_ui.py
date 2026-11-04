@@ -184,6 +184,10 @@ def main():
     counts = [g._series.count() for g in gds if getattr(g, '_series', None) is not None and hasattr(g._series, 'count')]
     expect = ui_graph.decimate_max(np.zeros(npts, ui_graph.GRAPH_DTYPE), ui_graph.group_size_for((end - start) / 0.025)).size
     check('U7', bool(counts) and max(counts) == expect, 'chart series points %s (expected %d)' % (counts, expect))
+    # U8: no series animation (with replace() it redrew the line from the left on every update)
+    charts = find(win, lambda o: o.metaObject().indexOfProperty('animationOptions') >= 0)
+    anim = [int(c.property('animationOptions')) for c in charts]
+    check('U8', bool(anim) and not any(anim), 'chart animationOptions %s (0 = none)' % anim)
     shot = os.environ.get('QA_SHOT')
     if shot:
         img = win.grabWindow()
