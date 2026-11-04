@@ -10,6 +10,13 @@ Item {
     anchors.fill: parent
 
     property alias mouseDataPoint: crosshair.dataValue
+    // chartTheme: one of ChartView.ChartTheme*, or STUDIO_THEME (flat dark
+    // plot matched to the window, default since V15)
+    readonly property int studioTheme: 100
+    property int chartTheme: studioTheme
+    property bool darkUi: true
+    property color accent: "#3aa0ff"
+    property string tvPlan: 'EU'
     property alias theme: chart.theme
     property var spectrumGraphs: []
     property var activeSpectrum
@@ -164,18 +171,63 @@ Item {
                 // whole line from the left edge on every update (flicker).
                 animationOptions: ChartView.NoAnimation
                 property var activeSeries
+                theme: root.chartTheme == root.studioTheme
+                       ? (root.darkUi ? ChartView.ChartThemeDark : ChartView.ChartThemeLight)
+                       : root.chartTheme
+                margins { top: 4; bottom: 4; left: 4; right: 8 }
 
+                // Studio look: applied after the Qt chart theme (a theme
+                // change resets all colours)
+                function applyStudio() {
+                    if (root.chartTheme != root.studioTheme)
+                        return;
+                    var d = root.darkUi;
+                    chart.backgroundColor = d ? "#16181b" : "#efefef";
+                    chart.backgroundRoundness = 0;
+                    chart.dropShadowEnabled = false;
+                    chart.plotAreaColor = d ? "#0d0f11" : "#ffffff";
+                    var axes = [axisX, axisY];
+                    for (var i = 0; i < axes.length; i++) {
+                        var a = axes[i];
+                        a.gridLineColor = d ? "#24282d" : "#e2e2e2";
+                        a.minorGridLineColor = d ? "#1a1d21" : "#f0f0f0";
+                        a.color = d ? "#3a4047" : "#9a9a9a";
+                        a.labelsColor = d ? "#8a919b" : "#555555";
+                        a.labelsFont = Qt.font({pointSize: 8});
+                    }
+                }
+                Component.onCompleted: Qt.callLater(applyStudio)
+                Connections {
+                    target: root
+                    function onDarkUiChanged() { Qt.callLater(chart.applyStudio); }
+                    function onChartThemeChanged() { Qt.callLater(chart.applyStudio); }
+                }
+
+                // Round tick values (1/2/5 x 10^n) at any zoom, like Smaart/OSM
+                function niceStep(span, n) {
+                    var raw = span / n;
+                    if (!(raw > 0)) return 1;
+                    var p = Math.pow(10, Math.floor(Math.log(raw) / Math.LN10));
+                    var m = raw / p;
+                    return (m < 1.5 ? 1 : m < 3.5 ? 2 : m < 7.5 ? 5 : 10) * p;
+                }
                 ValueAxis {
                     id: axisX
                     min: 100
                     max: 900
-                    labelFormat: "%07.3f MHz"
+                    tickType: ValueAxis.TicksDynamic
+                    tickAnchor: 0
+                    tickInterval: chart.niceStep(max - min, 10)
+                    labelFormat: tickInterval >= 1 ? "%.0f MHz" : (tickInterval >= 0.1 ? "%.1f MHz" : "%.2f MHz")
                 }
                 ValueAxis {
                     id: axisY
                     min: -160
                     max: 0
-                    labelFormat: "%07.2f dB"
+                    tickType: ValueAxis.TicksDynamic
+                    tickAnchor: 0
+                    tickInterval: chart.niceStep(max - min, 8)
+                    labelFormat: "%.0f dB"
                 }
 
                 function addMappedSeries(){
@@ -190,10 +242,12 @@ Item {
                 id: channelLabels
                 axisX: axisX
                 chart: chart
+                plan: root.tvPlan
+                darkUi: root.darkUi
                 x: chart.plotArea.x
                 y: chart.plotArea.y
                 width: chart.plotArea.width
-                height: 30
+                height: 18
             }
 
             Crosshair {

@@ -34,7 +34,7 @@ Frame {
             Layout.alignment: Qt.AlignLeft || Qt.AlignTop
             Layout.fillWidth: true
             inputMethodHints: Qt.ImhDigitsOnly
-            maximumLength: 7
+            maximumLength: 9      // '1766.000' has 8 characters (was cut to '.766.00')
             implicitWidth: txtMetrics.maxWidth + txtField.leftPadding + txtField.rightPadding
             implicitHeight: txtMetrics.height + txtField.topPadding + txtField.bottomPadding
             text: root.textValue

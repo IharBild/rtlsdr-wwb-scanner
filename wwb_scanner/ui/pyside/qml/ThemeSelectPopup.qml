@@ -7,18 +7,44 @@ import QtCharts 2.13
 
 Dialog {
     id: root
-    property alias theme: settings.chartTheme
+    title: 'Theme'
+    modal: true
+    anchors.centerIn: Overlay.overlay
+    property alias theme: settings.chartThemeV15
+    property bool darkWindow: true
+    property alias tvPlan: settings.tvPlan
 
     Settings {
         id: settings
         category: 'User Interface'
-        property int chartTheme: ChartView.ChartThemeDark
+        // new key in V15: 100 = Studio (flat, matched to the window)
+        property int chartThemeV15: 100
+        property string tvPlan: 'EU'
     }
 
+    ColumnLayout {
+    Switch {
+        id: darkSwitch
+        text: 'Dark window'
+        checked: root.darkWindow
+        onToggled: root.darkWindow = checked
+    }
+    Label { text: 'TV channels on the graph' }
+    ComboBox {
+        id: tvCombo
+        Layout.preferredWidth: 220
+        model: ['Europe (8 MHz, ch 21-69)', 'USA (6 MHz, ch 14-83)', 'Off']
+        property var values: ['EU', 'US', 'off']
+        currentIndex: Math.max(0, values.indexOf(root.tvPlan))
+        onActivated: root.tvPlan = values[index]
+    }
+    Label { text: 'Graph' }
     ComboBox {
         id: combo
+        Layout.preferredWidth: 220
         textRole: 'text'
         model: ListModel {
+            ListElement { text:'Studio (matches window)'; value:100 }
             ListElement { text:'Light'; value:ChartView.ChartThemeLight }
             ListElement { text:'Cerulean Blue'; value:ChartView.ChartThemeBlueCerulean }
             ListElement { text:'Dark'; value:ChartView.ChartThemeDark }
@@ -47,6 +73,7 @@ Dialog {
                 }
             }
         }
+    }
     }
 
 

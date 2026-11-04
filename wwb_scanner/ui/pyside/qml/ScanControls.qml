@@ -60,10 +60,8 @@ RowLayout {
     ProgressBar {
         id: progressBar
         visible: root.scanRunning
-        Component.onCompleted: {
-            contentItem.color = '#17a81a';
-            background.color = '#aeaec8';
-        }
+        // colours come from the window palette (accent); the hard-coded
+        // green/grey did not fit the dark theme and failed in other styles
     }
 
     ToolSeparator { }

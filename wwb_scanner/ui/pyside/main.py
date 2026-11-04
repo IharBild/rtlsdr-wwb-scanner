@@ -49,6 +49,10 @@ def run(argv=None):
     if argv is None:
         argv = sys.argv
     logger.info('starting application')
+    # Fusion: compact desktop controls that take all colours from the
+    # window palette (main.qml sets the dark/light palette). Can be
+    # overridden with the QT_QUICK_CONTROLS_STYLE environment variable.
+    os.environ.setdefault('QT_QUICK_CONTROLS_STYLE', 'Fusion')
     app = QApplication(argv)
     app.setOrganizationName('rtlsdr-wwb-scanner')
     app.setApplicationName('wwb_scanner')

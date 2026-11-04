@@ -20,8 +20,9 @@ Item {
     property real maskedWidth: 1
     property real parentWidth: 1
     property color bgColor: Qt.rgba(0,0,0,0)
-    property color borderColor: '#808080'
-    property color textColor: '#f0f0f0'
+    property bool darkUi: parentChannels ? parentChannels.darkUi : true
+    property color borderColor: darkUi ? '#2e333a' : '#c8c8c8'
+    property color textColor: darkUi ? '#7c848e' : '#707070'
 
     signal updatePosition()
 
@@ -72,7 +73,8 @@ Item {
         }
         root.maskedX = maskedX;
         root.maskedWidth = maskedWidth;
-        root.visible = true;
+        // zoomed far out the boxes are a few pixels wide: hide them
+        root.visible = root.width >= 6;
     }
 
     Rectangle {
@@ -94,8 +96,9 @@ Item {
         property real contentLeft: root.centerX - lbl.contentWidth/2
         property real contentRight: root.centerX + lbl.contentWidth/2
         visible: lbl.contentLeft >= 0 && lbl.contentRight <= root.parentWidth
+                 && root.width >= lbl.implicitWidth + 6
         text: root.channel.toString()
         color: root.textColor
-        fontSizeMode: Text.Fit
+        font.pointSize: 8
     }
 }

@@ -11,6 +11,10 @@ Item {
     property var channels: []
     property var channelsByCenterFreq: ({})
     property bool channelsBuilt: false
+    // 'EU': CEPT ch 21-69, 8 MHz (474 MHz = ch 21); 'US': ch 14-83, 6 MHz; 'off'
+    property string plan: 'EU'
+    property bool darkUi: true
+    onPlanChanged: { rebuildChannels() }
 
     property real freqScalar: 1 / freqRangeSize
     property real freqRangeSize: max - min
@@ -63,12 +67,27 @@ Item {
         }
     }
 
+    function rebuildChannels(){
+        for (var i=0;i<root.channels.length;i++){
+            root.channels[i].destroy();
+        }
+        root.channels = [];
+        root.channelsByCenterFreq = {};
+        root.channelsBuilt = false;
+        buildChannels();
+    }
+
     function buildChannels(){
-        if (root.channelsBuilt){
+        if (root.channelsBuilt || root.plan == 'off'){
             return;
         }
-        var channel = 14, bandwidth = 6.0, centerFreq = 473.0, props;
-        while (channel <= 83){
+        var channel, last, bandwidth, centerFreq, props;
+        if (root.plan == 'US'){
+            channel = 14; last = 83; bandwidth = 6.0; centerFreq = 473.0;
+        } else {
+            channel = 21; last = 69; bandwidth = 8.0; centerFreq = 474.0;
+        }
+        while (channel <= last){
             props = {
                 'channel':channel, 'bandwidth':bandwidth, 'centerFreq':centerFreq,
                 'parentChannels':root, 'axisX':root.axisX,
@@ -79,8 +98,8 @@ Item {
             });
             channel += 1;
             centerFreq += bandwidth;
-            root.channelsBuilt = true;
         }
+        root.channelsBuilt = true;
     }
     Component.onCompleted: {
         buildChannels();

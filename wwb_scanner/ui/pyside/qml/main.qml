@@ -20,6 +20,36 @@ ApplicationWindow {
         property alias height: window.height
     }
 
+    // Window theme (View > Theme). Dark: flat, low-contrast greys and one
+    // accent colour, in the spirit of Smaart / Open Sound Meter.
+    Settings {
+        id: uiSettings
+        category: 'User Interface'
+        property bool darkWindow: true
+    }
+    property bool darkUi: uiSettings.darkWindow
+    property color accent: "#3aa0ff"
+
+    color: palette.window
+    palette.window: darkUi ? "#16181b" : "#efefef"
+    palette.windowText: darkUi ? "#cfd4da" : "#1e1e1e"
+    palette.base: darkUi ? "#0f1113" : "#ffffff"
+    palette.alternateBase: darkUi ? "#1c1f23" : "#f5f5f5"
+    palette.text: darkUi ? "#e4e7eb" : "#000000"
+    palette.button: darkUi ? "#23272c" : "#e4e4e4"
+    palette.buttonText: darkUi ? "#cfd4da" : "#1e1e1e"
+    palette.brightText: "#ffffff"
+    palette.highlight: accent
+    palette.highlightedText: "#ffffff"
+    palette.light: darkUi ? "#2b3036" : "#ffffff"
+    palette.midlight: darkUi ? "#262a2f" : "#e8e8e8"
+    palette.mid: darkUi ? "#3a4047" : "#b4b4b4"
+    palette.dark: darkUi ? "#0c0d0f" : "#9a9a9a"
+    palette.shadow: "#000000"
+    palette.link: accent
+    palette.toolTipBase: darkUi ? "#23272c" : "#ffffdc"
+    palette.toolTipText: darkUi ? "#e4e7eb" : "#000000"
+
     menuBar: MenuBar {
         Menu {
             title: qsTr("&File")
@@ -79,18 +109,25 @@ ApplicationWindow {
             anchors.fill: parent
 
             Label {
-                text: chartWrapper.mouseDataPoint.x.toFixed(3);
-                Layout.preferredWidth: contentWidth
+                text: chartWrapper.mouseDataPoint.x > 0
+                      ? chartWrapper.mouseDataPoint.x.toFixed(3) + ' MHz'
+                      : '--- MHz'
+                Layout.preferredWidth: 110
                 Layout.leftMargin: 12
                 font.pointSize: 9
+                font.family: 'monospace'
                 verticalAlignment: Text.AlignVCenter
                 horizontalAlignment: Qt.AlignLeft
             }
 
             Label {
-                text: chartWrapper.mouseDataPoint.y.toFixed(3);
+                text: chartWrapper.mouseDataPoint.x > 0
+                      ? chartWrapper.mouseDataPoint.y.toFixed(1) + ' dB'
+                      : '--- dB'
                 Layout.preferredWidth: contentWidth
                 font.pointSize: 9
+                font.family: 'monospace'
+                color: window.accent
                 verticalAlignment: Text.AlignVCenter
                 horizontalAlignment: Qt.AlignLeft
             }
@@ -105,7 +142,10 @@ ApplicationWindow {
         Graph {
             id: chartWrapper
             anchors.fill: parent
-            theme: themeSelect.theme
+            chartTheme: themeSelect.theme
+            darkUi: window.darkUi
+            accent: window.accent
+            tvPlan: themeSelect.tvPlan
         }
     }
 
@@ -132,6 +172,8 @@ ApplicationWindow {
 
     ThemeSelectPopup {
         id: themeSelect
+        darkWindow: uiSettings.darkWindow
+        onDarkWindowChanged: uiSettings.darkWindow = darkWindow
     }
 
     ScanConfig {
