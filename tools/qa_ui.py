@@ -164,6 +164,7 @@ def main():
     controls[0].scannerState.emit(True)
     last = time.time()
     finished_at = None
+    seen_left = ''
     while time.time() - t_start < 900:
         app.processEvents(QtCore.QEventLoop.AllEvents, 50)
         now = time.time()
@@ -172,6 +173,11 @@ def main():
         if not si.running and now - t_start > 1:
             finished_at = now
             break
+        if not seen_left and now - t_start > 5:
+            labels = find(win, lambda o: o.metaObject().indexOfProperty('text') >= 0
+                          and str(o.property('text') or '').endswith(' left'))
+            if labels:
+                seen_left = str(labels[0].property('text'))
         time.sleep(0.002)
     dt = (finished_at or time.time()) - t_start
     gaps = np.array(gaps)
@@ -252,9 +258,62 @@ def main():
     while si.running and time.time() - t_start < 60:
         pump(app, 0.1)
     check('U5', not si.running, 'second scan after the first: %.1f s' % (time.time() - t_start))
+    v16_checks(app, win, controls, si, seen_left)
     win.close()
     pump(app, 0.3)
     return 0 if all(RESULTS) else 1
+
+
+def v16_checks(app, win, controls, si, seen_left):
+    """V16: status line / error dialog, spur marks, presets, time left."""
+    import logging
+    import threading
+    try:
+        from wwb_scanner.ui.pyside import status as ui_status
+    except ImportError:
+        check('U10', False, 'no wwb_scanner.ui.pyside.status (V16 not installed)')
+        return
+    hubs = find(win, lambda o: isinstance(o, ui_status.StatusHub))
+    if not hubs:
+        check('U10', False, 'no StatusHub in the window')
+        return
+    hub = hubs[0]
+    th = threading.Thread(target=lambda: logging.getLogger('wwb_scanner.qa').warning('qa warning from scan thread'))
+    th.start(); th.join()
+    pump(app, 0.3)
+    ok_warn = hub.text == 'qa warning from scan thread' and hub.level == 'warning'
+    logging.getLogger('wwb_scanner.qa').error('qa error message')
+    pump(app, 0.3)
+    dlg = [o for o in win.findChildren(QtCore.QObject) if o.property('title') == 'Problem']
+    opened = bool(dlg) and bool(dlg[0].property('opened') or dlg[0].property('visible'))
+    if dlg:
+        QtCore.QMetaObject.invokeMethod(dlg[0], 'close')
+    pump(app, 0.2)
+    check('U10', ok_warn and opened and hub.level == 'error',
+          'status line %r (%s), error dialog opened %s, log %s' % (hub.text, hub.level, opened, hub.logFile))
+    # U11: spur marks drawn inside the visible range
+    def walk(item):
+        for c in item.childItems():
+            yield c
+            for g in walk(c):
+                yield g
+    marks = [o for o in walk(win.contentItem())
+             if o.metaObject().indexOfProperty('f') >= 0 and o.metaObject().indexOfProperty('span') >= 0]
+    vis = [round(float(m.property('f')), 1) for m in marks if m.property('visible')]
+    check('U11', len(marks) == 16, 'spur marks: %d defined, %d visible in the current view %s' % (len(marks), len(vis), vis[:4]))
+    # U12: preset sets the range
+    combos = find(win, lambda o: o.metaObject().indexOfSignal('activated(int)') >= 0
+                  and str(o.property('displayText') or '').startswith('Preset'))
+    cfg = si.scanConfig
+    if combos:
+        combos[0].activated.emit(2)
+        pump(app, 0.3)
+    check('U12', bool(combos) and cfg.startFreq == 470 and cfg.endFreq == 800,
+          'preset "UHF 470-800" -> %.1f-%.1f MHz (%d presets)' % (cfg.startFreq, cfg.endFreq,
+                                                             combos[0].property('count') if combos else 0))
+    check('U13', bool(seen_left), 'time left during the scan: %r' % (seen_left,))
+    if QML_WARNINGS:
+        print('QML warnings so far:', QML_WARNINGS[:5])
 
 
 if __name__ == '__main__':

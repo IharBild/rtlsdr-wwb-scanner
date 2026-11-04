@@ -16,6 +16,8 @@ from wwb_scanner.ui.pyside import get_resource_filename
 from wwb_scanner.ui.pyside import device_config, graph, scanner
 
 def register_qml_types():
+    from wwb_scanner.ui.pyside import status
+    status.register_qml_types()
     device_config.register_qml_types()
     graph.register_qml_types()
     scanner.register_qml_types()

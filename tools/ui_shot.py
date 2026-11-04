@@ -48,6 +48,10 @@ def main():
         for a in ax:
             a.setProperty('min', lo); a.setProperty('max', hi)
         qa_ui.pump(app, 1.5)
+    if os.environ.get('SHOT_STATUS'):
+        import logging
+        logging.getLogger('wwb_scanner.status').info(os.environ['SHOT_STATUS'])
+        qa_ui.pump(app, 0.5)
     img = win.grabWindow()
     print('saved', out, img.save(out), img.width(), img.height())
 

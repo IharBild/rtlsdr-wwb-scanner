@@ -13,6 +13,7 @@ Dialog {
     property alias theme: settings.chartThemeV15
     property bool darkWindow: true
     property alias tvPlan: settings.tvPlan
+    property alias showSpurs: settings.showSpurs
 
     Settings {
         id: settings
@@ -20,6 +21,7 @@ Dialog {
         // new key in V15: 100 = Studio (flat, matched to the window)
         property int chartThemeV15: 100
         property string tvPlan: 'EU'
+        property bool showSpurs: true
     }
 
     ColumnLayout {
@@ -37,6 +39,11 @@ Dialog {
         property var values: ['EU', 'US', 'off']
         currentIndex: Math.max(0, values.indexOf(root.tvPlan))
         onActivated: root.tvPlan = values[index]
+    }
+    CheckBox {
+        text: "Mark the dongle's own spurs (k x 28.8 MHz)"
+        checked: root.showSpurs
+        onToggled: root.showSpurs = checked
     }
     Label { text: 'Graph' }
     ComboBox {

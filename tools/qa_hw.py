@@ -161,6 +161,14 @@ def check_environment(args):
         'экспорт sdb2 (V11.2)': 'withExtension' in read(os.path.join(qml, 'ExportDialog.qml')),
         'graph.py V11': 'save_to_file_as' in read(os.path.join(base, 'ui', 'pyside', 'graph.py')),
     }
+    pq = os.path.join(base, 'ui', 'pyside')
+    m16 = {'сообщения в окне': os.path.exists(os.path.join(pq, 'status.py')),
+           'детектор перегрузки': 'report_overload' in read(os.path.join(base, 'scanner', 'sample_processing.py')),
+           'метки спуров': 'spurFreqs' in read(os.path.join(pq, 'qml', 'Graph.qml')),
+           'пресеты': 'presetCombo' in read(os.path.join(pq, 'qml', 'ScanControls.qml'))}
+    miss16 = [k for k, v in m16.items() if not v]
+    result('E3e', 'WARN' if miss16 else 'PASS', 'установлены файлы V16 (сообщения, перегрузка, спуры, пресеты)',
+           ('нет: ' + ', '.join(miss16) + ' - поставьте fix-V16-pip-files.zip') if miss16 else 'все отметки найдены')
     m12 = {'экспорт sdb3 (V12)': 'class WWB3Exporter' in read(os.path.join(base, 'file_handlers', 'exporters.py')),
            'импорт sdb3 (V12)': 'class WWB3Importer' in read(os.path.join(base, 'file_handlers', 'importers.py'))}
     miss12 = [k for k, v in m12.items() if not v]

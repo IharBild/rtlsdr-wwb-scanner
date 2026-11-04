@@ -5,6 +5,7 @@ import Qt.labs.settings 1.0
 import QtCharts 2.13
 import GraphUtils 1.0
 import ScanTools 1.0
+import StatusTools 1.0
 
 ApplicationWindow {
     id: window
@@ -132,7 +133,27 @@ ApplicationWindow {
                 horizontalAlignment: Qt.AlignLeft
             }
 
-            Item { Layout.fillWidth: true }
+            Item { Layout.preferredWidth: 24 }
+
+            // V16: last warning / error / info of the scanner (click clears)
+            Label {
+                id: statusLine
+                Layout.fillWidth: true
+                text: statusHub.text
+                elide: Text.ElideRight
+                font.pointSize: 9
+                color: statusHub.level == 'error' ? '#ff6b6b'
+                     : statusHub.level == 'warning' ? '#f0b44c' : palette.windowText
+                verticalAlignment: Text.AlignVCenter
+                ToolTip.visible: statusMouse.containsMouse && text.length > 0
+                ToolTip.text: text + (statusHub.logFile ? '\nLog: ' + statusHub.logFile : '')
+                MouseArea {
+                    id: statusMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    onClicked: statusHub.clear()
+                }
+            }
 
         }
     }
@@ -146,6 +167,7 @@ ApplicationWindow {
             darkUi: window.darkUi
             accent: window.accent
             tvPlan: themeSelect.tvPlan
+            showSpurs: themeSelect.showSpurs
         }
     }
 
@@ -178,6 +200,31 @@ ApplicationWindow {
 
     ScanConfig {
         id: scanConfig
+    }
+
+    StatusHub {
+        id: statusHub
+        onMessage: {
+            if (level == 'error') {
+                errorText.text = text;
+                if (!errorDialog.opened)
+                    errorDialog.open();
+            }
+        }
+    }
+
+    Dialog {
+        id: errorDialog
+        title: 'Problem'
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(560, window.width - 40)
+        standardButtons: Dialog.Ok
+        Label {
+            id: errorText
+            width: parent.width
+            wrapMode: Text.Wrap
+        }
     }
 
     ScannerInterface {

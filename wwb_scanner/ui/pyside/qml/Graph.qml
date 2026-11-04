@@ -17,6 +17,11 @@ Item {
     property bool darkUi: true
     property color accent: "#3aa0ff"
     property string tvPlan: 'EU'
+    property bool showSpurs: true
+    // own spurs of the RTL-SDR Blog V4 (multiples of its 28.8 MHz crystal),
+    // measured without antenna: 3 dB or more above its noise (V10-V15)
+    readonly property var spurFreqs: [86.4, 115.2, 144.0, 172.8, 201.6, 230.4, 259.2, 288.0,
+                                      316.8, 345.6, 374.4, 403.2, 432.0, 460.8, 489.6, 518.4]
     property alias theme: chart.theme
     property var spectrumGraphs: []
     property var activeSpectrum
@@ -248,6 +253,45 @@ Item {
                 y: chart.plotArea.y
                 width: chart.plotArea.width
                 height: 18
+            }
+
+            // V16: marks of the dongle's own spurs (not in the data, only drawn)
+            Item {
+                id: spurMarks
+                x: chart.plotArea.x
+                y: chart.plotArea.y
+                width: chart.plotArea.width
+                height: chart.plotArea.height
+                visible: root.showSpurs
+                clip: true
+                Repeater {
+                    model: root.spurFreqs
+                    Item {
+                        property real f: modelData
+                        property real span: axisX.max - axisX.min
+                        visible: span > 0 && f >= axisX.min && f <= axisX.max
+                        x: span > 0 ? (f - axisX.min) / span * spurMarks.width : 0
+                        width: 1
+                        height: spurMarks.height
+                        Rectangle {
+                            width: 1
+                            height: parent.height
+                            color: '#c8913a'
+                            opacity: 0.35
+                        }
+                        Text {
+                            visible: parent.span < 600
+                            text: 'spur ' + parent.f.toFixed(1)
+                            color: '#c8913a'
+                            opacity: 0.8
+                            font.pointSize: 7
+                            rotation: -90
+                            transformOrigin: Item.TopLeft
+                            x: 2
+                            y: parent.height - 4
+                        }
+                    }
+                }
             }
 
             Crosshair {

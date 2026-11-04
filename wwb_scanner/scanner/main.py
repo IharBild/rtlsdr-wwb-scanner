@@ -107,9 +107,10 @@ class ScannerBase(JSONMixin):
         end_hz = int(round(mhz_to_hz(end_freq)))
         while freq_hz <= end_hz:
             if freq_hz > MAX_TUNER_FREQ_HZ:
-                logger.warning(
-                    'Tile centres above %.1f MHz skipped: tuner cannot reach them',
-                    MAX_TUNER_FREQ_HZ / 1e6)
+                if end_hz > MAX_TUNER_FREQ_HZ:
+                    # only when the user asked for more (shown in the window)
+                    logger.warning('The dongle reaches only %.0f MHz: scan ends there',
+                                   MAX_TUNER_FREQ_HZ / 1e6)
                 break
             sample_set = sample_collection.build_sample_set(float(freq_hz))
             freq_hz += step_hz
@@ -122,13 +123,15 @@ class ScannerBase(JSONMixin):
             self._run_scan(running)
         except Exception as exc:
             self.error = exc
-            logger.exception('scan failed')
+            # shown in the window (status line + dialog) and in the log file
+            logger.error('Scan failed: %s', exc, exc_info=True)
             print('!!! Scan failed: %r' % (exc,), flush=True)
         finally:
             running.clear()
             self.sample_collection.stopped.set()
             self._stopped.set()
     def _run_scan(self, running):
+        t_start = time.time()
         self.build_sample_sets()
         running.set()
         self.sample_collection.scan_all_freqs()
@@ -140,6 +143,9 @@ class ScannerBase(JSONMixin):
             print('cropped in %.1f s, saving...' % (time.time() - t0), flush=True)
             self.save_to_dbstore()
             print('saved, total %.1f s' % (time.time() - t0), flush=True)
+            lo, hi = self.config.scan_range
+            logging.getLogger('wwb_scanner.status').info(
+                'Scan %.1f-%.1f MHz done in %.0f s', lo, hi, time.time() - t_start)
     def stop_scan(self):
         if not self._running.is_set():
             # not started yet or already finished: nothing to wait for

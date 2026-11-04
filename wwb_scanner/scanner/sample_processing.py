@@ -72,6 +72,21 @@ def calc_num_samples(num_samples):
 def sort_psd(f, Pxx, onesided=False):
     return np.fft.fftshift(f), np.fft.fftshift(Pxx)
 
+# ADC overload (V16): share of samples at the 8-bit limit (0 or 255 ->
+# +-1.0 after pyrtlsdr's scaling). From ~0.1 % on, clipping makes false
+# peaks (intermodulation, harmonics) all over the tile.
+CLIP_LEVEL = 0.995
+OVERLOAD_RATIO = 1e-3
+
+
+def clip_ratio(iq):
+    a = np.asarray(iq)
+    if a.size == 0:
+        return 0.
+    clipped = (np.abs(a.real) >= CLIP_LEVEL) | (np.abs(a.imag) >= CLIP_LEVEL)
+    return float(np.count_nonzero(clipped)) / a.size
+
+
 class SdrTimeout(Exception):
     """The dongle did not answer in time (a USB call that never returns)."""
 
@@ -99,6 +114,7 @@ TUNE_TIMEOUT = 30.
 READ_TIMEOUT = 40.
 
 class SampleSet(JSONMixin):
+    clip_ratio = 0.
     __slots__ = ('scanner', 'center_frequency', 'raw', 'current_sweep', 'complete',
                  '_frequencies', 'powers', 'collection', 'process_thread', 'samples_discarded')
     _serialize_attrs = ('center_frequency', '_frequencies', 'powers')
@@ -217,6 +233,7 @@ class SampleSet(JSONMixin):
             self.complete.set()
             return
         sweeps, per_sweep = self.raw.shape
+        self.clip_ratio = clip_ratio(iq)
         self.raw = np.asarray(iq[:sweeps * per_sweep], dtype=np.complex128).reshape(sweeps, per_sweep)
         self.process_samples()
     def samples_callback(self, iq, context):
@@ -231,6 +248,7 @@ class SampleSet(JSONMixin):
             self.on_sample_read_complete()
             return
         self.raw[current_sweep] = iq
+        self.clip_ratio = max(self.clip_ratio, clip_ratio(iq))
         self.current_sweep += 1
         if current_sweep > self.raw.shape[0]:
             self.on_sample_read_complete()
@@ -370,8 +388,8 @@ class SampleCollection(JSONMixin):
             if not self.scanning.is_set():
                 break
             if self.aborted:
-                print('!!! Scan stopped: the dongle stopped answering. '
-                      'Unplug and replug it, then start again.', flush=True)
+                logger.error('Scan stopped: the dongle stopped answering. '
+                             'Unplug and replug it, then start again.')
                 break
             if n % 20 == 0:
                 print('scan tile %d/%d at %.3f MHz' % (n + 1, len(keys), key / 1e6), flush=True)
@@ -385,7 +403,7 @@ class SampleCollection(JSONMixin):
                 sample_set.complete.set()
                 self.tile_errors += 1
                 if self.tile_errors >= MAX_TILE_ERRORS:
-                    print('!!! Scan stopped: %d tiles failed, see the log.' % self.tile_errors, flush=True)
+                    logger.error('Scan stopped: %d tiles failed, see the log.', self.tile_errors)
                     self.aborted = True
             if not sample_set.complete.is_set():
                 complete_events.add(sample_set.complete)
@@ -398,6 +416,7 @@ class SampleCollection(JSONMixin):
                     e.wait()
         self.scanning.clear()
         self.report_pll()
+        self.report_overload()
         self.timing.write_report()
         self.stopped.set()
     def retry_failed_tiles(self, keys):
@@ -413,7 +432,7 @@ class SampleCollection(JSONMixin):
             # most tiles failed: something is wrong with the dongle itself,
             # measuring them all again would only double the time
             self.missing_tiles = failed
-            print('!!! %d of %d tiles have no data: check the dongle' % (len(failed), len(keys)), flush=True)
+            logger.error('%d of %d tiles have no data: check the dongle', len(failed), len(keys))
             return
         print('retrying %d tile(s) without data' % len(failed), flush=True)
         for key in failed:
@@ -428,8 +447,37 @@ class SampleCollection(JSONMixin):
                 sample_set.complete.set()
         self.missing_tiles = [k for k in keys if k not in done]
         if self.missing_tiles:
-            print('!!! %d tile(s) have no data, e.g. %.3f MHz: the scan has a gap there'
-                  % (len(self.missing_tiles), self.missing_tiles[0] / 1e6), flush=True)
+            logger.warning('%d tile(s) have no data, e.g. %.3f MHz: the scan has a gap there',
+                           len(self.missing_tiles), self.missing_tiles[0] / 1e6)
+
+    def report_overload(self):
+        """Warn about tiles where the ADC clipped (signal too strong).
+        Sets self.overload = [(lo_mhz, hi_mhz, max_ratio), ...]."""
+        self.overload = []
+        bad = sorted((k, s.clip_ratio) for k, s in self.sample_sets.items()
+                     if getattr(s, 'clip_ratio', 0.) >= OVERLOAD_RATIO)
+        if not bad:
+            return
+        keys = sorted(self.sample_sets)
+        steps = [b - a for a, b in zip(keys, keys[1:]) if b > a]
+        step = min(steps) if steps else 1e6
+        try:
+            fs = float(self.scanner.sample_rate)
+        except Exception:
+            fs = 2.4e6
+        half = 0.39 * fs
+        groups = []
+        for k, r in bad:
+            if groups and k - groups[-1][1] <= 2.5 * step:
+                groups[-1][1] = k
+                groups[-1][2] = max(groups[-1][2], r)
+            else:
+                groups.append([k, k, r])
+        self.overload = [((a - half) / 1e6, (b + half) / 1e6, r) for a, b, r in groups]
+        logger.warning('Overload (signal too strong for the dongle) at %s MHz, up to %.1f %% of samples '
+                       'clipped: lower the gain or move the antenna away from transmitters',
+                       ', '.join('%.1f-%.1f' % (lo, hi) for lo, hi, _ in self.overload[:6]),
+                       100. * max(r for _, _, r in self.overload))
 
     def report_pll(self):
         sdr = getattr(getattr(self, 'scanner', None), 'sdr', None)
