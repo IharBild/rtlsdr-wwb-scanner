@@ -18,6 +18,25 @@ Dialog {
     property alias scalingEnabled: scalingSwitch.checked
     property alias scalingMinDB: scalingMinDBInput.value
     property alias scalingMaxDB: scalingMaxDBInput.value
+    property alias cleanRipple: cleanRippleSwitch.checked
+    property alias cleanSpurs: cleanSpursSwitch.checked
+    property alias cleanFloor: cleanFloorSwitch.checked
+    property alias autoGain: autoGainSwitch.checked
+    title: 'Scan settings'
+
+    function updateCalibrationText(){
+        calibrationLbl.text = root.scanner ? root.scanner.calibrationStatus() : '';
+    }
+
+    Connections {
+        target: root.scanner
+        onCalibrationChanged: root.updateCalibrationText()
+    }
+    Connections {
+        target: root.scanner
+        // 'running' has no change signal for bindings: follow the run state
+        onScannerRunState: calibrateBtn.enabled = !root.scanner.running
+    }
 
     onWindowTypeChanged: {
         if (!root.windowType){
@@ -164,6 +183,82 @@ Dialog {
                 }
             }
         }
+
+        GroupBox {
+            id: cleanBox
+            objectName: 'cleanScanBox'
+            title: 'Clean scan (V17)'
+            Layout.fillWidth: true
+
+            GridLayout {
+                anchors.fill: parent
+                columns: 2
+                columnSpacing: 16
+                Switch {
+                    id: cleanSpursSwitch
+                    objectName: 'cleanSpursSwitch'
+                    text: "Remove dongle's own spurs (k x 28.8 MHz)"
+                }
+                Switch {
+                    id: cleanRippleSwitch
+                    objectName: 'cleanRippleSwitch'
+                    text: 'Remove tile ripple'
+                }
+                Switch {
+                    id: cleanFloorSwitch
+                    objectName: 'cleanFloorSwitch'
+                    text: 'Level the floor (calibration)'
+                }
+                Switch {
+                    id: autoGainSwitch
+                    objectName: 'autoGainSwitch'
+                    text: 'Overload: re-measure with less gain'
+                }
+                Label {
+                    id: calibrationLbl
+                    objectName: 'calibrationLabel'
+                    Layout.columnSpan: 2
+                    Layout.fillWidth: true
+                    Layout.maximumWidth: 560
+                    wrapMode: Text.Wrap
+                    font.pointSize: 9
+                    opacity: 0.85
+                }
+                Button {
+                    id: calibrateBtn
+                    objectName: 'calibrateButton'
+                    text: 'Calibrate dongle...'
+                    onClicked: calibrateConfirm.open()
+                }
+            }
+        }
+    }
+
+    Dialog {
+        id: calibrateConfirm
+        objectName: 'calibrateConfirm'
+        title: 'Calibrate dongle'
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: 520
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        Label {
+            width: calibrateConfirm.availableWidth
+            wrapMode: Text.Wrap
+            text: '1. Unscrew the antenna (leave the connector empty).\n' +
+                  '2. If you can, switch off your own transmitters (IEM, mics).\n' +
+                  '3. OK starts a scan 31-1766 MHz (about 3 minutes) with the ' +
+                  'current gain. It records the floor shape of this dongle.\n\n' +
+                  'Repeat it when you change the gain or the dongle, or after a ' +
+                  'driver (DLL) update.'
+        }
+        onAccepted: {
+            if (root.scanner.running)
+                return;
+            root.commitSettings();
+            root.close();
+            root.scanner.calibrate();
+        }
     }
 
     standardButtons: Dialog.Ok | Dialog.Cancel
@@ -179,6 +274,10 @@ Dialog {
         config.scalingEnabled = root.scalingEnabled;
         config.scalingMinDB = root.scalingMinDB;
         config.scalingMaxDB = root.scalingMaxDB;
+        config.cleanRipple = root.cleanRipple;
+        config.cleanSpurs = root.cleanSpurs;
+        config.cleanFloor = root.cleanFloor;
+        config.autoGain = root.autoGain;
     }
 
     function reloadSettings(){
@@ -195,6 +294,11 @@ Dialog {
         root.scalingEnabled = config.scalingEnabled;
         root.scalingMinDB = config.scalingMinDB;
         root.scalingMaxDB = config.scalingMaxDB;
+        root.cleanRipple = config.cleanRipple;
+        root.cleanSpurs = config.cleanSpurs;
+        root.cleanFloor = config.cleanFloor;
+        root.autoGain = config.autoGain;
+        root.updateCalibrationText();
     }
 
     onAccepted: {

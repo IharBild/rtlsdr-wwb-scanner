@@ -106,13 +106,14 @@ class SampleArray(JSONMixin):
         if counts is None or counts.size != self.data.size:
             counts = np.ones(self.data.size, dtype=np.float64)
         return counts
-    def insert_sorted(self, other):
+    def insert_sorted(self, other, weight=1.0):
         """Add points, keeping the array sorted by frequency.
 
         Points with the same frequency (compared in whole Hz) are merged into
         one. All measurements get the same weight and are averaged as
         linear power (``magnitude``), not as dB; ``dbFS`` is recalculated
-        from the merged magnitude.
+        from the merged magnitude. ``weight`` < 1 (V17): a tile measured
+        again with lower gain counts only where no normal tile has the point.
         """
         data = self._check_obj_type(other)
         if not data.size:
@@ -131,12 +132,12 @@ class SampleArray(JSONMixin):
                 tail.__dict__.update(self.__dict__)
                 tail.data = self.data[split:]
                 tail._counts = self._get_counts()[split:]
-                tail.insert_sorted(data)
+                tail.insert_sorted(data, weight)
                 self.data = np.concatenate([head, tail.data])
                 self._counts = np.concatenate([head_counts, tail._get_counts()])
                 return
         everything = np.concatenate([self.data, data])
-        weights = np.concatenate([self._get_counts(), np.ones(data.size)])
+        weights = np.concatenate([self._get_counts(), np.full(data.size, float(weight))])
         keys = self._freq_keys(everything['frequency'])
         uniq, first, inverse = np.unique(keys, return_index=True, return_inverse=True)
         if uniq.size == everything.size:

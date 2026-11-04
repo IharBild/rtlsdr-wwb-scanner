@@ -27,6 +27,10 @@ class ScanConfigData(GenericQObject):
     _n_scalingEnabled = Signal()
     _n_scalingMinDB = Signal()
     _n_scalingMaxDB = Signal()
+    _n_cleanRipple = Signal()
+    _n_cleanSpurs = Signal()
+    _n_cleanFloor = Signal()
+    _n_autoGain = Signal()
     configUpdate = Signal()
     def __init__(self, *args):
         self._startFreq = 470.
@@ -41,6 +45,10 @@ class ScanConfigData(GenericQObject):
         self._scalingEnabled = False
         self._scalingMinDB = -140.
         self._scalingMaxDB = -55.
+        self._cleanRipple = True
+        self._cleanSpurs = True
+        self._cleanFloor = True
+        self._autoGain = True
         super().__init__(*args)
 
     def _generic_property_changed(self, attr, old_value, new_value):
@@ -94,6 +102,22 @@ class ScanConfigData(GenericQObject):
     def _s_scalingMaxDB(self, value): self._generic_setter('_scalingMaxDB', value)
     scalingMaxDB = Property(float, _g_scalingMaxDB, _s_scalingMaxDB, notify=_n_scalingMaxDB)
 
+    def _g_cleanRipple(self): return self._cleanRipple
+    def _s_cleanRipple(self, value): self._generic_setter('_cleanRipple', value)
+    cleanRipple = Property(bool, _g_cleanRipple, _s_cleanRipple, notify=_n_cleanRipple)
+
+    def _g_cleanSpurs(self): return self._cleanSpurs
+    def _s_cleanSpurs(self, value): self._generic_setter('_cleanSpurs', value)
+    cleanSpurs = Property(bool, _g_cleanSpurs, _s_cleanSpurs, notify=_n_cleanSpurs)
+
+    def _g_cleanFloor(self): return self._cleanFloor
+    def _s_cleanFloor(self, value): self._generic_setter('_cleanFloor', value)
+    cleanFloor = Property(bool, _g_cleanFloor, _s_cleanFloor, notify=_n_cleanFloor)
+
+    def _g_autoGain(self): return self._autoGain
+    def _s_autoGain(self, value): self._generic_setter('_autoGain', value)
+    autoGain = Property(bool, _g_autoGain, _s_autoGain, notify=_n_autoGain)
+
 class ScannerInterface(GenericQObject):
     _n_running = Signal()
     _n_scanConfig = Signal()
@@ -103,7 +127,9 @@ class ScannerInterface(GenericQObject):
     _n_spectrum = Signal()
     _n_progress = Signal()
     _n_scannerInitialized = Signal()
+    _n_calibrating = Signal()
     scannerRunState = Signal(bool)
+    calibrationChanged = Signal()
     def __init__(self, *args):
         self._running = False
         self._scanConfig = None
@@ -113,6 +139,7 @@ class ScannerInterface(GenericQObject):
         self._spectrum = None
         self._scannerInitialized = False
         self._progress = -1
+        self._calibrating = False
         super().__init__(*args)
         self.scanner = None
         self.scan_thread = None
@@ -160,6 +187,10 @@ class ScannerInterface(GenericQObject):
     def _s_progress(self, value): self._generic_setter('_progress', value)
     progress = Property(float, _g_progress, _s_progress, notify=_n_progress)
 
+    def _g_calibrating(self): return self._calibrating
+    def _s_calibrating(self, value): self._generic_setter('_calibrating', value)
+    calibrating = Property(bool, _g_calibrating, _s_calibrating, notify=_n_calibrating)
+
     def build_scan_config(self):
         conf = config.ScanConfig()
         conf.scan_range = [self.startFreq, self.endFreq]
@@ -171,7 +202,37 @@ class ScannerInterface(GenericQObject):
         conf.sampling.sweep_overlap_ratio = self.scanConfig.sweepOverlapRatio
         conf.sampling.window_size = self.scanConfig.windowSize
         conf.sampling.window_type = self.scanConfig.windowType
+        sc = self.scanConfig
+        conf.sampling.auto_gain = bool(getattr(sc, 'autoGain', False))
+        conf.processing.clean_ripple = bool(getattr(sc, 'cleanRipple', False))
+        conf.processing.clean_spurs = bool(getattr(sc, 'cleanSpurs', False))
+        conf.processing.clean_floor = bool(getattr(sc, 'cleanFloor', False))
+        if self.calibrating:
+            # calibration: whole range, values exactly as measured
+            from wwb_scanner.scanner import cleanup
+            conf.scan_range = list(cleanup.CALIBRATION_RANGE_MHZ)
+            conf.sampling.auto_gain = False
+            conf.processing.clean_ripple = False
+            conf.processing.clean_spurs = False
+            conf.processing.clean_floor = False
         return conf
+
+    @Slot(result=str)
+    def calibrationStatus(self):
+        """One line about the dongle calibration for the current gain."""
+        from wwb_scanner.scanner import cleanup
+        try:
+            return cleanup.status_text(self.gain, (self.sampleRate or 0) * 1e3)
+        except Exception as exc:
+            return 'calibration: %s' % exc
+
+    @Slot()
+    def calibrate(self):
+        """Scan 31-1766 MHz WITHOUT antenna and save the dongle profile."""
+        if self.running:
+            return
+        self.calibrating = True
+        self._start()
 
     @Slot(int, float, result=float)
     def getFreqResolution(self, nfft, fs):
@@ -194,7 +255,10 @@ class ScannerInterface(GenericQObject):
         conf = self.build_scan_config()
         self.scanner = Scanner(config=conf)
         self.spectrum = self.scanner.spectrum
-        self.spectrum.name = f'{self.startFreq} - {self.endFreq} (live)'
+        if self.calibrating:
+            self.spectrum.name = 'Calibration without antenna, gain %s dB' % self.gain
+        else:
+            self.spectrum.name = f'{self.startFreq} - {self.endFreq} (live)'
         self.progress = 0.
         self.running = True
         self.scan_thread = ScanThread(target=self.scanner.run_scan)
@@ -219,13 +283,43 @@ class ScannerInterface(GenericQObject):
     def on_scanner_finished(self):
         self.scan_thread.stop()
         logger.info('scan_thread stopped')
-        if self.scanConfig.smoothingEnabled:
+        if self.calibrating:
+            self._finish_calibration()
+        elif self.scanConfig.smoothingEnabled:
             self.smooth_scan()
-        if self.scanConfig.scalingEnabled:
+        if self.scanConfig.scalingEnabled and not self.calibrating:
             self.scale_scan()
+        self.calibrating = False
         self.scan_thread = None
         self.scanner = None
         self.running = False
+
+    def _finish_calibration(self):
+        from wwb_scanner.scanner import cleanup
+        status = logging.getLogger('wwb_scanner.status')
+        scanner = self.scanner
+        try:
+            if scanner is None or getattr(scanner, 'error', None) is not None or \
+                    getattr(scanner.sample_collection, 'aborted', False):
+                status.warning('Calibration not saved: the scan did not finish')
+                return
+            sd = scanner.spectrum.sample_data
+            meta = dict(gain=float(scanner.gain), sample_rate=float(scanner.sample_rate),
+                        step_mhz=float(scanner.step_size),
+                        window_size=int(scanner.window_size or 0),
+                        window_type=str(scanner.sampling_config.window_type))
+            try:
+                meta['serial'] = self.deviceInfo.device_serial
+            except Exception:
+                pass
+            ok, text = cleanup.calibrate(
+                np.asarray(sd['frequency'], dtype=float), np.asarray(sd['dbFS'], dtype=float),
+                float(scanner.config.scan_range[0]), scanner.step_size, meta)
+            (status.info if ok else status.warning)(text)
+        except Exception as exc:
+            logging.getLogger('wwb_scanner').error('Calibration failed: %s', exc, exc_info=True)
+        finally:
+            self.calibrationChanged.emit()
 
     @Slot()
     def smooth_scan(self):

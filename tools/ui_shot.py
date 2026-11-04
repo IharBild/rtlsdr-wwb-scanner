@@ -28,6 +28,10 @@ def main():
     win.setWidth(1600); win.setHeight(900); win.show()
     if os.environ.get('SHOT_LIGHT'):
         win.setProperty('darkUi', False)
+    if os.environ.get('SHOT_SCAN_DIALOG'):
+        d = [o for o in win.findChildren(QtCore.QObject) if o.property('title') == 'Scan settings']
+        if d:
+            QtCore.QMetaObject.invokeMethod(d[0], 'open')
     if os.environ.get('SHOT_THEME_DIALOG'):
         d = [o for o in win.findChildren(QtCore.QObject) if o.property('title') == 'Theme']
         if d:

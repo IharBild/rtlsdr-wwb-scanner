@@ -140,6 +140,11 @@ class ScannerBase(JSONMixin):
             t0 = time.time()
             print('scan finished, cropping...', flush=True)
             self.crop_spectrum()
+            clean_note = ''
+            try:
+                clean_note = self.apply_cleanup()
+            except Exception:
+                logger.exception('clean scan failed, the scan is kept as measured')
             print('cropped in %.1f s, saving...' % (time.time() - t0), flush=True)
             self.save_to_dbstore()
             print('saved, total %.1f s' % (time.time() - t0), flush=True)
@@ -155,7 +160,7 @@ class ScannerBase(JSONMixin):
                     lo, hi, time.time() - t_start, len(coll.missing_tiles))
             else:
                 logging.getLogger('wwb_scanner.status').info(
-                    'Scan %.1f-%.1f MHz done in %.0f s', lo, hi, time.time() - t_start)
+                    'Scan %.1f-%.1f MHz done in %.0f s%s', lo, hi, time.time() - t_start, clean_note)
     def stop_scan(self):
         if not self._running.is_set():
             # not started yet or already finished: nothing to wait for
@@ -164,6 +169,60 @@ class ScannerBase(JSONMixin):
         self._running.clear()
         self.sample_collection.cancel()
         self._stopped.wait()
+    def apply_cleanup(self):
+        """V17 clean scan (tile ripple, own spurs, floor shape). The values as
+        measured are kept in spectrum.raw_dbFS (saved with the scan).
+        Returns a short note for the status line."""
+        pc = self.config.processing
+        want_r = bool(pc.get('clean_ripple'))
+        want_s = bool(pc.get('clean_spurs'))
+        want_f = bool(pc.get('clean_floor'))
+        if not (want_r or want_s or want_f):
+            return ''
+        from wwb_scanner.scanner import cleanup
+        spectrum = self.spectrum
+        sd = spectrum.sample_data
+        if sd.size < 50:
+            return ''
+        f = np.asarray(sd['frequency'], dtype=np.float64)
+        y = np.asarray(sd['dbFS'], dtype=np.float64)
+        bin_mhz = float(np.median(np.diff(f)))
+        period = self.step_size / bin_mhz if bin_mhz > 0 else 0
+        if abs(period - round(period)) > 0.01:
+            want_r = False
+        period = int(round(period))
+        profile, why = None, ''
+        if want_f:
+            profile, why = cleanup.find_profile(self.gain, self.sample_rate, period)
+        default = None
+        if abs(self.sample_rate - cleanup.DEFAULT_RIPPLE_FS) < 1 and \
+                abs(self.step_size * 1e6 - cleanup.DEFAULT_RIPPLE_STEP_HZ) < 1:
+            default = cleanup.DEFAULT_RIPPLE_DB
+        start = float(self.config.scan_range[0])
+        yc, info = cleanup.clean(f, y, start, period, profile=profile, ripple=want_r,
+                                 spurs=want_s, flatten=want_f, default_ripple=default)
+        if profile is not None:
+            info['calibration'] = profile.get('meta', {}).get('created')
+        if why:
+            info['floor_skipped'] = why
+        with spectrum.data_update_lock:
+            spectrum.raw_dbFS = y.copy()
+            spectrum.cleanup_info = info
+            sd.data['dbFS'] = yc
+            sd.data['magnitude'] = cleanup.from_db(yc)
+        spectrum.set_data_updated()
+        parts = []
+        if info.get('spurs'):
+            parts.append('%d own spurs removed' % len(info.get('spurs_removed') or []))
+        if info.get('ripple'):
+            parts.append('tile ripple')
+        if info.get('flatten'):
+            parts.append('floor levelled')
+        note = ' (clean: %s)' % ', '.join(parts) if parts else ''
+        if why:
+            note += '; floor not levelled: %s' % why
+        logger.info('clean scan: %s', info)
+        return note
     def crop_spectrum(self):
         # tiles reach about 1.2 MHz beyond the requested range
         f_min, f_max = self.config.scan_range
@@ -329,11 +388,16 @@ class Scanner(ScannerBase):
             force_lower_freq = True
         else:
             force_lower_freq = False
+        weight = 1.0
+        if getattr(sample_set, 'gain_drop', 0.) > 0:
+            from wwb_scanner.scanner.sample_processing import REMEASURED_WEIGHT
+            weight = REMEASURED_WEIGHT
         spectrum.add_sample_set(
             frequency=freqs,
             magnitude=powers,
             center_frequency=center_freq,
             force_lower_freq=force_lower_freq,
+            weight=weight,
         )
         self.progress = self.sample_collection.calc_progress()
 

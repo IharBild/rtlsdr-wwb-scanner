@@ -171,13 +171,17 @@ class DBStore(object):
         except Exception:
             pass
         return 'scan_%05d_%s%s.npz' % (eid, stamp, rng)
-    def _write_points(self, eid, data, sample_data, name=None):
+    def _write_points(self, eid, data, sample_data, name=None, raw_dbFS=None):
         if not os.path.isdir(self.scans_dir):
             os.makedirs(self.scans_dir)
         name = name or self._scan_file_name(eid, data, sample_data)
         path = os.path.join(self.scans_dir, name)
         tmp = path + '.tmp.npz'
-        np.savez_compressed(tmp, sample_data=sample_data)
+        if raw_dbFS is not None:
+            # V17: values as measured, before the clean scan corrections
+            np.savez_compressed(tmp, sample_data=sample_data, raw_dbFS=np.asarray(raw_dbFS))
+        else:
+            np.savez_compressed(tmp, sample_data=sample_data)
         os.replace(tmp, path)
         return name
     def add_scan(self, spectrum, scan_config=None):
@@ -188,6 +192,9 @@ class DBStore(object):
                 self.add_scan_config(scan_config)
             spectrum.scan_config_eid = scan_config.eid
         data = spectrum._serialize()
+        info = getattr(spectrum, 'cleanup_info', None)
+        if info:
+            data['cleanup'] = info
         sd = data.pop('sample_data', None)
         points = getattr(sd, 'data', sd)
         table = self.scan_db.table('scans_performed')
@@ -200,7 +207,8 @@ class DBStore(object):
             spectrum.eid = eid
             name = None
         if points is not None:
-            data['sample_data_file'] = self._write_points(eid, data, points, name)
+            data['sample_data_file'] = self._write_points(
+                eid, data, points, name, raw_dbFS=getattr(spectrum, 'raw_dbFS', None))
         update_ids(table, data, [eid])
         return eid
     def get_all_scans(self):

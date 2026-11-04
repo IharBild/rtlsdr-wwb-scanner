@@ -18,6 +18,10 @@ Item {
     property alias scalingEnabled: model.scalingEnabled
     property alias scalingMinDB: model.scalingMinDB
     property alias scalingMaxDB: model.scalingMaxDB
+    property alias cleanRipple: model.cleanRipple
+    property alias cleanSpurs: model.cleanSpurs
+    property alias cleanFloor: model.cleanFloor
+    property alias autoGain: model.autoGain
 
     signal configUpdate()
 
@@ -35,6 +39,10 @@ Item {
         scalingEnabled: false
         scalingMinDB: -140
         scalingMaxDB: -55
+        cleanRipple: true
+        cleanSpurs: true
+        cleanFloor: true
+        autoGain: true
 
         onConfigUpdate: {
             root.configUpdate();
@@ -56,5 +64,9 @@ Item {
         property alias scalingEnabled: model.scalingEnabled
         property alias scalingMinDB: model.scalingMinDB
         property alias scalingMaxDB: model.scalingMaxDB
+        property alias cleanRipple: model.cleanRipple
+        property alias cleanSpurs: model.cleanSpurs
+        property alias cleanFloor: model.cleanFloor
+        property alias autoGain: model.autoGain
     }
 }

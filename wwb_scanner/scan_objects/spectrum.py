@@ -241,6 +241,7 @@ class Spectrum(JSONMixin):
             self._add_sample_set(**kwargs)
         self.set_data_updated()
     def _add_sample_set(self, **kwargs):
+        weight = kwargs.pop('weight', 1.0)
         force_lower_freq = kwargs.get('force_lower_freq')
         a = SampleArray.create(**kwargs)
 
@@ -249,7 +250,7 @@ class Spectrum(JSONMixin):
         if not force_lower_freq and sdata['frequency'].size:
             r_ix = np.flatnonzero(np.greater_equal(a['frequency'], [sdata['frequency'].max()]))
             a = a[r_ix]
-        self.sample_data.insert_sorted(a)
+        self.sample_data.insert_sorted(a, weight)
 
         skwargs = {'spectrum':self, 'init_complete':True}
         for f in a['frequency']:

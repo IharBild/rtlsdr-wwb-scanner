@@ -259,6 +259,7 @@ def main():
         pump(app, 0.1)
     check('U5', not si.running, 'second scan after the first: %.1f s' % (time.time() - t_start))
     v16_checks(app, win, controls, si, seen_left)
+    v17_checks(app, win, controls, si)
     win.close()
     pump(app, 0.3)
     return 0 if all(RESULTS) else 1
@@ -312,6 +313,64 @@ def v16_checks(app, win, controls, si, seen_left):
           'preset "UHF 470-800" -> %.1f-%.1f MHz (%d presets)' % (cfg.startFreq, cfg.endFreq,
                                                              combos[0].property('count') if combos else 0))
     check('U13', bool(seen_left), 'time left during the scan: %r' % (seen_left,))
+    if QML_WARNINGS:
+        print('QML warnings so far:', QML_WARNINGS[:5])
+
+
+def v17_checks(app, win, controls, si):
+    """V17: clean scan options, calibration, cleaned scan."""
+    try:
+        from wwb_scanner.scanner import cleanup
+    except ImportError:
+        check('U14', False, 'no wwb_scanner.scanner.cleanup (V17 not installed)')
+        return
+    names = ['cleanSpursSwitch', 'cleanRippleSwitch', 'cleanFloorSwitch', 'autoGainSwitch']
+    def by_name(n):
+        objs = win.findChildren(QtCore.QObject, n)
+        return objs[0] if objs else None
+    dlg = [o for o in win.findChildren(QtCore.QObject) if o.property('title') == 'Scan settings']
+    if dlg:
+        QtCore.QMetaObject.invokeMethod(dlg[0], 'open')
+        pump(app, 0.5)
+    sw = {n: by_name(n) for n in names}
+    lbl = by_name('calibrationLabel')
+    states = {n: (bool(o.property('checked')) if o is not None else None) for n, o in sw.items()}
+    check('U14', bool(dlg) and all(states.values()) and lbl is not None and by_name('calibrateButton') is not None,
+          'scan settings: %s; calibration: %r' % (states, lbl.property('text') if lbl is not None else None))
+    if dlg:
+        QtCore.QMetaObject.invokeMethod(dlg[0], 'close')
+        pump(app, 0.3)
+    # U15: the last scan (U5) was cleaned, the values as measured are kept
+    sp = si.spectrum
+    info = getattr(sp, 'cleanup_info', None) if sp is not None else None
+    raw = getattr(sp, 'raw_dbFS', None) if sp is not None else None
+    check('U15', bool(info) and info.get('spurs') and raw is not None and raw.size == sp.sample_data.size,
+          'clean scan info %s' % (info,))
+    # U16: calibration (shortened range in the simulator), then a levelled scan
+    old = cleanup.CALIBRATION_RANGE_MHZ
+    cleanup.CALIBRATION_RANGE_MHZ = (400.0, 720.0)
+    hubs = [o for o in win.findChildren(QtCore.QObject) if o.metaObject().indexOfProperty('logFile') >= 0]
+    try:
+        t0 = time.time()
+        si.calibrate()
+        pump(app, 0.5)
+        while si.running and time.time() - t0 < 300:
+            pump(app, 0.1)
+        pump(app, 0.5)
+        text = hubs[0].property('text') if hubs else ''
+        saved = os.path.exists(cleanup.profile_path(si.gain, si.sampleRate * 1e3))
+        lbl_text = lbl.property('text') if lbl is not None else ''
+        si.scanConfig.startFreq, si.scanConfig.endFreq = 470.0, 490.0
+        controls[0].scannerState.emit(True)
+        pump(app, 0.5)
+        while si.running and time.time() - t0 < 400:
+            pump(app, 0.1)
+        info = getattr(si.spectrum, 'cleanup_info', None) or {}
+        check('U16', saved and 'Calibration saved' in str(text) and info.get('flatten'),
+              'calibration %.0f s: %r; label %r; next scan levelled: %s'
+              % (time.time() - t0, text, lbl_text[:60], info.get('flatten')))
+    finally:
+        cleanup.CALIBRATION_RANGE_MHZ = old
     if QML_WARNINGS:
         print('QML warnings so far:', QML_WARNINGS[:5])
 

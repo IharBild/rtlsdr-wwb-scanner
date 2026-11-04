@@ -96,12 +96,14 @@ class FakeRtlSdr(object):
     instances = []
 
     def __init__(self, serial_number=None, air=None, faults=(), quantize=True,
-                 tune_delay=0.0, read_delay=0.0, fail_open=False):
+                 tune_delay=0.0, read_delay=0.0, fail_open=False, gain_affects=False):
         if fail_open:
             raise IOError('No devices found')
         self.air = air if air is not None else Air()
         self.faults = list(faults)
         self.quantize = quantize
+        self.gain_affects = gain_affects      # V17: the gain scales what is received
+        self.gains_set = []
         self.tune_delay = tune_delay
         self.read_delay = read_delay
         self.device_opened = True
@@ -135,6 +137,7 @@ class FakeRtlSdr(object):
         self._check_open()
         g = np.array(R828D_GAINS) / 10.
         self._gain = float(g[np.abs(g - float(v)).argmin()])
+        self.gains_set.append(self._gain)
     @property
     def center_freq(self):
         return self._fc
@@ -187,6 +190,9 @@ class FakeRtlSdr(object):
         self.reads.append(int(num_samples))
         seed = int(self._fc // 1000) + self.calls['read_samples']
         x = self.air.iq(self._fc, self._fs, int(num_samples), seed)
+        if self.gain_affects:
+            # levels of the Air are for gain 29.7 dB
+            x = x * 10. ** ((self._gain - 29.7) / 20.)
         if self.quantize:
             i = np.clip(np.round((x.real + 1) * 127.5), 0, 255)
             q = np.clip(np.round((x.imag + 1) * 127.5), 0, 255)
@@ -214,16 +220,20 @@ class FakeLockLib(object):
 
 
 def make_config(start, end, fs=2.4e6, window=96, sweeps=40, per_sweep=2048,
-                overlap=0.65, window_type='hann', gain=33.8):
-    return {
+                overlap=0.65, window_type='hann', gain=33.8, auto_gain=False, clean=None):
+    conf = {
         'scan_range': [float(start), float(end)],
         'device': {'gain': gain},
         'sampling': {
             'sample_rate': fs, 'sweep_overlap_ratio': overlap,
             'sweeps_per_scan': sweeps, 'samples_per_sweep': per_sweep,
             'window_size': window, 'window_type': window_type,
+            'auto_gain': auto_gain,
         },
     }
+    if clean:
+        conf['processing'] = dict(clean)
+    return conf
 
 
 def run_scan(monkeypatch, tmpdir, start, end, sdr_kwargs=None, lock_lib=False,

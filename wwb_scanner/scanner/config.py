@@ -45,6 +45,7 @@ class SamplingConfig(Config):
         rtl_bin_size=0.025,
         rtl_crop=50,
         rtl_fir_size=4,
+        auto_gain=False,          # V17: re-measure clipped tiles with lower gain
     )
 
 class ProcessingConfig(Config):
@@ -54,4 +55,7 @@ class ProcessingConfig(Config):
         scaling_enabled=True,
         scaling_min_db=-140.,
         scaling_max_db=-50.,
+        clean_ripple=False,       # V17: remove the tile ripple (no calibration needed)
+        clean_spurs=False,        # V17: remove the dongle's own carriers (k x 28.8 MHz)
+        clean_floor=False,        # V17: level the floor (needs a calibration)
     )

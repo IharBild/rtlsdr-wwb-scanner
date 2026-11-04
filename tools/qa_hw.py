@@ -169,6 +169,13 @@ def check_environment(args):
     miss16 = [k for k, v in m16.items() if not v]
     result('E3e', 'WARN' if miss16 else 'PASS', 'установлены файлы V16 (сообщения, перегрузка, спуры, пресеты)',
            ('нет: ' + ', '.join(miss16) + ' - поставьте fix-V16-pip-files.zip') if miss16 else 'все отметки найдены')
+    m17 = {'cleanup.py': os.path.exists(os.path.join(base, 'scanner', 'cleanup.py')),
+           'автоусиление': 'remeasure_lower_gain' in read(os.path.join(base, 'scanner', 'sample_processing.py')),
+           'калибровка в окне': 'calibrateButton' in read(os.path.join(pq, 'qml', 'ScanControlsDialog.qml')),
+           'сырые данные в истории': 'raw_dbFS' in read(os.path.join(base, 'utils', 'dbstore.py'))}
+    miss17 = [k for k, v in m17.items() if not v]
+    result('E3f', 'WARN' if miss17 else 'PASS', 'установлены файлы V17 (чистый скан, автоусиление, калибровка)',
+           ('нет: ' + ', '.join(miss17) + ' - поставьте fix-V17-pip-files.zip') if miss17 else 'все отметки найдены')
     m12 = {'экспорт sdb3 (V12)': 'class WWB3Exporter' in read(os.path.join(base, 'file_handlers', 'exporters.py')),
            'импорт sdb3 (V12)': 'class WWB3Importer' in read(os.path.join(base, 'file_handlers', 'importers.py'))}
     miss12 = [k for k, v in m12.items() if not v]
@@ -273,7 +280,7 @@ def run_ui_check(outdir):
 
 class Lab(object):
     """Runs real scans through the installed scanner (Scanner.run_scan)."""
-    def __init__(self, outdir, simulate=False):
+    def __init__(self, outdir, simulate=False, no_antenna=False):
         self.outdir = outdir
         self.simulate = simulate
         if simulate:
@@ -282,14 +289,19 @@ class Lab(object):
             import sim
             from wwb_scanner.scanner import sdrwrapper
             air = sim.Air(noise=0.03)
-            for st in (88.0, 91.3, 95.1, 100.6, 104.9):
-                air.tone(st * 1e6, 0.05)
-            for lo in (474.19, 490.19, 554.19, 698.19):
-                air.band(lo * 1e6, (lo + 7.62) * 1e6, 0.05)
+            for k in range(2, 30):                 # the dongle's own spurs
+                air.tone(28.8e6 * k, 0.004)
+            if not no_antenna:
+                for st in (88.0, 91.3, 95.1, 100.6, 104.9):
+                    air.tone(st * 1e6, 0.05)
+                for lo in (474.19, 490.19, 554.19, 698.19):
+                    air.band(lo * 1e6, (lo + 7.62) * 1e6, 0.05)
+                air.tone(526.0e6, 0.9)             # own IEM next to the antenna: clips
+                air.tone(600.3e6, 0.15)            # strong, not clipped (H10)
             self.sim_air = air
             self.made = []
             def factory(serial_number=None):
-                s = sim.FakeRtlSdr(air=air, tune_delay=0.002)
+                s = sim.FakeRtlSdr(air=air, tune_delay=0.002, gain_affects=True)
                 self.made.append(s)
                 return s
             sdrwrapper.RtlSdr = factory
@@ -298,14 +310,19 @@ class Lab(object):
         spmod.Spectrum.save_to_dbstore = lambda self: None
         self.home_report = os.path.join(os.path.expanduser('~'), 'wwb_scan_timing.txt')
 
-    def config(self, start, end, window_type='hann', overlap=0.65, sweeps=40):
-        return {
+    def config(self, start, end, window_type='hann', overlap=0.65, sweeps=40, auto_gain=False, clean=False):
+        c = {
             'scan_range': [float(start), float(end)],
             'device': {'gain': 33.8},
             'sampling': {'sample_rate': 2.4e6, 'sweep_overlap_ratio': overlap,
                          'sweeps_per_scan': sweeps, 'samples_per_sweep': 2048,
                          'window_size': 96, 'window_type': window_type},
         }
+        if auto_gain:
+            c['sampling']['auto_gain'] = True          # V17
+        if clean:
+            c['processing'] = {'clean_ripple': True, 'clean_spurs': True, 'clean_floor': True}
+        return c
 
     def scan(self, name, start, end, timeout=1200, **kw):
         from wwb_scanner.scanner import main
@@ -342,6 +359,12 @@ class Lab(object):
             'pll_late': int(m.group(1)) if m else None, 'pll_unlocked': int(m.group(2)) if m else None,
             'lib': (re.findall(r'rtlsdr library: (.*)', out) or ['?'])[-1],
             'scanner': sc, 'console': out,
+            # V17
+            'remeasured': len(getattr(coll, 'remeasured', []) or []),
+            'still_clipped': sum(1 for x in coll.sample_sets.values()
+                                 if getattr(x, 'clip_ratio', 0.) >= 1e-3),
+            'cleanup': getattr(sc.spectrum, 'cleanup_info', None),
+            'raw': getattr(sc.spectrum, 'raw_dbFS', None),
         }
         if os.path.exists(self.home_report):
             shutil.copy(self.home_report, os.path.join(self.outdir, 'timing_%s.txt' % name))
@@ -673,7 +696,7 @@ def h8_no_antenna(lab):
     f, y = s['f'], s['y']
     if f.size < 1000 or s['hung'] or s['error']:
         result('H8a', 'FAIL', 'скан без антенны', 'скан не получился: hung %s, ошибка %r' % (s['hung'], s['error']))
-        return
+        return None
     rows, worst = [], 0.0
     for lo, hi, ref in REF_NOANT:
         m = (f >= lo) & (f < hi)
@@ -719,6 +742,177 @@ def h8_no_antenna(lab):
     diffs = ['%.1f %+.1f' % (fr, ex - REF_SPURS[round(fr, 1)]) for fr, ex in own if round(fr, 1) in REF_SPURS]
     result('H8c', 'INFO' if not lost else 'WARN', 'спуры против эталона (дБ над полом, разница)',
            '%s%s' % (', '.join(diffs[:16]), ('; пропали: ' + ', '.join('%.1f' % r for r in lost)) if lost else ''))
+    return s
+
+
+# ---------------------------------------------------------------- V17 clean scan
+
+def v17_installed():
+    try:
+        from wwb_scanner.scanner import cleanup  # noqa: F401
+        return True
+    except ImportError:
+        result('H9', 'SKIP', 'чистый скан (V17)', 'V17 не установлен')
+        return False
+
+
+def _zone_mask(f, zones, pad=1.0):
+    import numpy as np
+    m = np.zeros(f.size, bool)
+    for lo, hi, _ in zones:
+        m |= (f >= lo - pad) & (f <= hi + pad)
+    return m
+
+
+@guard('H8d', 'калибровка и чистый скан без антенны (V17)')
+def h8d_calibrate_clean(lab, s):
+    import numpy as np
+    from wwb_scanner.scanner import cleanup as C
+    sc = s['scanner']
+    meta = dict(gain=float(sc.gain), sample_rate=float(sc.sample_rate), step_mhz=float(sc.step_size),
+                window_size=96, window_type='hann', source='qa_hw H8')
+    ok, text = C.calibrate(s['f'], s['y'], 31.0, sc.step_size, meta)
+    result('H8d', 'PASS' if ok else 'WARN', 'калибровка донгла по скану без антенны', text)
+    if not ok:
+        return
+    s2 = lab.scan('h8e_no_antenna_clean', 31, 1766, timeout=1800, clean=True)
+    lab.save(s2, 'scan_no_antenna_clean_31-1766')
+    raw, y, f = s2['raw'], s2['y'], s2['f']
+    info = s2['cleanup'] or {}
+    if raw is None or not info:
+        result('H8e', 'FAIL', 'чистый скан без антенны', 'очистка не выполнена: %r' % (info,))
+        return
+    def spread(v):
+        meds = [float(np.median(v[(f >= lo) & (f < hi)])) for lo, hi, _ in REF_NOANT
+                if ((f >= lo) & (f < hi)).sum() > 50]
+        return max(meds) - min(meds)
+    def spurs_left(v):
+        n = []
+        for k in range(2, 62):
+            i = int(np.argmin(np.abs(f - 28.8 * k)))
+            if abs(f[i] - 28.8 * k) > 0.02 or i < 10 or i > f.size - 11:
+                continue
+            side = np.r_[v[i - 10:i - 4], v[i + 5:i + 11]]
+            if v[i - 1:i + 2].max() - np.median(side) > 1.0:
+                n.append(round(28.8 * k, 1))
+        return n
+    r0 = raw - C.running_median(raw, 61)
+    r1 = y - C.running_median(y, 61)
+    sp0, sp1 = spurs_left(raw), spurs_left(y)
+    ok = spread(y) <= 0.6 and len(sp1) <= 1
+    result('H8e', 'PASS' if ok else 'WARN', 'чистый скан без антенны: пол ровный, спуров нет',
+           'разброс пола по полосам %.1f -> %.1f дБ; шероховатость %.2f -> %.2f дБ; спуры > 1 дБ: %d -> %d %s; '
+           'рябь плиток %s; %s' % (spread(raw), spread(y), np.std(r0[np.abs(r0) < 3]), np.std(r1[np.abs(r1) < 3]),
+                                   len(sp0), len(sp1), sp1[:6], info.get('ripple_pp_db'),
+                                   'пол выровнен' if info.get('flatten') else 'пол НЕ выровнен: %s' % info.get('floor_skipped')))
+
+
+@guard('H9', 'автоусиление при перегрузке (V17)')
+def h9_auto_gain(lab, h2):
+    import numpy as np
+    scans = [lab.scan('h9_470_800_auto_%d' % i, 470, 800, auto_gain=True, clean=True) for i in (1, 2)]
+    lab.save(scans[0], 'scan_470-800_clean_auto')
+    ov = (h2[0].get('overload') or []) + (h2[1].get('overload') or [])
+    t_off = np.mean([s['time'] for s in h2[:2]])
+    t_on = np.mean([s['time'] for s in scans])
+    if not ov:
+        result('H9', 'INFO', 'автоусиление при перегрузке (470-800)',
+               'перегрузки нет - автоусиление не понадобилось; время %.1f -> %.1f с' % (t_off, t_on))
+        return scans
+    f = h2[0]['f']
+    a, b = scans
+    if not (a['f'].size == f.size == b['f'].size and np.allclose(a['f'], f)):
+        result('H9', 'FAIL', 'автоусиление', 'сетки частот не совпали')
+        return scans
+    z = _zone_mask(f, ov)
+    rep_off = float(np.std((h2[0]['y'] - h2[1]['y'])[z]))
+    rep_on = float(np.std((a['y'] - b['y'])[z]))
+    # strongest points of the zone: level with and without auto gain
+    top = np.argsort(np.where(z, h2[0]['y'], -999))[-20:]
+    dl = float(np.median(a['y'][top] - h2[0]['y'][top]))
+    ok = rep_on <= max(1.0, 0.7 * rep_off) and a['still_clipped'] == 0
+    result('H9', 'PASS' if ok else 'WARN', 'автоусиление при перегрузке (470-800)',
+           'зоны %s МГц; перемеряно плиток %d, осталось с перегрузкой %d; повторяемость в зонах %.2f -> %.2f дБ; '
+           'уровень сильнейших точек зон %+.1f дБ (при перегрузке он искажён: сжатие и ложные продукты); время %.1f -> %.1f с'
+           % (', '.join('%.1f-%.1f' % (lo, hi) for lo, hi, _ in ov[:6]), a['remeasured'], a['still_clipped'],
+              rep_off, rep_on, dl, t_off, t_on))
+    return scans
+
+
+@guard('H10', 'точность шагов усиления (V17)')
+def h10_gain_steps(lab, s):
+    """Auto gain scales a re-measured tile by the nominal gain difference.
+    Check on a strong (not clipped) signal how exact the nominal steps are."""
+    import numpy as np
+    from scipy.signal import welch
+    from wwb_scanner.scanner import cleanup as C
+    from wwb_scanner.scanner.sample_processing import clip_ratio
+    f, y = s['f'], s['y']
+    z = _zone_mask(f, s.get('overload') or [], pad=3.0)
+    floor = C.running_median(y, 161)
+    e = np.where(z, -99, y - floor)
+    i = int(np.argmax(e))
+    if e[i] < 20:
+        result('H10', 'INFO', 'точность шагов усиления', 'нет сильного сигнала (> 20 дБ над полом) вне перегрузки')
+        return
+    fpk = float(f[i])
+    if lab.simulate:
+        import sim
+        sdr = sim.FakeRtlSdr(air=lab.sim_air, gain_affects=True)
+    else:
+        from rtlsdr import RtlSdr
+        sdr = RtlSdr()
+    rows = []
+    try:
+        sdr.sample_rate = 2.4e6
+        off = 300e3
+        sdr.set_center_freq(fpk * 1e6 + off)
+        gains = sorted(g / 10. for g in sdr.get_gains())
+        g0 = min(gains, key=lambda g: abs(g - 33.8))
+        ref = None
+        for drop in (0, 6, 12, 20, 30):
+            g = [x for x in gains if x <= g0 - drop + 0.5][-1]
+            sdr.gain = g
+            sdr.read_samples(16384)
+            x = sdr.read_samples(262144)
+            fr, p = welch(x, fs=2.4e6, window='hann', nperseg=96, return_onesided=False, detrend=False)
+            o = np.argsort(fr)
+            fr, p = fr[o], p[o]
+            k = int(np.argmin(np.abs(fr + off)))
+            lvl = 10 * np.log10(p[k - 2:k + 3].mean()) + (g0 - g)
+            if ref is None:
+                ref = lvl
+            rows.append((g, lvl - ref, clip_ratio(x)))
+    finally:
+        try:
+            sdr.close()
+        except Exception:
+            pass
+    bad = [r for r in rows[1:] if abs(r[1]) > 1.5 and r[2] < 1e-3]
+    result('H10', 'WARN' if bad else 'PASS', 'точность шагов усиления (сигнал %.3f МГц, +%.0f дБ)' % (fpk, e[i]),
+           'отклонение уровня после пересчёта, дБ: %s (норма +-1,5)%s'
+           % (', '.join('%.1f дБ: %+.1f%s' % (g, d, ' перегр.' if c >= 1e-3 else '') for g, d, c in rows),
+              '; автоусиление даёт ошибку уровня на этих шагах' if bad else ''))
+
+
+@guard('H11', 'чистый скан с антенной (V17)')
+def h11_clean(lab, s):
+    import numpy as np
+    from wwb_scanner.scanner import cleanup as C
+    info = s['cleanup'] or {}
+    raw, y, f = s['raw'], s['y'], s['f']
+    if raw is None or not info:
+        result('H11', 'FAIL', 'чистый скан с антенной', 'очистка не выполнена: %r' % (info,))
+        return
+    rip0 = tile_ripple(f, raw, 470, 800)
+    rip1 = tile_ripple(f, y, 470, 800)
+    big = np.abs(y - raw) > 3
+    result('H11', 'PASS', 'чистый скан с антенной (470-800)',
+           'спуров убрано %d: %s; рябь плиток %s -> %s дБ; %s; точек изменено > 3 дБ: %d'
+           % (len(info.get('spurs_removed') or []), ', '.join('%g' % v for v in (info.get('spurs_removed') or [])[:10]),
+              '%.2f' % rip0 if rip0 is not None else '?', '%.2f' % rip1 if rip1 is not None else '?',
+              'пол выровнен по калибровке %s' % info.get('calibration') if info.get('flatten')
+              else 'пол не выровнен: %s' % info.get('floor_skipped'), int(big.sum())))
 
 
 # ---------------------------------------------------------------- report
@@ -779,7 +973,7 @@ def main():
             print('\n=== Окно программы с имитатором ===', flush=True)
             run_ui_check(outdir)
         print('\n=== Донгл ===', flush=True)
-        lab = Lab(outdir, simulate=args.simulate)
+        lab = Lab(outdir, simulate=args.simulate, no_antenna=args.no_antenna)
         if args.no_antenna:
             print('\n>>> АНТЕННА ДОЛЖНА БЫТЬ ОТКРУЧЕНА (пустой разъём). Enter - начать...', flush=True)
             try:
@@ -790,10 +984,17 @@ def main():
             print('Донгл не работает - остальные проверки пропущены.')
         elif args.no_antenna:
             h0_warmup(lab)
-            h8_no_antenna(lab)
+            h8 = h8_no_antenna(lab)
+            if v17_installed() and h8:
+                h8d_calibrate_clean(lab, h8)
         else:
             h0_warmup(lab)
-            h2_three_scans(lab)
+            h2 = h2_three_scans(lab)
+            if v17_installed() and h2:
+                h9 = h9_auto_gain(lab, h2)
+                h10_gain_steps(lab, h2[0])
+                if h9:
+                    h11_clean(lab, h9[0])
             v10 = any(r[0] == 'E3' and r[1] == 'PASS' for r in RESULTS)
             if v10:
                 h4_windows(lab)

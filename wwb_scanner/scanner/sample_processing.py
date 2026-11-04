@@ -109,12 +109,20 @@ def run_with_timeout(func, timeout, *args):
         raise box['exc']
     return box.get('result')
 
+# V17: a clipped tile is read again with lower gain (these steps down, until
+# it is no longer clipped) and scaled back by the gain difference. Such a
+# tile counts in the merge only where no normal tile has the point.
+AUTO_GAIN_DROPS_DB = (6., 12., 20., 30.)
+REMEASURED_WEIGHT = 0.01
+
 MAX_TILE_ERRORS = 5
 TUNE_TIMEOUT = 30.
 READ_TIMEOUT = 40.
 
 class SampleSet(JSONMixin):
     clip_ratio = 0.
+    clip_ratio_first = None     # V17: before the re-measurement with lower gain
+    gain_drop = 0.              # V17: dB the gain was lowered for this tile
     __slots__ = ('scanner', 'center_frequency', 'raw', 'current_sweep', 'complete',
                  '_frequencies', 'powers', 'collection', 'process_thread', 'samples_discarded')
     _serialize_attrs = ('center_frequency', '_frequencies', 'powers')
@@ -234,8 +242,69 @@ class SampleSet(JSONMixin):
             return
         sweeps, per_sweep = self.raw.shape
         self.clip_ratio = clip_ratio(iq)
+        if self.clip_ratio >= OVERLOAD_RATIO and self._auto_gain_enabled():
+            iq = self.remeasure_lower_gain(sdr, num_samples, iq)
         self.raw = np.asarray(iq[:sweeps * per_sweep], dtype=np.complex128).reshape(sweeps, per_sweep)
         self.process_samples()
+    def _auto_gain_enabled(self):
+        try:
+            return bool(self.scanner.sampling_config.get('auto_gain'))
+        except Exception:
+            return False
+    def remeasure_lower_gain(self, sdr, num_samples, iq):
+        """The ADC clipped: read the tile again with lower gain and scale the
+        samples back by the gain difference, so levels stay comparable.
+        The gain is always set back. Returns the samples to use."""
+        scanner = self.scanner
+        try:
+            g0 = float(sdr.gain)
+        except Exception:
+            g0 = float(scanner.gain or 0.)
+        gains = None
+        try:
+            gains = sorted(float(g) for g in scanner.gains)
+        except Exception:
+            pass
+        if not gains:
+            return iq
+        first = self.clip_ratio
+        best = None
+        try:
+            for drop in AUTO_GAIN_DROPS_DB:
+                lower = [g for g in gains if g <= g0 - drop + 0.5]
+                if not lower:
+                    lower = [gains[0]]
+                g = lower[-1]
+                if g >= g0 or (best is not None and g >= best[1]):
+                    continue
+                run_with_timeout(setattr, TUNE_TIMEOUT, sdr, 'gain', g)
+                try:
+                    g_set = float(sdr.gain)
+                except Exception:
+                    g_set = g
+                run_with_timeout(sdr.read_samples, READ_TIMEOUT, NUM_SAMPLES_DISCARDED)
+                x = run_with_timeout(sdr.read_samples, READ_TIMEOUT, num_samples)
+                cr = clip_ratio(x)
+                best = (x, g_set, cr)
+                if cr < OVERLOAD_RATIO:
+                    break
+        except SdrTimeout as exc:
+            logger.error('auto gain at %s Hz: %s', self.center_frequency, exc)
+            self.abort_scan()
+        except Exception:
+            logger.exception('auto gain at %s Hz failed, clipped tile kept', self.center_frequency)
+        finally:
+            try:
+                run_with_timeout(setattr, TUNE_TIMEOUT, sdr, 'gain', g0)
+            except Exception:
+                logger.exception('could not set the gain back to %s dB', g0)
+        if best is None:
+            return iq
+        x, g_set, cr = best
+        self.clip_ratio_first = first
+        self.clip_ratio = cr
+        self.gain_drop = g0 - g_set
+        return np.asarray(x) * (10. ** (self.gain_drop / 20.))
     def samples_callback(self, iq, context):
         samples_per_sweep = self.scanner.samples_per_sweep
         if not self.samples_discarded:
@@ -454,10 +523,17 @@ class SampleCollection(JSONMixin):
         """Warn about tiles where the ADC clipped (signal too strong).
         Sets self.overload = [(lo_mhz, hi_mhz, max_ratio), ...]."""
         self.overload = []
-        bad = sorted((k, s.clip_ratio) for k, s in self.sample_sets.items()
-                     if getattr(s, 'clip_ratio', 0.) >= OVERLOAD_RATIO)
+        self.remeasured = []
+        def first(s):
+            r = getattr(s, 'clip_ratio_first', None)
+            return getattr(s, 'clip_ratio', 0.) if r is None else r
+        bad = sorted((k, first(s)) for k, s in self.sample_sets.items()
+                     if first(s) >= OVERLOAD_RATIO)
         if not bad:
             return
+        fixed = [k for k, s in self.sample_sets.items() if getattr(s, 'gain_drop', 0.) > 0
+                 and getattr(s, 'clip_ratio', 0.) < OVERLOAD_RATIO]
+        still = [k for k, _ in bad if self.sample_sets[k].clip_ratio >= OVERLOAD_RATIO]
         keys = sorted(self.sample_sets)
         steps = [b - a for a, b in zip(keys, keys[1:]) if b > a]
         step = min(steps) if steps else 1e6
@@ -474,6 +550,18 @@ class SampleCollection(JSONMixin):
             else:
                 groups.append([k, k, r])
         self.overload = [((a - half) / 1e6, (b + half) / 1e6, r) for a, b, r in groups]
+        if fixed:
+            drops = [self.sample_sets[k].gain_drop for k in fixed]
+            self.remeasured = sorted(fixed)
+            where = ', '.join('%.1f-%.1f' % (lo, hi) for lo, hi, _ in self.overload[:6])
+            if not still:
+                logger.info('Overload at %s MHz: %d tile(s) measured again with %.0f-%.0f dB less gain '
+                            '(levels right, floor there higher)', where, len(fixed), min(drops), max(drops))
+                return
+            logger.warning('Overload at %s MHz: %d tile(s) still clipped even with %.0f dB less gain: '
+                           'move the antenna away from the transmitters', where, len(still),
+                           max(AUTO_GAIN_DROPS_DB))
+            return
         logger.warning('Overload (signal too strong for the dongle) at %s MHz, up to %.1f %% of samples '
                        'clipped: lower the gain or move the antenna away from transmitters',
                        ', '.join('%.1f-%.1f' % (lo, hi) for lo, hi, _ in self.overload[:6]),
