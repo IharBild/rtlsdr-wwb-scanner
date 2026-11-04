@@ -1,6 +1,8 @@
 import os
 import io
 import datetime
+import struct
+import time
 import uuid
 import xml.etree.ElementTree as ET
 import xml.dom.minidom as minidom
@@ -22,6 +24,17 @@ IMPOSSIBLE_DB = -1000.
 WWB_MIN_KHZ = 30000
 WWB_MAX_KHZ = 2000000
 WWB_STEP_KHZ = 25
+# shown by WWB as the scanner model (WWB itself writes '' for CSV imports)
+SCANNER_MODEL = 'RTL-SDR (rtlsdr-wwb-scanner)'
+
+
+def wwb_date(dt):
+    """'Wed Nov 4 2026' - the way WWB 7.9 writes the date (no leading zero)."""
+    return '%s %d %s' % (dt.strftime('%a %b'), dt.day, dt.strftime('%Y'))
+
+
+def _epoch_ms(local_dt):
+    return int(round(time.mktime(local_dt.timetuple()) * 1000 + local_dt.microsecond / 1000.))
 
 
 def wwb_grid(spectrum, step=WWB_STEP_KHZ, lo=WWB_MIN_KHZ, hi=WWB_MAX_KHZ):
@@ -181,7 +194,11 @@ class CSVExporter(BaseExporter):
 class BaseWWBExporter(BaseExporter):
     def __init__(self, **kwargs):
         super(BaseWWBExporter, self).__init__(**kwargs)
-        self.dt = kwargs.get('dt', datetime.datetime.utcnow())
+        # dt: local time of the export (date/time attributes, as WWB writes
+        # them); date_time is always the UTC epoch in ms. (Before V12 the
+        # date/time attributes were UTC, one hour off in Warsaw.)
+        self.dt = kwargs.get('dt') or datetime.datetime.now()
+        self.epoch_ms = kwargs.get('epoch_ms')
     def set_filename(self, value):
         ext = self._extension
         if os.path.splitext(value)[1].lower() != '.%s' % (ext):
@@ -194,10 +211,14 @@ class BaseWWBExporter(BaseExporter):
             scan_data_source=dict(
                 ver='0.0.0.1',
                 id='{%s}' % (uuid.uuid4()),
-                model='TODO',
+                model=SCANNER_MODEL,
                 name=os.path.abspath(self.filename),
-                date=dt.strftime('%a %b %d %Y'),
-                time=dt.strftime('%H:%M:%S'),
+                device_id='00000000-0000-0000-0000-000000000000',
+                device_type_id='00000000-0000-0000-0000-000000000000',
+                band='',
+                mode='',
+                date=wwb_date(dt),
+                time=dt.strftime('%H:%M:%S.') + '%03d' % (dt.microsecond // 1000),
                 color=spectrum.color.to_hex(),
             ),
             data_sets=dict(
@@ -221,7 +242,7 @@ class BaseWWBExporter(BaseExporter):
             scale_factor='1',
             date=d['scan_data_source']['date'],
             time=d['scan_data_source']['time'],
-            date_time=str(int((dt - EPOCH).total_seconds() * 1000)),
+            date_time=str(int(self.epoch_ms if self.epoch_ms is not None else _epoch_ms(dt))),
         )
         return d
     def build_data(self):
@@ -230,6 +251,10 @@ class BaseWWBExporter(BaseExporter):
         ET.SubElement(root, 'data_sets', attribs['data_sets'])
         tree = self.tree = ET.ElementTree(root)
         return tree
+    def finish(self, root):
+        # WWB writes an (empty) markers element after data_sets
+        if root.find('markers') is None:
+            ET.SubElement(root, 'markers')
     def write_file(self):
         tree = self.build_data()
         fd = io.BytesIO()
@@ -273,4 +298,147 @@ class WWBExporter(BaseWWBExporter):
             f.text = '%d' % freq
             v = ET.SubElement(data_set, 'v')
             v.text = str(val)
+        self.finish(root)
         return tree
+
+
+# ---------------------------------------------------------------- sdb3 (WWB 7)
+#
+# Layout taken from a file WWB 7.9.0.104 wrote itself (our sdb2 converted in
+# WWB, 04.11.2026), reproduced byte for byte by this writer:
+#   "//@ShureScan\n" + JSON header (tabs, "key" : value, keys sorted)
+#   "\n@Binary:" + one sweep record per sweep:
+#       b"@Swp", id (uint32 BE, from 1), timestamp (uint32 BE, 0),
+#       one int16 BE per point (dB / ScaleFactor... WWB writes whole dB with
+#       "Scale Factor" 1, rounded half away from zero), CRC-16/ARC (BE) of
+#       the record from "@Swp" to the last value
+#   "@Extended:\n" + JSON + "\n@End" + uint32 BE sweeps + uint32 BE curves
+# WWB itself rounds to whole dB when it converts sdb2 to sdb3.
+
+def crc16_arc(data):
+    crc = 0
+    for b in bytearray(data):
+        crc ^= b
+        for _ in range(8):
+            crc = (crc >> 1) ^ 0xA001 if crc & 1 else crc >> 1
+    return crc
+
+
+def _crc16_arc_np(data):
+    """Same as crc16_arc, table driven (70 000 points in ~50 ms)."""
+    table = _crc16_arc_np.table
+    crc = 0
+    for b in bytearray(data):
+        crc = (crc >> 8) ^ table[(crc ^ b) & 0xFF]
+    return crc
+
+
+def _make_table():
+    t = []
+    for i in range(256):
+        c = i
+        for _ in range(8):
+            c = (c >> 1) ^ 0xA001 if c & 1 else c >> 1
+        t.append(c)
+    return t
+
+
+_crc16_arc_np.table = _make_table()
+
+
+def _json_wwb(obj, indent=0):
+    """JSON the way WWB writes it: tabs, '"key" : value', keys sorted,
+    arrays of scalars on one line ('[ "a", "b" ]')."""
+    tab = '\t' * indent
+    if isinstance(obj, dict):
+        items = []
+        for k in sorted(obj):
+            v = obj[k]
+            if isinstance(v, (dict, list)) and not _scalar_list(v):
+                items.append('%s\t"%s" : \n%s\t%s' % (tab, k, tab, _json_wwb(v, indent + 1)))
+            else:
+                items.append('%s\t"%s" : %s' % (tab, k, _json_wwb(v, indent + 1)))
+        return '{\n' + ',\n'.join(items) + '\n' + tab + '}'
+    if isinstance(obj, list):
+        if _scalar_list(obj):
+            return '[ ' + ', '.join(_json_wwb(x) for x in obj) + ' ]'
+        return '[\n' + ',\n'.join(tab + '\t' + _json_wwb(x, indent + 1) for x in obj) + '\n' + tab + ']'
+    if obj is True:
+        return 'true'
+    if obj is False:
+        return 'false'
+    if isinstance(obj, str):
+        return '"%s"' % obj.replace('\\', '\\\\').replace('"', '\\"')
+    return '%d' % obj if isinstance(obj, int) else repr(obj)
+
+
+def _scalar_list(v):
+    return isinstance(v, list) and all(not isinstance(x, (dict, list)) for x in v)
+
+
+def sdb3_bytes(freqs_khz, dB, title, color='#38ad6b', dt=None, scale_factor=1,
+               model=None, creator='rtlsdr-wwb-scanner', curve_name='Default curve'):
+    """Whole sdb3 file for one sweep on a regular grid (kHz)."""
+    freqs_khz = np.asarray(freqs_khz, dtype=np.int64)
+    steps = np.unique(np.diff(freqs_khz))
+    if steps.size != 1 or steps[0] <= 0:
+        raise ValueError('sdb3 needs a regular frequency grid')
+    dt = dt or datetime.datetime.now()
+    header = {
+        'AmplUnits': 'dBm',
+        'BinarySchema': [
+            {'Bytes': 4, 'DataValue': 'start-of-sweep'},
+            {'Bytes': 4, 'DataValue': 'id'},
+            {'Bytes': 4, 'DataValue': 'timestamp'},
+            {'Curve': {'Color': color, 'CoordinationSource': True,
+                       'FreqRanges': [{'EndFreq': int(freqs_khz[-1]), 'StartFreq': int(freqs_khz[0]),
+                                       'StepFreq': int(steps[0])}],
+                       'Name': curve_name, 'ResolutionBandWidth': 0}},
+            {'Bytes': 2, 'DataValue': 'crc16'},
+        ],
+        'BitWidth': 16,
+        'FreqUnits': 'KHz',
+        'NoDataValue': -1400,
+        'PeriodicSpecialSweeps': [
+            {'Interval': 40, 'Type': 'Periodic running peakhold'},
+            {'Interval': 100, 'Type': 'Periodic interval peakhold'},
+        ],
+        'Scale Factor': int(scale_factor),
+        'ScannerModel': SCANNER_MODEL if model is None else model,
+        'ScannerName': '',
+        'StartDate': dt.strftime('%m/%d/%Y'),
+        'StartTime': dt.strftime('%H:%M:%S'),
+        'Title': title,
+        'Version': '1.0.0.0',
+    }
+    v = np.asarray(dB, dtype=np.float64) * scale_factor
+    q = np.sign(v) * np.floor(np.abs(v) + 0.5)          # half away from zero, like WWB
+    q = np.clip(q, -32768, 32767).astype('>i2')
+    rec = b'@Swp' + struct.pack('>I', 1) + struct.pack('>I', 0) + q.tobytes()
+    rec += struct.pack('>H', _crc16_arc_np(rec))
+    ext = {'Creator': creator, 'UserCurveColors': [color]}
+    return (b'//@ShureScan\n' + _json_wwb(header).encode('utf-8') + b'\n@Binary:' + rec
+            + b'@Extended:\n' + _json_wwb(ext).encode('utf-8') + b'\n@End'
+            + struct.pack('>I', 1) + struct.pack('>I', 1))
+
+
+class WWB3Exporter(BaseExporter):
+    """Shure WWB 7 native scan file (.sdb3), whole dB like WWB itself.
+    scale_factor=10 keeps 0.1 dB, but whether WWB reads it is not yet
+    checked (experiment, 04.11.2026)."""
+    _extension = 'sdb3'
+    def __init__(self, **kwargs):
+        super(WWB3Exporter, self).__init__(**kwargs)
+        self.scale_factor = kwargs.get('scale_factor', 1)
+        self.dt = kwargs.get('dt')
+    def build_data(self):
+        grid, values, step = wwb_points(self.spectrum)
+        if np.unique(np.diff(grid)).size != 1:
+            grid, values = wwb_grid(self.spectrum)
+        return sdb3_bytes(grid, values, title=os.path.basename(self.filename),
+                          color=self.spectrum.color.to_hex(), dt=self.dt,
+                          scale_factor=self.scale_factor)
+    def write_file(self):
+        data = self.build_data()
+        with open(self.filename, 'wb') as f:
+            f.write(data)

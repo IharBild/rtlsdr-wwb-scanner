@@ -152,6 +152,11 @@ def check_environment(args):
         'экспорт sdb2 (V11.2)': 'withExtension' in read(os.path.join(qml, 'ExportDialog.qml')),
         'graph.py V11': 'save_to_file_as' in read(os.path.join(base, 'ui', 'pyside', 'graph.py')),
     }
+    m12 = {'экспорт sdb3 (V12)': 'class WWB3Exporter' in read(os.path.join(base, 'file_handlers', 'exporters.py')),
+           'импорт sdb3 (V12)': 'class WWB3Importer' in read(os.path.join(base, 'file_handlers', 'importers.py'))}
+    miss12 = [k for k, v in m12.items() if not v]
+    result('E3c', 'WARN' if miss12 else 'PASS', 'установлены файлы V12 (sdb3, заголовок sdb2 как у WWB 7.9)',
+           ('нет: ' + ', '.join(miss12) + ' - поставьте fix-V12-pip-files.zip') if miss12 else 'все отметки найдены')
     miss11 = [k for k, v in m11.items() if not v]
     result('E3b', 'WARN' if miss11 else 'PASS', 'установлены файлы V11.2 (график, экспорт)',
            ('нет: ' + ', '.join(miss11) + ' - поставьте fix-V11.2-pip-files.zip') if miss11 else 'все отметки найдены')

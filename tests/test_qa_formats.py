@@ -249,3 +249,66 @@ def test_F14_corrupted_database(tmpdir, monkeypatch):
         res = exc
     print('F14 start with corrupted db.json: %r' % (res,))
     assert res is None
+
+
+# F15: sdb3 (WWB 7) - our writer reproduces the file WWB 7.9 wrote itself
+REF_SDB3 = os.path.join(os.path.dirname(__file__), 'reference', 'wwb79_sdb3_from_our_sdb2.sdb3')
+
+
+def test_F15_sdb3_byte_identical_to_wwb():
+    import datetime
+    from wwb_scanner.file_handlers import exporters as ex
+    ref = open(REF_SDB3, 'rb').read()
+    i = ref.index(b'@Binary:') + 8
+    v = np.frombuffer(ref[i + 12:i + 12 + 69401 * 2], '>i2').astype(float)
+    out = ex.sdb3_bytes(np.arange(31000, 1766001, 25), v, title='v11 test no antenna.sdb2',
+                        color='#38ad6b', dt=datetime.datetime(2026, 11, 4, 14, 17, 16),
+                        model='TODO', creator='WWB 7.9.0.104')
+    assert out == ref
+
+
+def test_F16_sdb3_import_wwb_file():
+    sp = BaseImporter.import_file(REF_SDB3)
+    f = np.asarray(sp.sample_data.frequency)
+    y = np.asarray(sp.sample_data['dbFS'])
+    assert f.size == 69401 and f[0] == 31.0 and f[-1] == 1766.0
+    assert y[0] == -99 and np.isfinite(y).all()
+
+
+@pytest.mark.parametrize('sf', [1, 10])
+def test_F17_sdb3_round_trip(tmpdir, sf):
+    from wwb_scanner.file_handlers import exporters as ex
+    sp = make_spectrum(470.0, 480.0)
+    p = str(tmpdir.join('scan.sdb3'))
+    ex.WWB3Exporter(spectrum=sp, filename=p, scale_factor=sf)()
+    back = BaseImporter.import_file(p)
+    a = np.asarray(sp.sample_data['dbFS'])
+    b = np.asarray(back.sample_data['dbFS'])
+    assert np.array_equal(np.asarray(back.sample_data.frequency), np.asarray(sp.sample_data.frequency))
+    assert np.abs(a - b).max() <= 0.5 / sf + 0.05 + 1e-9     # 0.1 dB rounding first, as in sdb2
+    raw = open(p, 'rb').read()
+    i = raw.index(b'@Binary:') + 8
+    j = raw.index(b'@Extended:')
+    assert ex.crc16_arc(raw[i:j - 2]) == int.from_bytes(raw[j - 2:j], 'big')
+
+
+def test_F18_sdb2_header_like_wwb79(tmpdir):
+    """Attributes WWB 7.9 writes: local date without leading zero, time with ms,
+    device ids, band/mode, markers element; date_time = UTC epoch ms."""
+    import datetime
+    import time as _t
+    sp = make_spectrum(470.0, 471.0)
+    p = str(tmpdir.join('scan.sdb2'))
+    dt = datetime.datetime(2026, 11, 4, 14, 21, 22, 182000)
+    from wwb_scanner.file_handlers import exporters as ex
+    ex.WWBExporter(spectrum=sp, filename=p, dt=dt)()
+    root = ET.parse(p).getroot()
+    a = root.attrib
+    assert a['date'] == 'Wed Nov 4 2026' and a['time'] == '14:21:22.182'
+    for k in ('device_id', 'device_type_id', 'band', 'mode', 'model', 'ver', 'id', 'color', 'name'):
+        assert k in a
+    assert root.find('markers') is not None
+    ds = root.find('*/data_set').attrib
+    assert int(ds['date_time']) == int(round(_t.mktime(dt.timetuple()) * 1000 + 182))
+    back = BaseImporter.import_file(p)
+    assert back.sample_data.size == sp.sample_data.size

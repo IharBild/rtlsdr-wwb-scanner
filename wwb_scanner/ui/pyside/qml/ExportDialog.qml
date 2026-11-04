@@ -13,6 +13,7 @@ FileDialog {
     nameFilters: [
         'Shure WWB CSV (*.csv)',
         'Shure WWB native (*.sdb2)',
+        'Shure WWB 7 (*.sdb3)',
         'Numpy Files (*.npz)',
     ]
     property var graphData
@@ -30,7 +31,7 @@ FileDialog {
     function withExtension(url, filt) {
         var s = String(url);
         var low = s.toLowerCase();
-        var exts = ['.csv', '.sdb2', '.npz'];
+        var exts = ['.csv', '.sdb2', '.sdb3', '.npz'];
         for (var i = 0; i < exts.length; i++) {
             if (low.slice(-exts[i].length) === exts[i])
                 return s;

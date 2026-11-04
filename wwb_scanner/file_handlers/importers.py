@@ -110,10 +110,71 @@ class WWBImporter(BaseWWBImporter):
         if ts is not None:
             spectrum.timestamp_utc = float(ts) / 1000.
         else:
-            dt_str = ' '.join([root.get('date'), root.get('time')])
-            dt_fmt = '%a %b %d %Y %H:%M:%S'
-            dt = datetime.datetime.strptime(dt_str, dt_fmt)
-            spectrum.datetime_utc = dt
+            # WWB 7.9 writes 'Wed Nov 4 2026' and '14:21:22.182'
+            dt_str = ' '.join([root.get('date'), root.get('time').split('.')[0]])
+            try:
+                spectrum.datetime_utc = datetime.datetime.strptime(dt_str, '%a %b %d %Y %H:%M:%S')
+            except ValueError:
+                logger.warning('%s: date %r not understood', self.filename, dt_str)
         freqs = np.fromiter((float(t.text) / 1000. for t in freq_set), dtype=np.float64)
         dB = np.fromiter((float(t.text) for t in data_set), dtype=np.float64)
         spectrum.add_sample_set(frequency=freqs, dbFS=dB)
+
+
+class WWB3Importer(BaseImporter):
+    """Shure WWB 7 scan file (.sdb3): JSON header, binary sweeps (big-endian),
+    see exporters.sdb3_bytes. Several sweeps -> peak hold (maximum per point),
+    like WWB shows a scan made with a Shure receiver."""
+    _extension = 'sdb3'
+    def load_file(self):
+        with open(self.filename, 'rb') as f:
+            return f.read()
+    def parse_file_data(self):
+        import json
+        import struct
+        b = self.file_data
+        if not b.startswith(b'//@ShureScan'):
+            raise ValueError('%s: not a WWB sdb3 file' % os.path.basename(self.filename))
+        i = b.index(b'@Binary:')
+        header = json.loads(b[len(b'//@ShureScan'):i].decode('utf-8'))
+        j = b.rfind(b'@Extended:')
+        body = b[i + len(b'@Binary:'):j if j > 0 else len(b)]
+        width = int(header.get('BitWidth', 16)) // 8
+        dtype = {1: '>i1', 2: '>i2', 4: '>i4'}[width]
+        scale = float(header.get('Scale Factor', 1)) or 1.
+        nodata = header.get('NoDataValue')
+        layout, freqs = [], []
+        for item in header['BinarySchema']:
+            if 'Curve' in item:
+                n = 0
+                for r in item['Curve']['FreqRanges']:
+                    f = np.arange(r['StartFreq'], r['EndFreq'] + r['StepFreq'] / 2., r['StepFreq'])
+                    freqs.append(f)
+                    n += f.size
+                layout.append(('curve', n * width))
+            else:
+                layout.append((item.get('DataValue'), int(item['Bytes'])))
+        rec = sum(size for _, size in layout)
+        nsweeps = len(body) // rec
+        if nsweeps < 1:
+            raise ValueError('%s: no sweeps' % os.path.basename(self.filename))
+        sweeps = []
+        for k in range(nsweeps):
+            pos = k * rec
+            for name, size in layout:
+                if name == 'curve':
+                    sweeps.append(np.frombuffer(body[pos:pos + size], dtype=dtype).astype(np.float64))
+                pos += size
+        data = np.vstack(sweeps)
+        if nodata is not None:
+            data[data == nodata] = np.nan
+        dB = np.nanmax(data, axis=0) / scale
+        dB[~np.isfinite(dB)] = -140.
+        f_khz = np.concatenate(freqs)
+        unit = str(header.get('FreqUnits', 'KHz')).lower()
+        f_mhz = f_khz / {'khz': 1000., 'mhz': 1., 'hz': 1e6}.get(unit, 1000.)
+        spectrum = self.spectrum
+        spectrum.name = header.get('Title') or os.path.basename(self.filename)
+        if nsweeps > 1:
+            logger.info('%s: %d sweeps, peak hold used', self.filename, nsweeps)
+        spectrum.add_sample_set(frequency=f_mhz, dbFS=dB)

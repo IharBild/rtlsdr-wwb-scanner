@@ -380,7 +380,7 @@ class SpectrumGraphData(QtQuick.QQuickItem):
             traceback.print_exc()
             sys.stdout.flush()
 
-EXPORT_EXTENSIONS = ('.csv', '.sdb2', '.npz')
+EXPORT_EXTENSIONS = ('.csv', '.sdb2', '.sdb3', '.npz')
 
 
 def add_export_extension(filename, name_filter):
@@ -389,7 +389,7 @@ def add_export_extension(filename, name_filter):
     if os.path.splitext(filename)[1].lower() in EXPORT_EXTENSIONS:
         return filename
     nf = (name_filter or '').lower()
-    for ext in ('.sdb2', '.npz', '.csv'):
+    for ext in ('.sdb2', '.sdb3', '.npz', '.csv'):
         if '*' + ext in nf:
             return filename + ext
     return filename + '.csv'
