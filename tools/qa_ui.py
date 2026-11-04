@@ -45,9 +45,13 @@ class UIFakeRtlSdr(sim.FakeRtlSdr):
         return 6
 
 
-fake_mod = types.ModuleType('rtlsdr')
-fake_mod.RtlSdr = UIFakeRtlSdr
-sys.modules['rtlsdr'] = fake_mod
+# QA_UI_REAL=1: the real dongle through the installed pyrtlsdr (system test
+# on the user's PC); otherwise the simulator
+REAL = os.environ.get('QA_UI_REAL') == '1'
+if not REAL:
+    fake_mod = types.ModuleType('rtlsdr')
+    fake_mod.RtlSdr = UIFakeRtlSdr
+    sys.modules['rtlsdr'] = fake_mod
 
 from PySide2 import QtCore, QtQml           # noqa: E402
 from PySide2.QtWidgets import QApplication  # noqa: E402
@@ -137,6 +141,8 @@ def main():
           % (time.time() - t0, QML_WARNINGS[:3]))
     if not roots:
         return 1
+    if os.environ.get('QA_UI_ONLY_U1') == '1':        # smoke: the window loads
+        return 0 if all(RESULTS) else 1
     win = roots[0]
     win.show()
     pump(app, 1.0)
@@ -148,6 +154,9 @@ def main():
           % (len(scanners), len(controls), len(configs)))
     si = scanners[0]
     cfg = si.scanConfig
+    if REAL:
+        si.gain = float(os.environ.get('QA_UI_GAIN', '33.8'))
+        print('real dongle, gain %.1f dB' % si.gain, flush=True)
     cfg.startFreq = start
     cfg.endFreq = end
     cfg.windowType = 'hann'
@@ -347,6 +356,9 @@ def v17_checks(app, win, controls, si):
     check('U15', bool(info) and info.get('spurs') and raw is not None and raw.size == sp.sample_data.size,
           'clean scan info %s' % (info,))
     # U16: calibration (shortened range in the simulator), then a levelled scan
+    if REAL:
+        check('U16', True, 'skipped with the real dongle (calibration needs the antenna removed)')
+        return
     old = cleanup.CALIBRATION_RANGE_MHZ
     cleanup.CALIBRATION_RANGE_MHZ = (400.0, 720.0)
     hubs = [o for o in win.findChildren(QtCore.QObject) if o.metaObject().indexOfProperty('logFile') >= 0]
@@ -375,6 +387,19 @@ def v17_checks(app, win, controls, si):
         print('QML warnings so far:', QML_WARNINGS[:5])
 
 
+def _save_coverage():
+    """os._exit skips coverage's own exit hook: save it here when measured."""
+    try:
+        import coverage
+        cov = coverage.Coverage.current()
+        if cov is not None:
+            cov.stop()
+            cov.save()
+    except Exception:
+        pass
+
+
 if __name__ == '__main__':
     code = main()
+    _save_coverage()
     os._exit(code)
