@@ -19,6 +19,11 @@ OUR_CSV = sorted(glob.glob(os.path.join(ATT, '*SDR_RTL*.csv')))
 need_files = pytest.mark.skipif(not WWB_REF, reason='user files not available')
 
 
+def _name(p):
+    # pytest 7 passes NOTSET for an empty parameter list (no user files)
+    return os.path.basename(p) if isinstance(p, str) else str(p)
+
+
 def make_spectrum(start=470.0, end=480.0, step=0.025, seed=0):
     f = np.round(np.arange(start, end + step / 2, step), 6)
     rng = np.random.RandomState(seed)
@@ -86,7 +91,7 @@ def test_F4_wwb_export_clipped_to_30_2000(tmpdir):
 
 # F5/F6: import every CSV we have (ours in MHz and kHz, WWB references)
 @need_files
-@pytest.mark.parametrize('path', OUR_CSV + WWB_REF, ids=os.path.basename)
+@pytest.mark.parametrize('path', OUR_CSV + WWB_REF, ids=_name)
 def test_F5_F6_import_all_user_csv(path):
     t0 = time.time()
     sp = BaseImporter.import_file(path)
@@ -102,7 +107,7 @@ def test_F5_F6_import_all_user_csv(path):
 
 # F7: round trip: our own kHz CSV -> import -> export must give the same bytes
 @need_files
-@pytest.mark.parametrize('path', [p for p in OUR_CSV if 'NEW5' in p or 'NEW6' in p], ids=os.path.basename)
+@pytest.mark.parametrize('path', [p for p in OUR_CSV if 'NEW5' in p or 'NEW6' in p], ids=_name)
 def test_F7_round_trip_identical(tmpdir, path):
     orig = open(path, 'rb').read()
     # export keeps only 30-2000 MHz (WWB limit); compare that part

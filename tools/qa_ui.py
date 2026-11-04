@@ -69,8 +69,8 @@ def check(name, ok, detail):
 
 
 def handler(mode, context, message):
-    if 'Implicitly defined onFoo' in message:
-        return
+    if 'Implicitly defined onFoo' in message or 'QFontDatabase' in message:
+        return      # QFontDatabase: no font folder for the offscreen platform on Windows (harmless)
     if mode == QtCore.QtFatalMsg:
         sys.stderr.write('QT FATAL: %s\n' % message)
     if mode in (QtCore.QtWarningMsg, QtCore.QtCriticalMsg, QtCore.QtFatalMsg):

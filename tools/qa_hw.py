@@ -383,8 +383,13 @@ def fm_raster(f, y):
     if ff.size < 100:
         return None
     med = np.median(yy)
+    # strong stations only (20 dB over the floor): a weak FM station's maximum
+    # in 25 kHz bins wanders +-25/50 kHz with the modulation
     peaks = [i for i in range(2, ff.size - 2)
-             if yy[i] > med + 10 and yy[i] == yy[i - 2:i + 3].max()]
+             if yy[i] > med + 20 and yy[i] == yy[i - 2:i + 3].max()]
+    # the 4 strongest decide (weaker peaks can be off-raster transmitters or
+    # intermodulation of strong ones, e.g. 2 x 97.7 - 98.3 = 97.1 MHz)
+    peaks = sorted(peaks, key=lambda i: -yy[i])[:4]
     on = sum(1 for i in peaks if abs(round(ff[i] * 10) / 10. - ff[i]) < 0.001)
     return len(peaks), on
 
@@ -493,7 +498,7 @@ def h2_three_scans(lab):
     # floor and stitching on the first scan, in the quietest 50 MHz window
     f, y = scans[0]['f'], scans[0]['y']
     best = None
-    for lo in np.arange(470, 751, 10):
+    for lo in [x for x in np.arange(470, 751, 10) if x + 50 <= 703 or x >= 748]:   # not LTE 700 uplink
         q = quiet_floor(f, y, lo, lo + 50)
         if q and (best is None or q['share_signal'] < best[1]['share_signal']):
             best = (lo, q)
@@ -523,6 +528,7 @@ def h2_three_scans(lab):
 
 @guard('H3', 'полный скан 31-1766')
 def h3_full(lab):
+    import numpy as np
     s = lab.scan('h3_full', 31, 1766, timeout=1800)
     lab.save(s, 'scan_31-1766')
     f, y = s['f'], s['y']
@@ -541,19 +547,24 @@ def h3_full(lab):
     fm = fm_raster(f, y)
     if fm:
         n, on = fm
-        result('H3c', 'PASS' if n and on == n else ('WARN' if n else 'INFO'), 'частота: FM на сетке 100 кГц',
-               '%d из %d станций точно на сетке' % (on, n))
-    tv = tv_edges(f, y)
+        result('H3c', 'PASS' if n and on == n else ('WARN' if n else 'INFO'), 'частота: сильные FM на сетке 100 кГц',
+               '%d из %d самых сильных станций точно на сетке' % (on, n))
+    tv = tv_edges(f, y, 470., 694.)      # DVB-T in Poland; 703-788 is LTE 700
     if tv:
         r, fa, nr, nf = tv
         sym = abs(r + fa) / 2 <= 0.1      # rough: FM raster (H3c) is the exact check
-        result('H3d', 'PASS' if sym else 'WARN', 'частота: края ТВ-каналов симметричны',
+        result('H3d', 'PASS' if sym else 'INFO', 'частота: края ТВ-каналов 470-694 (грубо, +-0,15 МГц)',
                'начала %+.3f МГц (%d), концы %+.3f МГц (%d); сдвиг частоты ~%+.3f МГц'
                % (r, nr, fa, nf, (r + fa) / 2))
-    q = quiet_floor(f, y, 1000, 1700)
-    if q:
-        result('H3e', 'PASS' if q['std'] <= 0.5 else 'WARN', 'шум 1000-1700 МГц',
-               'медиана %.1f дБ, std %.2f дБ (у NEW6-2 0,30 на всей полосе)' % (q['median'], q['std']))
+    # the dongle's own floor falls ~1.7 dB from 1000 to 1700 MHz, so the
+    # spread is taken per 100 MHz (whole band std 0.65-0.72 is that slope)
+    parts = [quiet_floor(f, y, lo, lo + 100) for lo in range(1000, 1700, 100)]
+    parts = [p for p in parts if p]
+    if parts:
+        sd = float(np.median([p['std'] for p in parts]))
+        med = float(np.median([p['median'] for p in parts]))
+        result('H3e', 'PASS' if sd <= 0.5 else 'WARN', 'шум 1000-1700 МГц (по 100 МГц)',
+               'медиана %.1f дБ, std %.2f дБ (без антенны у V10 ~0,2-0,35)' % (med, sd))
     p_csv = os.path.join(lab.outdir, 'scan_31-1766.csv')
     problems, fmin, fmax, n = csv_format(p_csv)
     result('H3f', 'FAIL' if problems else 'PASS', 'CSV для WWB (полный)',
@@ -666,7 +677,9 @@ def h8_no_antenna(lab):
     edge = [p for p in other if p[0] > 1700]
     other = [p for p in other if p[0] <= 1700]
     result('H8b', 'WARN' if other else 'PASS', 'все пики без антенны - кратные 28,8 МГц',
-           'кратных 28,8: %d (%s); других: %s%s' % (
+           '%sкратных 28,8: %d (%s); других: %s%s' % (
+               ('ЧУЖИЕ СИГНАЛЫ ПРОНИКАЮТ БЕЗ АНТЕННЫ - скорее всего включённые рядом передатчики '
+                '(радиомикрофоны/IEM, телефон); для чистого замера выключите их или отнесите. ') if other else '',
                len(own), ', '.join('%.1f %+.1f' % p for p in own[:8]),
                ', '.join('%.3f %+.1f' % p for p in other[:10]) or 'нет',
                ('; 1700-1766 (край тюнера / LTE 1800 uplink, не считаются): ' + ', '.join('%.3f' % p[0] for p in edge)) if edge else ''))
