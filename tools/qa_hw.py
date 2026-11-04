@@ -146,6 +146,15 @@ def check_environment(args):
     result('E3', 'FAIL' if missing else 'PASS', 'установлены файлы V9/V10',
            ('нет: ' + ', '.join(missing)) if missing else 'все отметки найдены')
     qml = os.path.join(base, 'ui', 'pyside', 'qml')
+    m13 = 'TINYDB4' in read(os.path.join(base, 'utils', 'dbstore.py'))
+    try:
+        import tinydb
+        tdb = getattr(tinydb, '__version__', '?')
+    except Exception:
+        tdb = '?'
+    result('E3d', 'PASS' if m13 or not tdb.startswith('4') else 'FAIL', 'база сканов работает с вашей tinydb (V13)',
+           'tinydb %s; %s' % (tdb, 'dbstore.py V13 установлен' if m13 else
+                              'dbstore.py старый: с tinydb 4 не работают повторное сохранение и чтение сканов из базы - поставьте fix-V13'))
     m11 = {
         'график без анимации': 'NoAnimation' in read(os.path.join(qml, 'Graph.qml'))
                                and 'SeriesAnimations' not in read(os.path.join(qml, 'Graph.qml')),
@@ -505,7 +514,9 @@ def h2_three_scans(lab):
     if best:
         lo, q = best
         rip = tile_ripple(f, y, lo, lo + 50)
-        st = 'PASS' if q['std'] <= 0.5 and (rip or 0) <= 0.8 else 'WARN'
+        # with an antenna there is often no truly empty 50 MHz in 470-800
+        # (DVB-T, LTE 700, wireless systems), so a rougher floor is INFO
+        st = 'PASS' if q['std'] <= 0.5 and (rip or 0) <= 0.8 else ('INFO' if q['std'] <= 1.0 else 'WARN')
         result('H2b', st, 'ровность шума (самая тихая полоса %.0f-%.0f МГц)' % (lo, lo + 50),
                'std %.2f дБ (у V7 0,16-0,21), рябь на периоде плитки %s дБ (у V7 0,4-0,7), макс. скачок %.2f дБ'
                % (q['std'], '%.2f' % rip if rip is not None else '?', q['step_max']))

@@ -8,6 +8,37 @@ from wwb_scanner.utils import numpyjson
 
 APP_PATH = os.path.expanduser('~/wwb_scanner_data')
 
+# setup.cfg pins tinydb 3.13, but pip happily installs tinydb 4 (the user
+# has 4.8.0). TinyDB 4 renamed eid -> doc_id, eids= -> doc_ids= and has no
+# Table._last_id. These helpers work with both.
+TINYDB4 = int(getattr(tinydb, '__version__', '3').split('.')[0]) >= 4
+
+
+def doc_id(doc):
+    """id of a stored document (Document.doc_id in 4, Element.eid in 3)"""
+    if doc is None:
+        return None
+    return getattr(doc, 'doc_id', None) if TINYDB4 else doc.eid
+
+
+def get_by_id(table, i):
+    return table.get(doc_id=i) if TINYDB4 else table.get(eid=i)
+
+
+def update_ids(table, data, ids):
+    return table.update(data, doc_ids=ids) if TINYDB4 else table.update(data, eids=ids)
+
+
+def remove_ids(table, ids):
+    return table.remove(doc_ids=ids) if TINYDB4 else table.remove(eids=ids)
+
+
+def last_id(table):
+    if not TINYDB4:
+        return table._last_id
+    ids = [d.doc_id for d in table.all()]
+    return max(ids) if ids else 0
+
 class JSONStorage(tinydb.JSONStorage):
     def read(self):
         # Get the file size
@@ -81,23 +112,25 @@ class DBStore(object):
             new_table = self.scan_db.table(table_name)
             eids = []
             for item in old_table.all():
-                eids.append(item.eid)
+                eids.append(doc_id(item))
                 new_table.insert(item)
-            old_table.remove(eids=eids)
-            self.db.purge_table(table_name)
+            remove_ids(old_table, eids)
+            if TINYDB4:
+                self.db.drop_table(table_name)
+            else:
+                self.db.purge_table(table_name)
     def add_scan_config(self, config, force_insert=False):
         if config.get('datetime') is None:
             config['datetime'] = datetime.datetime.utcnow()
         table = self.db.table('scan_configs')
         if config.get('eid') is not None:
-            dbconfig = table.get(eid=config.eid)
+            dbconfig = get_by_id(table, config.eid)
         else:
             dbconfig = table.get(where('datetime') == config['datetime'])
         if dbconfig is not None:
             if force_insert:
-                eids = [dbconfig.eid]
-                table.update(config._serialize(), eids=eids)
-            eid = dbconfig.eid
+                update_ids(table, config._serialize(), [doc_id(dbconfig)])
+            eid = doc_id(dbconfig)
         else:
             eid = table.insert(config._serialize())
         config.eid = eid
@@ -106,11 +139,11 @@ class DBStore(object):
         if kwargs.get('datetime'):
             dbconfig = table.get(where('datetime')==kwargs.get('datetime'))
         elif kwargs.get('eid'):
-            dbconfig = table.get(eid=kwargs.get('eid'))
+            dbconfig = get_by_id(table, kwargs.get('eid'))
         elif kwargs.get('name'):
             dbconfig = table.get(where('name')==kwargs.get('name'))
-        elif table._last_id > 0:
-            dbconfig = table.get(eid=table._last_id)
+        elif last_id(table) > 0:
+            dbconfig = get_by_id(table, last_id(table))
         else:
             dbconfig = None
         return dbconfig
@@ -125,7 +158,7 @@ class DBStore(object):
         table = self.scan_db.table('scans_performed')
         if spectrum.eid is not None:
             eid = spectrum.eid
-            table.update(data, eids=[eid])
+            update_ids(table, data, [eid])
         else:
             eid = table.insert(data)
             spectrum.eid = eid
@@ -136,14 +169,14 @@ class DBStore(object):
         scan_data = {}
         for scan in scans:
             excluded = ['samples', 'sample_data', 'center_frequencies']
-            scan_data[scan.eid] = {key:scan[key] for key in scan.keys()
+            scan_data[doc_id(scan)] = {key:scan[key] for key in scan.keys()
                                     if key not in excluded}
         return scan_data
     def get_scan(self, eid):
         table = self.scan_db.table('scans_performed')
-        return table.get(eid=eid)
+        return get_by_id(table, eid)
     def update_scan(self, eid, **kwargs):
         table = self.scan_db.table('scans_performed')
-        table.update(kwargs, eids=[eid])
+        update_ids(table, kwargs, [eid])
 
 db_store = DBStore()

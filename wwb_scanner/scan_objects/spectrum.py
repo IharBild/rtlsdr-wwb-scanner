@@ -291,7 +291,8 @@ class Spectrum(JSONMixin):
             assert eid is not None
             dbdata = db_store.get_scan(eid)
         else:
-            eid = dbdata.eid
+            from wwb_scanner.utils.dbstore import doc_id
+            eid = doc_id(dbdata)
         return cls.from_json(dbdata, eid=eid)
     def _serialize(self):
         d = {attr: getattr(self, attr) for attr in self._serialize_attrs}
