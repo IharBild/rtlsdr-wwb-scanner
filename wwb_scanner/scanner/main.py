@@ -144,8 +144,18 @@ class ScannerBase(JSONMixin):
             self.save_to_dbstore()
             print('saved, total %.1f s' % (time.time() - t0), flush=True)
             lo, hi = self.config.scan_range
-            logging.getLogger('wwb_scanner.status').info(
-                'Scan %.1f-%.1f MHz done in %.0f s', lo, hi, time.time() - t_start)
+            coll = self.sample_collection
+            if getattr(coll, 'aborted', False):
+                logging.getLogger('wwb_scanner.status').info(
+                    'Scan %.1f-%.1f MHz stopped after %.0f s (dongle error), measured part kept',
+                    lo, hi, time.time() - t_start)
+            elif getattr(coll, 'missing_tiles', None):
+                logging.getLogger('wwb_scanner.status').info(
+                    'Scan %.1f-%.1f MHz done in %.0f s, %d tile(s) without data',
+                    lo, hi, time.time() - t_start, len(coll.missing_tiles))
+            else:
+                logging.getLogger('wwb_scanner.status').info(
+                    'Scan %.1f-%.1f MHz done in %.0f s', lo, hi, time.time() - t_start)
     def stop_scan(self):
         if not self._running.is_set():
             # not started yet or already finished: nothing to wait for

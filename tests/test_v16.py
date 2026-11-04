@@ -61,3 +61,11 @@ def test_compare_tool_self_and_shift(tmpdir):
     text, _ = compare_wwb.compare(str(a), str(b))
     assert 'shifted by -50 kHz' in text
     assert '+6.0' in text
+
+
+def test_status_says_stopped_after_dongle_error(monkeypatch, tmpdir, caplog):
+    caplog.set_level(logging.INFO, logger='wwb_scanner')
+    faults = [sim.Fault('read_samples', 'close', lambda n, f: n == 10)]
+    sim.run_scan(monkeypatch, tmpdir, 470, 520, sdr_kwargs={'faults': faults})
+    status = [r.getMessage() for r in caplog.records if r.name == 'wwb_scanner.status']
+    assert status and 'stopped after' in status[-1] and 'done' not in status[-1], status

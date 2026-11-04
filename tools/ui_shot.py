@@ -3,7 +3,6 @@ Run under Xvfb (xvfb-run). Uses the installed/importable wwb_scanner and its QML
 import os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 os.environ.setdefault('QT_QUICK_BACKEND', 'software')
-os.environ.setdefault('QT_QUICK_CONTROLS_STYLE', 'Fusion')
 import qa_ui                                   # portable QML copy + fake dongle
 from PySide2 import QtCore, QtQml
 from PySide2.QtWidgets import QApplication
@@ -18,8 +17,8 @@ def main():
     app = QApplication(sys.argv[:1])
     app.setOrganizationName('rtlsdr-wwb-scanner-shot')
     app.setApplicationName('wwb_scanner')
-    if hasattr(ui_main, 'apply_window_theme'):
-        ui_main.apply_window_theme(app)
+    if hasattr(ui_main, 'apply_style'):
+        ui_main.apply_style()
     qml_dir = qa_ui.portable_qml_copy()
     engine = QtQml.QQmlApplicationEngine()
     engine.setBaseUrl(str(qml_dir)); engine.addImportPath(str(qml_dir))

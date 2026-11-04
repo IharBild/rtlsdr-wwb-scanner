@@ -15,6 +15,20 @@ from PySide2.QtQuick import QQuickView
 from wwb_scanner.ui.pyside import get_resource_filename
 from wwb_scanner.ui.pyside import device_config, graph, scanner
 
+def apply_style():
+    """Fusion style for Qt Quick Controls 2: compact desktop controls that
+    take all colours from the window palette (main.qml, dark/light).
+    QQuickStyle affects only Controls 2; the QT_QUICK_CONTROLS_STYLE variable
+    is also read by Controls 1 (file dialogs), which has no Fusion and warns.
+    A style given in QT_QUICK_CONTROLS_STYLE wins."""
+    if os.environ.get('QT_QUICK_CONTROLS_STYLE'):
+        return
+    try:
+        from PySide2.QtQuickControls2 import QQuickStyle
+        QQuickStyle.setStyle('Fusion')
+    except Exception:
+        os.environ['QT_QUICK_CONTROLS_STYLE'] = 'Fusion'
+
 def register_qml_types():
     from wwb_scanner.ui.pyside import status
     status.register_qml_types()
@@ -51,11 +65,8 @@ def run(argv=None):
     if argv is None:
         argv = sys.argv
     logger.info('starting application')
-    # Fusion: compact desktop controls that take all colours from the
-    # window palette (main.qml sets the dark/light palette). Can be
-    # overridden with the QT_QUICK_CONTROLS_STYLE environment variable.
-    os.environ.setdefault('QT_QUICK_CONTROLS_STYLE', 'Fusion')
     app = QApplication(argv)
+    apply_style()
     app.setOrganizationName('rtlsdr-wwb-scanner')
     app.setApplicationName('wwb_scanner')
     app.aboutToQuit.connect(on_app_quit)

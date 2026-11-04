@@ -336,6 +336,7 @@ class Lab(object):
                           else sum(1 for x in coll.sample_sets.values()
                                    if getattr(x, 'powers', None) is not None)),   # before V10
             'missing': list(getattr(coll, 'missing_tiles', []) or []),
+            'overload': list(getattr(coll, 'overload', []) or []),
             'aborted': bool(getattr(coll, 'aborted', False)),
             'error': getattr(sc, 'error', None),
             'pll_late': int(m.group(1)) if m else None, 'pll_unlocked': int(m.group(2)) if m else None,
@@ -528,16 +529,29 @@ def h2_three_scans(lab):
         result('H2b', st, 'ровность шума (самая тихая полоса %.0f-%.0f МГц)' % (lo, lo + 50),
                'std %.2f дБ (у V7 0,16-0,21), рябь на периоде плитки %s дБ (у V7 0,4-0,7), макс. скачок %.2f дБ'
                % (q['std'], '%.2f' % rip if rip is not None else '?', q['step_max']))
-    # repeatability between scan 1 and 2 on common grid, quiet points only
+    # repeatability between scan 1 and 2 on common grid, quiet points only;
+    # tiles where the ADC clipped (V16 overload detector) are left out: a
+    # clipped tile is not repeatable by nature
     a, b = scans[0], scans[1]
+    ov = (a.get('overload') or []) + (b.get('overload') or [])
     if a['f'].size and a['f'].size == b['f'].size and np.allclose(a['f'], b['f']):
         d = a['y'] - b['y']
         quiet = a['y'] < np.median(a['y']) + 3
-        result('H2c', 'PASS' if np.std(d[quiet]) <= 0.5 else 'WARN', 'повторяемость скан 1 / скан 2',
-               'тихие точки: среднее %+.2f дБ, std %.2f дБ (у NEW6-2 0,12); все точки std %.2f дБ'
-               % (np.mean(d[quiet]), np.std(d[quiet]), np.std(d)))
+        clean = np.ones(a['f'].size, bool)
+        for lo, hi, _ in ov:
+            clean &= ~((a['f'] >= lo - 1) & (a['f'] <= hi + 1))
+        m = quiet & clean
+        sd = float(np.std(d[m])) if m.any() else float('nan')
+        result('H2c', 'PASS' if sd <= 0.5 else 'WARN', 'повторяемость скан 1 / скан 2',
+               'тихие точки вне перегрузки: среднее %+.2f дБ, std %.2f дБ (у NEW6-2 0,12); с перегрузкой %.2f; '
+               'исключено %.0f %% точек' % (np.mean(d[m]), sd, np.std(d[quiet]), 100. * (1 - clean.mean())))
     else:
         result('H2c', 'FAIL', 'повторяемость', 'сетки частот сканов не совпали')
+    rngs = sorted(set('%.1f-%.1f' % (lo, hi) for lo, hi, _ in ov))
+    result('H2e', 'WARN' if rngs else 'PASS', 'перегрузка АЦП (470-800, 3 скана)',
+           ('сигнал упирается в предел 8 бит на %s МГц, до %.0f %% отсчётов - выключите/отнесите свои '
+            'передатчики или уменьшите усиление' % (', '.join(rngs[:8]), 100. * max(r for _, _, r in ov)))
+           if rngs else 'нет')
     p_csv = os.path.join(lab.outdir, 'scan_470-800_1.csv')
     problems, fmin, fmax, n = csv_format(p_csv)
     result('H2d', 'FAIL' if problems else 'PASS', 'CSV для WWB (470-800)',

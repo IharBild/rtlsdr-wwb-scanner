@@ -74,7 +74,7 @@ Item {
         root.maskedX = maskedX;
         root.maskedWidth = maskedWidth;
         // zoomed far out the boxes are a few pixels wide: hide them
-        root.visible = root.width >= 6;
+        root.visible = root.width >= 12;
     }
 
     Rectangle {
