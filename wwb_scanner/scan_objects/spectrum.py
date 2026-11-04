@@ -293,6 +293,10 @@ class Spectrum(JSONMixin):
         else:
             from wwb_scanner.utils.dbstore import doc_id
             eid = doc_id(dbdata)
+            if dbdata.get('sample_data') is None and dbdata.get('sample_data_file'):
+                dbdata = db_store.get_scan(eid)       # V14: points in scans/*.npz
+        dbdata = dict(dbdata)
+        dbdata.pop('sample_data_file', None)
         return cls.from_json(dbdata, eid=eid)
     def _serialize(self):
         d = {attr: getattr(self, attr) for attr in self._serialize_attrs}

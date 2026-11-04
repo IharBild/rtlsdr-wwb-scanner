@@ -1,5 +1,8 @@
 import os
 import datetime
+import time
+
+import numpy as np
 
 import tinydb
 from tinydb import TinyDB, where
@@ -77,7 +80,14 @@ class JSONStorage(tinydb.JSONStorage):
 
 class DBStore(object):
     DB_PATH = os.path.join(APP_PATH, 'db.json')
-    SCAN_DB_PATH = os.path.join(APP_PATH, 'scan_db.json')
+    # V14: the scan database holds only the description of each scan; the
+    # points are in <folder of this file>/scans/*.npz (File > Import opens
+    # them). Before V14 every scan (4.7 MB of JSON for 31-1766 MHz) was inside
+    # scan_db.json and TinyDB re-read and re-wrote the whole file on every
+    # save: 152 scans = 271 MB, ~11 s after each scan. The old file is left
+    # as it is (tools/migrate_scan_db.py moves its scans to the new layout).
+    SCAN_DB_PATH = os.path.join(APP_PATH, 'scan_index.json')
+    LEGACY_SCAN_DB_PATH = os.path.join(APP_PATH, 'scan_db.json')
     TABLES = ['scan_configs', 'scans_performed', 'scans_imported']
     def __init__(self):
 
@@ -147,6 +157,29 @@ class DBStore(object):
         else:
             dbconfig = None
         return dbconfig
+    @property
+    def scans_dir(self):
+        return os.path.join(os.path.dirname(self.SCAN_DB_PATH), 'scans')
+    def _scan_file_name(self, eid, data, sample_data):
+        ts = data.get('timestamp_utc') or time.time()
+        stamp = time.strftime('%Y%m%d-%H%M%S', time.localtime(ts))
+        rng = ''
+        try:
+            f = sample_data['frequency']
+            if f.size:
+                rng = '_%g-%gMHz' % (round(float(f.min()), 3), round(float(f.max()), 3))
+        except Exception:
+            pass
+        return 'scan_%05d_%s%s.npz' % (eid, stamp, rng)
+    def _write_points(self, eid, data, sample_data, name=None):
+        if not os.path.isdir(self.scans_dir):
+            os.makedirs(self.scans_dir)
+        name = name or self._scan_file_name(eid, data, sample_data)
+        path = os.path.join(self.scans_dir, name)
+        tmp = path + '.tmp.npz'
+        np.savez_compressed(tmp, sample_data=sample_data)
+        os.replace(tmp, path)
+        return name
     def add_scan(self, spectrum, scan_config=None):
         if scan_config is None:
             scan_config = spectrum.scan_config
@@ -155,13 +188,20 @@ class DBStore(object):
                 self.add_scan_config(scan_config)
             spectrum.scan_config_eid = scan_config.eid
         data = spectrum._serialize()
+        sd = data.pop('sample_data', None)
+        points = getattr(sd, 'data', sd)
         table = self.scan_db.table('scans_performed')
         if spectrum.eid is not None:
             eid = spectrum.eid
-            update_ids(table, data, [eid])
+            old = get_by_id(table, eid)
+            name = old.get('sample_data_file') if old is not None else None
         else:
             eid = table.insert(data)
             spectrum.eid = eid
+            name = None
+        if points is not None:
+            data['sample_data_file'] = self._write_points(eid, data, points, name)
+        update_ids(table, data, [eid])
         return eid
     def get_all_scans(self):
         table = self.scan_db.table('scans_performed')
@@ -174,7 +214,16 @@ class DBStore(object):
         return scan_data
     def get_scan(self, eid):
         table = self.scan_db.table('scans_performed')
-        return get_by_id(table, eid)
+        rec = get_by_id(table, eid)
+        if rec is None:
+            return None
+        rec = dict(rec)
+        name = rec.get('sample_data_file')
+        if name:
+            from wwb_scanner.scan_objects.samplearray import SampleArray
+            with np.load(os.path.join(self.scans_dir, name)) as z:
+                rec['sample_data'] = SampleArray(data=z['sample_data'])
+        return rec
     def update_scan(self, eid, **kwargs):
         table = self.scan_db.table('scans_performed')
         update_ids(table, kwargs, [eid])
