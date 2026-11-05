@@ -136,16 +136,17 @@ def pc_environment():
     miss = [v for v, ok in vers if not ok]
     R.add('PC2', 'SANITY', 'FAIL' if miss else 'PASS', 'установлены все версии V9 ... V17',
           '%s; %s' % (root, ('НЕТ: ' + ' '.join(miss)) if miss else 'все'))
-    man = os.path.join(TOOLS, 'manifest_V17.json')
+    man = Q.latest_manifest(TOOLS)
     if os.path.exists(man):
         with io.open(man, encoding='utf-8') as fh:
             m = json.load(fh)
         missing, changed, extra = Q.compare_manifest(root, m['files'])
-        R.add('PC3', 'SANITY', 'PASS' if not (missing or changed) else 'WARN',
+        R.add('PC3', 'SANITY', 'WARN' if (missing or changed) else ('INFO' if extra else 'PASS'),
               'файлы программы совпадают с выпуском %s (SHA-256)' % m.get('release'),
               'нет %d %s; отличаются %d %s; лишние %d %s%s' % (
-                  len(missing), missing[:3], len(changed), changed[:5], len(extra), extra[:3],
-                  ' - установка смешана или изменена, переустановите архивы по порядку' if (missing or changed) else ''))
+                  len(missing), missing[:3], len(changed), changed[:5], len(extra), extra[:6],
+                  (' - установка смешана или изменена, переустановите архивы по порядку' if (missing or changed) else '')
+                  + (' - лишние файлы не мешают; резервные копии лучше хранить вне папки wwb_scanner' if extra else '')))
     return True
 
 
@@ -346,14 +347,14 @@ def status_of(tid):
 def pc_acceptance(args, out):
     def ev(ids):
         got = [(i, status_of(i)[0]) for i in ids]
-        have = [s for _, s in got if s]
+        have = [s for _, s in got if s and s not in ('INFO', 'SKIP', 'MANUAL')]
         if not have:
             return 'MANUAL', got
         if 'FAIL' in have:
             return 'FAIL', got
         if 'WARN' in have:
             return 'WARN', got
-        return ('PASS' if len(have) == len(got) else 'PARTIAL'), got
+        return ('PASS' if len(have) == len(got) else 'PARTIAL'), got   # INFO = not proven
     crit = [
         ('PAC1', 'Скорость на донгле: 470-800 <= 40 с, полный 31-1766 <= 180 с', ['HW.H2a', 'HW.H3a']),
         ('PAC3', 'Повторяемость тихих точек +-0,5 дБ', ['HW.H2c']),

@@ -169,6 +169,11 @@ def check_environment(args):
     miss16 = [k for k, v in m16.items() if not v]
     result('E3e', 'WARN' if miss16 else 'PASS', 'установлены файлы V16 (сообщения, перегрузка, спуры, пресеты)',
            ('нет: ' + ', '.join(miss16) + ' - поставьте fix-V16-pip-files.zip') if miss16 else 'все отметки найдены')
+    m171 = {'безопасная база сканов': 'class _SafeUnpickler' in read(os.path.join(base, 'utils', 'numpyjson.py')),
+            'sdb2 без DTD': 'DOCTYPE|ENTITY' in read(os.path.join(base, 'file_handlers', 'importers.py'))}
+    miss171 = [k for k, v in m171.items() if not v]
+    result('E3g', 'WARN' if miss171 else 'PASS', 'установлен V17.1 (безопасность)',
+           ('нет: ' + ', '.join(miss171) + ' - поставьте fix-V17.1-pip-files.zip') if miss171 else 'все отметки найдены')
     m17 = {'cleanup.py': os.path.exists(os.path.join(base, 'scanner', 'cleanup.py')),
            'автоусиление': 'remeasure_lower_gain' in read(os.path.join(base, 'scanner', 'sample_processing.py')),
            'калибровка в окне': 'calibrateButton' in read(os.path.join(pq, 'qml', 'ScanControlsDialog.qml')),
@@ -389,15 +394,26 @@ def per_tile(s):
     return s['time'] / max(1, s['tiles'])
 
 
-def quiet_floor(f, y, lo, hi):
-    """std of the floor in a band, after removing signals (points > median+3 dB)."""
+def floor_level(y):
+    """Level of the empty floor of a whole scan: 20th percentile (kit-8.1).
+    A median would sit on the TV multiplexes when they fill the band."""
+    import numpy as np
+    return float(np.percentile(y, 20))
+
+
+def quiet_floor(f, y, lo, hi, floor=None):
+    """std of the floor in a band, only points at the floor level (kit-8.1:
+    within 3 dB of the 20th percentile of the whole scan, not 'median + 3')."""
     import numpy as np
     m = (f >= lo) & (f <= hi)
     v = y[m]
     if v.size < 50:
         return None
     med = np.median(v)
-    q = v[v < med + 3]
+    lim = (floor if floor is not None else med) + 3
+    q = v[v < lim]
+    if q.size < 50:
+        return None
     d = np.diff(q)
     return {'median': med, 'std': float(np.std(q)), 'step_max': float(np.max(np.abs(d))) if d.size else 0.,
             'share_signal': 1 - q.size / float(v.size)}
@@ -538,9 +554,10 @@ def h2_three_scans(lab):
            % (['%.1f' % t for t in times], ['%.3f' % p for p in pt], REF_TILE_S, unl, miss))
     # floor and stitching on the first scan, in the quietest 50 MHz window
     f, y = scans[0]['f'], scans[0]['y']
+    fl = floor_level(y)
     best = None
     for lo in [x for x in np.arange(470, 751, 10) if x + 50 <= 703 or x >= 748]:   # not LTE 700 uplink
-        q = quiet_floor(f, y, lo, lo + 50)
+        q = quiet_floor(f, y, lo, lo + 50, fl)
         if q and (best is None or q['share_signal'] < best[1]['share_signal']):
             best = (lo, q)
     if best:
@@ -550,8 +567,9 @@ def h2_three_scans(lab):
         # (DVB-T, LTE 700, wireless systems), so a rougher floor is INFO
         st = 'PASS' if q['std'] <= 0.5 and (rip or 0) <= 0.8 else ('INFO' if q['std'] <= 1.0 else 'WARN')
         result('H2b', st, 'ровность шума (самая тихая полоса %.0f-%.0f МГц)' % (lo, lo + 50),
-               'std %.2f дБ (у V7 0,16-0,21), рябь на периоде плитки %s дБ (у V7 0,4-0,7), макс. скачок %.2f дБ'
-               % (q['std'], '%.2f' % rip if rip is not None else '?', q['step_max']))
+               'точки у пола: std %.2f дБ (у V7 0,16-0,21), рябь на периоде плитки %s дБ (у V7 0,4-0,7), '
+               'макс. скачок %.2f дБ; сигналы занимают %.0f %% полосы'
+               % (q['std'], '%.2f' % rip if rip is not None else '?', q['step_max'], 100 * q['share_signal']))
     # repeatability between scan 1 and 2 on common grid, quiet points only;
     # tiles where the ADC clipped (V16 overload detector) are left out: a
     # clipped tile is not repeatable by nature
@@ -559,15 +577,22 @@ def h2_three_scans(lab):
     ov = (a.get('overload') or []) + (b.get('overload') or [])
     if a['f'].size and a['f'].size == b['f'].size and np.allclose(a['f'], b['f']):
         d = a['y'] - b['y']
-        quiet = a['y'] < np.median(a['y']) + 3
+        # kit-8.1: "quiet" = at the floor level in BOTH scans (signals that
+        # come and go - TV fading, 5G/LTE traffic, own transmitters - are
+        # the air, not the scanner)
+        quiet = (a['y'] < floor_level(a['y']) + 3) & (b['y'] < floor_level(b['y']) + 3)
         clean = np.ones(a['f'].size, bool)
         for lo, hi, _ in ov:
             clean &= ~((a['f'] >= lo - 1) & (a['f'] <= hi + 1))
         m = quiet & clean
-        sd = float(np.std(d[m])) if m.any() else float('nan')
-        result('H2c', 'PASS' if sd <= 0.5 else 'WARN', 'повторяемость скан 1 / скан 2',
-               'тихие точки вне перегрузки: среднее %+.2f дБ, std %.2f дБ (у NEW6-2 0,12); с перегрузкой %.2f; '
-               'исключено %.0f %% точек' % (np.mean(d[m]), sd, np.std(d[quiet]), 100. * (1 - clean.mean())))
+        sd = float(np.std(d[m])) if m.sum() > 50 else float('nan')
+        st = 'INFO' if m.mean() < 0.15 else ('PASS' if sd <= 0.5 else 'WARN')
+        allsig = ~quiet & clean
+        result('H2c', st, 'повторяемость скан 1 / скан 2',
+               'точки у пола (%.0f %%): среднее %+.2f дБ, std %.2f дБ (у NEW6-2 0,12); точки сигналов: std %.2f дБ '
+               '(эфир меняется); исключено из-за перегрузки %.0f %%'
+               % (100. * m.mean(), np.mean(d[m]) if m.any() else float('nan'), sd,
+                  np.std(d[allsig]) if allsig.any() else float('nan'), 100. * (1 - clean.mean())))
     else:
         result('H2c', 'FAIL', 'повторяемость', 'сетки частот сканов не совпали')
     rngs = sorted(set('%.1f-%.1f' % (lo, hi) for lo, hi, _ in ov))
@@ -824,18 +849,30 @@ def h9_auto_gain(lab, h2):
     if not (a['f'].size == f.size == b['f'].size and np.allclose(a['f'], f)):
         result('H9', 'FAIL', 'автоусиление', 'сетки частот не совпали')
         return scans
+    zones = ', '.join(sorted(set('%.1f-%.1f' % (lo, hi) for lo, hi, _ in ov))[:6])
+    n_re = a['remeasured'] + b['remeasured']
+    if n_re == 0:
+        # kit-8.1: the transmitter went quiet between H2 and H9 - nothing was
+        # re-measured, so auto gain was not tested (was PASS by mistake)
+        result('H9', 'INFO', 'автоусиление при перегрузке (470-800)',
+               'перегрузка была в H2 (%s МГц), а в сканах H9 её уже не было - перемерено 0 плиток, '
+               'автоусиление не проверено (эфир изменился)' % zones)
+        return scans
     z = _zone_mask(f, ov)
-    rep_off = float(np.std((h2[0]['y'] - h2[1]['y'])[z]))
-    rep_on = float(np.std((a['y'] - b['y'])[z]))
-    # strongest points of the zone: level with and without auto gain
+    # repeatability only on floor-level points of the zones (signals there
+    # change by themselves: 5G/LTE traffic, own transmitters)
+    def quiet(s1, s2):
+        return z & (s1['y'] < floor_level(s1['y']) + 3) & (s2['y'] < floor_level(s2['y']) + 3)
+    q_off, q_on = quiet(h2[0], h2[1]), quiet(a, b)
+    rep_off = float(np.std((h2[0]['y'] - h2[1]['y'])[q_off])) if q_off.sum() > 20 else float('nan')
+    rep_on = float(np.std((a['y'] - b['y'])[q_on])) if q_on.sum() > 20 else float('nan')
     top = np.argsort(np.where(z, h2[0]['y'], -999))[-20:]
     dl = float(np.median(a['y'][top] - h2[0]['y'][top]))
-    ok = rep_on <= max(1.0, 0.7 * rep_off) and a['still_clipped'] == 0
-    result('H9', 'PASS' if ok else 'WARN', 'автоусиление при перегрузке (470-800)',
-           'зоны %s МГц; перемеряно плиток %d, осталось с перегрузкой %d; повторяемость в зонах %.2f -> %.2f дБ; '
-           'уровень сильнейших точек зон %+.1f дБ (при перегрузке он искажён: сжатие и ложные продукты); время %.1f -> %.1f с'
-           % (', '.join('%.1f-%.1f' % (lo, hi) for lo, hi, _ in ov[:6]), a['remeasured'], a['still_clipped'],
-              rep_off, rep_on, dl, t_off, t_on))
+    still = a['still_clipped'] + b['still_clipped']
+    result('H9', 'PASS' if still == 0 else 'WARN', 'автоусиление при перегрузке (470-800)',
+           'зоны %s МГц; перемеряно плиток %d + %d, осталось с перегрузкой %d; пол рядом с зонами: повторяемость '
+           '%.2f -> %.2f дБ; уровень сильнейших точек %+.1f дБ (для сведения: эфир меняется); время %.1f -> %.1f с'
+           % (zones, a['remeasured'], b['remeasured'], still, rep_off, rep_on, dl, t_off, t_on))
     return scans
 
 
@@ -849,7 +886,7 @@ def h10_gain_steps(lab, s):
     from wwb_scanner.scanner.sample_processing import clip_ratio
     f, y = s['f'], s['y']
     z = _zone_mask(f, s.get('overload') or [], pad=3.0)
-    floor = C.running_median(y, 161)
+    floor = floor_level(y)          # kit-8.1: wide TV multiplexes fooled a running median
     e = np.where(z, -99, y - floor)
     i = int(np.argmax(e))
     if e[i] < 20:

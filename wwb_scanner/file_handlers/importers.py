@@ -2,6 +2,7 @@ import os
 import os.path
 import logging
 import datetime
+import re
 import xml.etree.ElementTree as ET
 import itertools
 
@@ -91,7 +92,15 @@ class CSVImporter(BaseImporter):
 
 class BaseWWBImporter(BaseImporter):
     def load_file(self):
-        return ET.parse(self.filename)
+        # V17.1 (security): WWB files never carry a DTD. A DTD with entities
+        # can blow a few KB up to gigabytes ("XML bomb") on the expat of
+        # Python 3.7 and hang the program, so such files are refused.
+        with open(self.filename, 'rb') as f:
+            data = f.read()
+        if re.search(br'<!\s*(DOCTYPE|ENTITY)', data, re.IGNORECASE):
+            raise ValueError('%s: XML with a DTD / entity declarations is not a WWB file and is not '
+                             'accepted (security)' % os.path.basename(self.filename))
+        return ET.ElementTree(ET.fromstring(data))
 
 class WWBImporter(BaseWWBImporter):
     _extension = 'sdb2'

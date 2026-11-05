@@ -24,12 +24,19 @@ import numpy as np
 import sim
 
 
+def _ui_air():
+    a = sim.Air(noise=0.03).tone(480.0e6, 0.02)
+    for k in (17, 18, 19):                # own spurs 489.6 / 518.4 / 547.2 MHz (U15)
+        a.tone(28.8e6 * k, 0.01)
+    return a
+
+
 class UIFakeRtlSdr(sim.FakeRtlSdr):
     """pyrtlsdr RtlSdr as the window uses it (device list, tuner type)."""
     gain_values = sim.R828D_GAINS
     air = None
     def __init__(self, device_index=0, serial_number=None, device_serial=None, **kw):
-        kw.setdefault('air', UIFakeRtlSdr.air or sim.Air(noise=0.03).tone(480.0e6, 0.02))
+        kw.setdefault('air', UIFakeRtlSdr.air or _ui_air())
         # QA_USB_DELAY=1: like the real V4 on Windows (V7 report: tune 0.053 s, data 0.042 s)
         if os.environ.get('QA_USB_DELAY') == '1':
             kw.setdefault('tune_delay', 0.053)
@@ -349,12 +356,23 @@ def v17_checks(app, win, controls, si):
     if dlg:
         QtCore.QMetaObject.invokeMethod(dlg[0], 'close')
         pump(app, 0.3)
-    # U15: the last scan (U5) was cleaned, the values as measured are kept
+    # U15 (kit-8.1): a scan long enough to hold own spurs (480-560 MHz:
+    # 489.6, 518.4, 547.2) is cleaned, the values as measured are kept
+    t0 = time.time()
+    si.scanConfig.startFreq, si.scanConfig.endFreq = 480.0, 560.0
+    controls[0].scannerState.emit(True)
+    pump(app, 0.5)
+    while si.running and time.time() - t0 < 300:
+        pump(app, 0.1)
     sp = si.spectrum
     info = getattr(sp, 'cleanup_info', None) if sp is not None else None
     raw = getattr(sp, 'raw_dbFS', None) if sp is not None else None
-    check('U15', bool(info) and info.get('spurs') and raw is not None and raw.size == sp.sample_data.size,
-          'clean scan info %s' % (info,))
+    gone = (info or {}).get('spurs_removed') or []
+    check('U15', bool(info) and info.get('spurs') and raw is not None and raw.size == sp.sample_data.size
+          and (len(gone) >= 1 or REAL) and info.get('ripple') == 'scan',   # on air a spur can sit under a signal
+          'scan 480-560 in %.0f s: spurs removed %s, ripple %s (%s dB), floor levelled %s%s'
+          % (time.time() - t0, gone, (info or {}).get('ripple'), (info or {}).get('ripple_pp_db'),
+             (info or {}).get('flatten'), ('; ' + info['floor_skipped']) if (info or {}).get('floor_skipped') else ''))
     # U16: calibration (shortened range in the simulator), then a levelled scan
     if REAL:
         check('U16', True, 'skipped with the real dongle (calibration needs the antenna removed)')

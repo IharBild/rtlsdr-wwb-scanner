@@ -38,6 +38,7 @@ MARKERS = [
     ('V16', 'ui/pyside/status.py', 'class StatusHub'),
     ('V16.1', 'ui/pyside/main.py', 'def apply_style'),
     ('V17', 'scanner/cleanup.py', 'def remove_spurs'),
+    ('V17.1', 'utils/numpyjson.py', 'class _SafeUnpickler'),
 ]
 
 
@@ -87,6 +88,16 @@ def read(p):
 def installed_versions(root):
     """[(version, True/False)]"""
     return [(v, m in read(os.path.join(root, f))) for v, f, m in MARKERS]
+
+
+def latest_manifest(folder):
+    """tools/manifest_<release>.json of the newest release (or None)."""
+    import glob
+    files = glob.glob(os.path.join(folder, 'manifest_V*.json'))
+    def key(p):
+        v = os.path.basename(p)[len('manifest_V'):-len('.json')]
+        return [int(x) if x.isdigit() else 0 for x in v.split('.')]
+    return sorted(files, key=key)[-1] if files else os.path.join(folder, 'manifest_none.json')
 
 
 def sha256(path):

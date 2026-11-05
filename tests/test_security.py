@@ -129,3 +129,38 @@ def test_SEC6_no_secrets_in_code():
                     if word in s:
                         bad.append((fn, word))
     assert not bad, bad
+
+
+def test_SEC7_scan_database_does_not_run_code(tmpdir):
+    """V17.1: a planted scan database (pickled object instead of an array) is
+    refused; old databases with pickled numpy arrays still load."""
+    import base64
+    import pickle
+    from wwb_scanner.utils import numpyjson
+    marker = str(tmpdir.join('RAN'))
+
+    class P(object):
+        def __reduce__(self):
+            return (os.makedirs, (marker,))
+    evil = json.dumps({'a': {'__ndarray__': base64.b64encode(pickle.dumps(P())).decode('ascii')}})
+    with pytest.raises(pickle.UnpicklingError):
+        numpyjson.loads(evil)
+    assert not os.path.exists(marker)
+    old = np.zeros(4, dtype=[('frequency', 'f8'), ('iq', 'c16'), ('magnitude', 'f8'), ('dbFS', 'f8')])
+    old['dbFS'] = [-100, -99, -98, -97]
+    legacy = json.dumps({'a': {'__ndarray__': base64.b64encode(old.dumps()).decode('ascii')}})
+    back = numpyjson.loads(legacy)['a']
+    assert np.array_equal(back, old)
+    s = numpyjson.dumps({'a': old})
+    assert '__npy__' in s and '__ndarray__' not in s
+    assert np.array_equal(numpyjson.loads(s)['a'], old)
+
+
+def test_SEC8_sdb2_with_dtd_refused(tmpdir):
+    p = tmpdir.join('bomb.sdb2')
+    p.write('<?xml version="1.0"?>\n<!DOCTYPE r [<!ENTITY a "aaaaaaaaaa"><!ENTITY b "&a;&a;&a;&a;">]>\n<r>&b;</r>')
+    with pytest.raises(ValueError) as exc:
+        BaseImporter.import_file(str(p))
+    assert 'DTD' in str(exc.value)
+    sp = BaseImporter.import_file(REF_SDB2)                  # a real WWB file still loads
+    assert sp.sample_data.size > 1000

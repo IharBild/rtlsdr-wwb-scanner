@@ -215,12 +215,14 @@ def sanity(args):
     have = [v for v, ok in vers if ok]
     R.add('SA1', 'SANITY', 'FAIL' if miss else 'PASS', 'установлены все версии V9 ... V17',
           'есть: %s%s' % (' '.join(have), ('; НЕТ: ' + ' '.join(miss)) if miss else ''))
-    man = args.manifest or os.path.join(HERE, 'manifest_V17.json')
+    man = args.manifest or Q.latest_manifest(HERE)
     if os.path.exists(man):
         with io.open(man, encoding='utf-8') as fh:
             m = json.load(fh)
         missing, changed, extra = Q.compare_manifest(root, m['files'])
         st = 'PASS' if not (missing or changed) else 'WARN'
+        if extra and st == 'PASS':
+            st = 'INFO'
         R.add('SA2', 'SANITY', st, 'файлы совпадают с выпуском %s (SHA-256)' % m.get('release', '?'),
               'нет %d %s; изменены %d %s; лишние %d %s' % (len(missing), missing[:4], len(changed), changed[:6],
                                                           len(extra), extra[:4]))
@@ -580,7 +582,7 @@ def security(out):
     except Exception as exc:
         res = type(exc).__name__ + ': ' + str(exc)[:80]
     dt = time.time() - t0
-    expanded = 'amplification' not in res and 'entity' not in res.lower()
+    expanded = 'DTD' not in res and 'amplification' not in res
     ver = tuple(int(x) for x in re.findall(r'\d+', pyexpat.EXPAT_VERSION)[:3])
     old = ver < (2, 4, 1)
     st = 'FINDING' if expanded else 'PASS'
@@ -589,7 +591,7 @@ def security(out):
               pyexpat.EXPAT_VERSION, res, dt,
               ('НАЙДЕНО (%s): импорт не отклоняет DTD; %s' % ('средняя' if old else 'низкая',
                'у этого Python expat < 2.4.1 без защиты - файл побольше повесит программу и съест память'
-               if old else 'expat >= 2.4.1 ограничивает раздувание')) if expanded else 'раздувание остановлено'))
+               if old else 'expat >= 2.4.1 ограничивает раздувание')) if expanded else 'файл с DTD отклонён'))
     # SE3: numpy refuses pickles in .npy/.npz (CVE-2019-6446: numpy < 1.16.3)
     import numpy as np
     nv = tuple(int(x) for x in re.findall(r'\d+', np.__version__)[:3])
