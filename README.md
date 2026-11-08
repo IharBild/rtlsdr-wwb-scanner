@@ -64,12 +64,14 @@ Keep `pyrtlsdr` below 0.4 (0.4 needs a function that the V4 drivers do not expor
    C:\wwb-scanner\Scripts\activate
    ```
 
-3. **The scanner** from the release source archive (no git needed):
+3. **The scanner** from the source archive of this branch (no git needed):
 
    ```bat
    python -m pip install "pyrtlsdr<0.4" "numpy<2" ^
-     https://github.com/IharBild/rtlsdr-wwb-scanner/archive/refs/tags/v18.1.zip
+     https://github.com/IharBild/rtlsdr-wwb-scanner/archive/refs/heads/v4-fixes.zip
    ```
+
+   For a fixed release use `.../archive/refs/tags/v18.1.zip` instead.
 
 4. **rtlsdr.dll.** Copy `drivers\rtlsdr-scanner-v4\x64\rtlsdr.dll` from the source
    archive into `C:\wwb-scanner\Scripts` (the folder of `python.exe`).
@@ -78,12 +80,36 @@ Keep `pyrtlsdr` below 0.4 (0.4 needs a function that the V4 drivers do not expor
 
 A one-click Windows installer is planned.
 
-### Updating an existing installation with patch archives
+### Updating
 
-The release also has `fix-V18.1-pip-files.zip` and `rollback-V18.1.zip`.
-They only replace changed files and are meant for an installation that already has
-the previous patch (V18). Unpack the `wwb_scanner` folder into `site-packages`
-over the old files; see `INSTALL_RU.txt` inside. For a new installation use the steps above.
+The same command with `--force-reinstall --no-deps` replaces the program files and keeps
+your libraries, scans, calibrations and settings (they live in `%USERPROFILE%\wwb_scanner_data`):
+
+```bat
+python -m pip install --force-reinstall --no-deps ^
+  https://github.com/IharBild/rtlsdr-wwb-scanner/archive/refs/heads/v4-fixes.zip
+```
+
+### Switching from the original `pip install rtlsdr-wwb-scanner`
+
+If the original package from PyPI is installed (maybe with files replaced by hand),
+make a clean switch so no old or hand-made files stay behind:
+
+```bat
+rem 1. close the scanner; keep a copy of the old program folder
+python -c "import wwb_scanner, os; print(os.path.dirname(wwb_scanner.__file__))"
+xcopy /E /I /Y "<that folder>" "C:\wwb_backup\wwb_scanner"
+python -m pip freeze > C:\wwb_backup\pip_freeze.txt
+rem 2. remove the old program, then the files pip did not know about
+python -m pip uninstall -y rtlsdr-wwb-scanner
+rmdir /S /Q "<that folder>"
+rem 3. install this fork without touching numpy / scipy / PySide2 / pyrtlsdr
+python -m pip install --no-deps ^
+  https://github.com/IharBild/rtlsdr-wwb-scanner/archive/refs/heads/v4-fixes.zip
+```
+
+Your `rtlsdr.dll` and the data folder are not touched. Going back: uninstall again and
+copy the folder from `C:\wwb_backup` back.
 
 ## Usage in short
 
@@ -129,8 +155,8 @@ Windows: быстрее, без собственных помех донгла �
 с диапазонами систем Shure/Sennheiser и правилами стран Европы.
 
 - Установка — шаги 1–5 выше (раздел «Installation»).
-- Обновление готовой установки — архивы `fix-…` / `rollback-…` из
-  [релиза](https://github.com/IharBild/rtlsdr-wwb-scanner/releases), внутри `INSTALL_RU.txt`.
+- Обновление — команда из раздела «Updating»; переход со старой версии из PyPI — раздел
+  «Switching from the original…». Сканы, калибровки и настройки при этом сохраняются.
 - Проверка на своём ПК с донглом — архив `qa-kit` из релиза, `python qa_pc.py --smoke`.
 - Правила стран — подсказка для планирования, а не юридический документ: перед шоу
   сверяйтесь с регулятором (в Польше — UKE).
