@@ -198,6 +198,10 @@ class CSVExporter(BaseExporter):
     def is_khz(self):
         fmt = self.frequency_format
         return fmt is not None and str(fmt).lower() == 'khz'
+    @property
+    def is_wsm(self):
+        fmt = self.frequency_format
+        return fmt is not None and str(fmt).lower() == 'wsm'
     def build_khz_data(self):
         """Resample onto a whole-kHz grid (step ``khz_step``) like WWB does,
         only inside 30-2000 MHz (WWB refuses anything else)."""
@@ -207,6 +211,8 @@ class CSVExporter(BaseExporter):
         lines = ['%d%s%.1f' % (f, self.delimiter_char, v) for f, v in zip(grid, values)]
         return self.khz_newline_chars.join(lines)
     def build_data(self):
+        if self.is_wsm:                       # V19: Sennheiser WSM layout
+            return wsm_csv(self.spectrum)
         if self.is_khz:
             return self.build_khz_data()
         newline_chars = self.newline_chars
@@ -217,6 +223,64 @@ class CSVExporter(BaseExporter):
         for f, v in zip(freqs, dB):
             lines.append(delim.join([str(f), str(v)]))
         return newline_chars.join(lines)
+
+# ---------------------------------------------------------------- V19: Sennheiser WSM
+# WSM (Wireless Systems Manager) opens CSV scans in the layout its own
+# receiver scans have (EM 300-500 G3 "RF spectrum", checked against files
+# saved by WSM on 06-08.11.2026). The level is whole dB above the noise
+# floor, 0..48 (WSM shows 0..40 on its scale, 2.5 % per dB).
+WSM_LEVEL_MAX_DB = 48
+# dB above our floor -> WSM dB. Comparing the same band scanned by an EM 300
+# G3 and the RTL-SDR gave 0.90, 1.13 and 1.34 on three days (same shape,
+# r = 0.92-0.99); 1.3 errs on the side of "occupied".
+WSM_LEVEL_SCALE = 1.3
+WSM_SQUELCH_DB = 5           # squelch column (the receiver's setting, 12.5 %)
+WSM_STEP_KHZ = 25
+
+
+def wsm_time(dt):
+    """'08-11-2026 02-44-57 PM' (AM/PM written by hand: %p depends on the locale)."""
+    h = dt.hour % 12 or 12
+    return '%02d-%02d-%04d %02d-%02d-%02d %s' % (dt.day, dt.month, dt.year, h, dt.minute, dt.second,
+                                                 'AM' if dt.hour < 12 else 'PM')
+
+
+def wsm_levels(spectrum, step=WSM_STEP_KHZ, scale=WSM_LEVEL_SCALE):
+    """(grid_khz, level_db 0..48, floor_dbFS): our scan on the whole-kHz grid,
+    as dB above the floor (20th percentile, not the median: in a band full of
+    TV multiplexes the median sits on them). Gaps of a scan of several
+    ranges get level 0 (WSM needs every row between start and stop)."""
+    grid, values = wwb_grid(spectrum, step=step)
+    measured = values > NO_DATA_DB + 0.5
+    if not measured.any():
+        raise ValueError('WSM export: the scan has no measured points')
+    floor = float(np.percentile(values[measured], 20))
+    lv = np.clip(np.rint((values - floor) * float(scale)), 0, WSM_LEVEL_MAX_DB).astype(np.int64)
+    lv[~measured] = 0
+    return grid, lv, floor
+
+
+def wsm_csv(spectrum, dt=None, receiver=None, scale=WSM_LEVEL_SCALE, squelch=WSM_SQUELCH_DB):
+    grid, lv, floor = wsm_levels(spectrum, scale=scale)
+    dt = dt or datetime.datetime.now()
+    name = receiver or ('RTL-SDR %s' % (spectrum.name or 'scan')).strip()
+    name = name.replace(';', ',').replace('\r', ' ').replace('\n', ' ')[:60]
+    sq_pct = '%g' % min(100.0, squelch * 2.5)
+    lines = [
+        'Receiver;%s' % name,
+        'Date/Time;%s' % wsm_time(dt),
+        'RFUnit;dB;MinimumRFValue;0',
+        'Squelch;Supported',
+        '',
+        'Frequency Range [kHz];%d;%d;%d' % (grid[0], grid[-1], WSM_STEP_KHZ),
+        'Frequency;RF level (%);RF level;Memory (%);Memory;Squelch (%);Squelch',
+    ]
+    lines += ['%d;%s;%d;;;%s;%d' % (f, '%g' % min(100.0, v * 2.5), v, sq_pct, squelch)
+              for f, v in zip(grid, lv)]
+    lines += ['', 'Marker;0', 'Index;Comment', '', 'Scales;7', 'Level (%);Level (units)',
+              '25;10', '37.5;15', '50;20', '62.5;25', '75;30', '87.5;35', '100;40']
+    return '\r\n'.join(lines) + '\r\n'
+
 
 class BaseWWBExporter(BaseExporter):
     def __init__(self, **kwargs):

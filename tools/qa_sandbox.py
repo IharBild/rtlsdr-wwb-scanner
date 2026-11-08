@@ -56,7 +56,7 @@ OVERRIDES = [
 FILE_CAT = {'test_sim_smoke': 'INTEGRATION', 'test_qa_correctness': 'INTEGRATION', 'test_v16': 'INTEGRATION',
             'test_v17': 'INTEGRATION', 'test_integration': 'INTEGRATION', 'test_qa_formats': 'FUNCTIONAL',
             'test_io': 'FUNCTIONAL', 'test_qa_stability': 'SYSTEM', 'test_golden': 'REGRESSION',
-            'test_security': 'SECURITY', 'test_v18': 'FUNCTIONAL', 'test_v181': 'UNIT'}
+            'test_security': 'SECURITY', 'test_v18': 'FUNCTIONAL', 'test_v181': 'UNIT', 'test_v19_wsm': 'FUNCTIONAL'}
 
 
 def category_of(fn, name):

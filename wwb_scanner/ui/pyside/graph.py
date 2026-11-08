@@ -376,14 +376,23 @@ class SpectrumGraphData(QtQuick.QQuickItem):
         self.spectrum = spectrum
         self.update_spectrum_data()
 
+    @Slot(str)
+    def set_export_format(self, fmt):
+        """V19: layout of the next .csv export: 'wsm' (Sennheiser WSM) or
+        'khz' (Shure WWB). One-argument slot: a two-argument slot is not
+        visible from QML on the user's PySide2 (V11.1)."""
+        self._csv_format = str(fmt or '') or None
+
     @Slot(QtCore.QUrl)
     def save_to_file(self, uri):
         filename = uri.toLocalFile()
-        # CSV is written in the Shure WWB layout (kHz, 25 kHz step, "\\n").
-        # Change to None to get the old MHz format back.
-        print('export to %s' % filename, flush=True)
+        # CSV is written in the Shure WWB layout (kHz, 25 kHz step, "\\n"),
+        # or in the Sennheiser WSM layout after set_export_format('wsm').
+        fmt = getattr(self, '_csv_format', None) or CSV_FREQUENCY_FORMAT
+        self._csv_format = None
+        print('export to %s (%s)' % (filename, fmt), flush=True)
         try:
-            self.spectrum.export_to_file(filename=filename, frequency_format=CSV_FREQUENCY_FORMAT)
+            self.spectrum.export_to_file(filename=filename, frequency_format=fmt)
         except Exception as exc:
             logger.error('Could not save %s: %s', os.path.basename(filename), exc,
                          exc_info=not isinstance(exc, (ValueError, OSError)))
@@ -403,7 +412,8 @@ class SpectrumGraphData(QtQuick.QQuickItem):
             if self.spectrum is None:
                 print('export FAILED: no scan in the graph', flush=True)
                 return
-            self.spectrum.export_to_file(filename=filename, frequency_format=CSV_FREQUENCY_FORMAT)
+            fmt = 'wsm' if 'wsm' in (name_filter or '').lower() else CSV_FREQUENCY_FORMAT
+            self.spectrum.export_to_file(filename=filename, frequency_format=fmt)
             print('export done: %s, %d bytes' % (filename, os.path.getsize(filename)), flush=True)
         except Exception:
             import traceback

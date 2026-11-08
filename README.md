@@ -33,6 +33,10 @@ Current release: **[v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releas
   (no reliable public data).
 - **WWB export.** CSV in the WWB layout (kHz), `.sdb2` and `.sdb3` (WWB 7). Gaps in a scan
   stay gaps: no invented values.
+- **Sennheiser WSM.** *File > Export > Sennheiser WSM CSV* writes the layout of WSM's own
+  receiver scans (EM 300-500 G3); WSM receiver scans can be imported and laid over an
+  RTL-SDR scan. The level is dB above the floor x 1.3 (0..48), set from side-by-side scans
+  with an EM 300 G3.
 - **Window.** Dark theme, status line and error dialog, range presets, time left,
   spur marks, EU TV channel grid, regulation strip under the graph.
 - **Safety and reliability.** Scan history stored without pickle, XML files with a DTD are
@@ -118,7 +122,8 @@ copy the folder from `C:\wwb_backup` back.
    systems you bring. The next scan covers only those bands.
 3. Once per gain setting: **Scan settings > Calibrate dongle...** with the antenna removed
    (levels the noise floor).
-4. Scan, then **File > Export** to `.sdb3` (WWB 7) or `.csv`, and open it in WWB.
+4. Scan, then **File > Export**: `.sdb3` (WWB 7) or *Shure WWB CSV* for WWB,
+   *Sennheiser WSM CSV* for WSM.
 
 The country rules are a guide for planning, **not a legal document**. Rules change;
 check with the national regulator before a show (Poland: UKE, Germany: BNetzA, UK: Ofcom).

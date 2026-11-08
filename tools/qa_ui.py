@@ -241,14 +241,22 @@ def main():
         d = dlg[0]
         d.setProperty('graphData', live[-1])
         ctx = QtQml.QQmlEngine.contextForObject(d)
-        for filt in list(d.property('nameFilters')):
+        for n, filt in enumerate(list(d.property('nameFilters'))):
             ext = re.search(r'\*\.(\w+)', filt).group(1)
-            base = os.path.join(TMP, 'ui_dialog_export_' + ext)
+            base = os.path.join(TMP, 'ui_dialog_export_%d_%s' % (n, ext))
             js = 'doExport(%s, %s)' % (json.dumps(QtCore.QUrl.fromLocalFile(base).toString()), json.dumps(filt))
             e = QtQml.QQmlExpression(ctx, d, js)
             v = e.evaluate()
             err = e.error().toString() if e.hasError() else ''
             p = base + '.' + ext
+            if os.path.exists(p) and ext == 'csv':
+                # V19: two CSV layouts, the chosen filter decides
+                head = open(p, newline='').read(9)
+                want_wsm = 'WSM' in filt
+                if want_wsm != head.startswith('Receiver;'):
+                    ok9.append('csv WRONG LAYOUT for %r: starts %r' % (filt, head))
+                    continue
+                ext = 'csv-wsm' if want_wsm else 'csv-wwb'
             ok9.append('%s %s' % (ext, ('%d bytes' % os.path.getsize(p)) if os.path.exists(p) else 'NOT SAVED %r %s' % (v, err)))
     check('U9', bool(ok9) and all('bytes' in s for s in ok9), 'File > Export via dialog code: %s' % ok9)
 

@@ -12,6 +12,7 @@ FileDialog {
     // so no defaultSuffix here.
     nameFilters: [
         'Shure WWB CSV (*.csv)',
+        'Sennheiser WSM CSV (*.csv)',
         'Shure WWB native (*.sdb2)',
         'Shure WWB 7 (*.sdb3)',
         'Numpy Files (*.npz)',
@@ -57,6 +58,9 @@ FileDialog {
         if (target !== String(url))
             console.log('export: extension added -> ' + target);
         try {
+            // V19: both CSV layouts end in .csv - the chosen filter decides
+            if (root.graphData.set_export_format)
+                root.graphData.set_export_format(f.indexOf('WSM') >= 0 ? 'wsm' : '');
             root.graphData.save_to_file(Qt.resolvedUrl(target));
             return true;
         } catch (e) {

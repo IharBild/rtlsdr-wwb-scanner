@@ -67,6 +67,8 @@ class CSVImporter(BaseImporter):
     def parse_file_data(self):
         spectrum = self.spectrum
         spectrum.name = os.path.basename(self.filename)
+        if self.file_data.lstrip('\ufeff \r\n\t').startswith('Receiver;'):
+            return self.parse_wsm()
         bad = []
         def iter_lines():
             for n, line in enumerate(self.file_data.splitlines(), 1):
@@ -99,6 +101,40 @@ class CSVImporter(BaseImporter):
         if freqs.size and np.nanmax(freqs) >= 10000.:
             freqs = freqs / 1000.
         spectrum.add_sample_set(frequency=freqs, dbFS=dB)
+
+    # V19: Sennheiser WSM scan (receiver scans, or ours). WSM levels are dB
+    # above the receiver's noise floor; they are shown on our dBFS axis as
+    # WSM_FLOOR_DBFS + level / scale, so a WSM scan lies over an RTL-SDR scan
+    # of the same band (the shape is what can be compared, not the absolute level).
+    WSM_FLOOR_DBFS = -100.
+    def parse_wsm(self):
+        from wwb_scanner.file_handlers.exporters import WSM_LEVEL_SCALE
+        lines = self.file_data.replace('\r', '').split('\n')
+        head = [i for i, l in enumerate(lines) if l.startswith('Frequency;')]
+        if not head:
+            raise ValueError('%s: WSM file without the "Frequency;..." line' % os.path.basename(self.filename))
+        cols = lines[head[0]].split(';')
+        if 'RF level' not in cols:
+            raise ValueError('%s: WSM file without an "RF level" column' % os.path.basename(self.filename))
+        li = cols.index('RF level')
+        freqs, levels = [], []
+        for l in lines[head[0] + 1:]:
+            if not l.strip():
+                break                       # the data block ends at the first empty line
+            parts = l.split(';')
+            try:
+                f, v = float(parts[0]), float(parts[li])
+            except (ValueError, IndexError):
+                continue
+            freqs.append(f)
+            levels.append(v)
+        if len(freqs) < 2:
+            raise ValueError('%s: no scan data in the WSM file' % os.path.basename(self.filename))
+        receiver = lines[0].split(';', 1)[1].strip() if ';' in lines[0] else ''
+        self.spectrum.name = '%s (WSM%s)' % (os.path.basename(self.filename), ', ' + receiver if receiver else '')
+        dbFS = self.WSM_FLOOR_DBFS + np.asarray(levels, dtype=np.float64) / WSM_LEVEL_SCALE
+        self.spectrum.add_sample_set(frequency=np.asarray(freqs, dtype=np.float64) / 1000., dbFS=dbFS)
+
 
 class BaseWWBImporter(BaseImporter):
     def load_file(self):

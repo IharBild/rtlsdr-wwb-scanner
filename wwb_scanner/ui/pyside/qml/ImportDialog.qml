@@ -9,6 +9,7 @@ FileDialog {
     selectMultiple: false
     nameFilters: [
         'Scan Files (*.csv *.sdb2 *.sdb3)',
+        'Sennheiser WSM scan (*.csv)',
         'Numpy Files (*.npz)',
     ]
     signal importFile(var fileName)
