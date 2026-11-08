@@ -58,10 +58,13 @@ FileDialog {
         if (target !== String(url))
             console.log('export: extension added -> ' + target);
         try {
-            // V19: both CSV layouts end in .csv - the chosen filter decides
-            if (root.graphData.set_export_format)
-                root.graphData.set_export_format(f.indexOf('WSM') >= 0 ? 'wsm' : '');
-            root.graphData.save_to_file(Qt.resolvedUrl(target));
+            // V19.1: both CSV layouts end in .csv - the chosen filter decides.
+            // The format travels in the address ("#wsm"): save_to_file(url)
+            // is the one call that surely works from QML on the user's PC
+            // (a separate set_export_format call was not seen there).
+            var wsm = f.indexOf('WSM') >= 0;
+            console.log('export: layout ' + (wsm ? 'Sennheiser WSM' : 'by extension'));
+            root.graphData.save_to_file(Qt.resolvedUrl(target + (wsm ? '#wsm' : '')));
             return true;
         } catch (e) {
             console.log('export FAILED in QML: ' + e);

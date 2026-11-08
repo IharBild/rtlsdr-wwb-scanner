@@ -387,8 +387,11 @@ class SpectrumGraphData(QtQuick.QQuickItem):
     def save_to_file(self, uri):
         filename = uri.toLocalFile()
         # CSV is written in the Shure WWB layout (kHz, 25 kHz step, "\\n"),
-        # or in the Sennheiser WSM layout after set_export_format('wsm').
+        # or in the Sennheiser WSM layout when the address ends in "#wsm"
+        # (V19.1, from the export dialog) or after set_export_format('wsm').
         fmt = getattr(self, '_csv_format', None) or CSV_FREQUENCY_FORMAT
+        if uri.fragment().lower() == 'wsm':
+            fmt = 'wsm'
         self._csv_format = None
         print('export to %s (%s)' % (filename, fmt), flush=True)
         try:
