@@ -180,8 +180,11 @@ class SpectrumGraphData(QtQuick.QQuickItem):
     _n_spectrum = Signal()
     _n_color = Signal()
     _n_graphVisible = Signal()
+    _n_marks = Signal()
     def __init__(self, *args):
         self.xy_data = np.zeros(0, dtype=GRAPH_DTYPE)
+        self._loss_bands = []
+        self._image_marks = []
         self._min_value = QtCore.QPointF(0., 0.)
         self._max_value = QtCore.QPointF(0., 0.)
         self._model = None
@@ -303,6 +306,20 @@ class SpectrumGraphData(QtQuick.QQuickItem):
         self.update_spectrum_data()
     spectrum = Property(object, _g_spectrum, _s_spectrum, notify=_n_spectrum)
 
+    # V20.2: bands where a strong signal took sensitivity away, and removed
+    # images of strong signals (drawn on the graph, not in the data)
+    def _g_loss_bands(self): return self._loss_bands
+    lossBands = Property('QVariantList', _g_loss_bands, notify=_n_marks)
+    def _g_image_marks(self): return self._image_marks
+    imageMarks = Property('QVariantList', _g_image_marks, notify=_n_marks)
+    def _update_marks(self):
+        sp = self.spectrum
+        lb = list(getattr(sp, 'loss_bands', None) or []) if sp is not None else []
+        im = list(getattr(sp, 'image_marks', None) or []) if sp is not None else []
+        if lb != self._loss_bands or im != self._image_marks:
+            self._loss_bands, self._image_marks = lb, im
+            self._n_marks.emit()
+
     def _set_from_graph_dtype(self, d_arr):
         if self.model is None:
             return
@@ -346,6 +363,10 @@ class SpectrumGraphData(QtQuick.QQuickItem):
             self.xy_data = xy_data
             spectrum.data_updated.clear()
         self._update_extents()
+        try:
+            self._update_marks()
+        except Exception:
+            pass
 
     def _update_extents(self):
         self.minValue = QtCore.QPointF(self.xy_data['x'].min(), self.xy_data['y'].min())

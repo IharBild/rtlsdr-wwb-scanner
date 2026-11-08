@@ -33,7 +33,11 @@ Current release: **[v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releas
   lost sensitivity and by how many dB. All tiles of such a zone use one gain; products seen
   by one tile only are taken from the others; tiles made deaf up to 10 MHz away are raised by
   the loss; images of the carrier at +-2.4 MHz and +-28.8 MHz are replaced by the floor around
-  them and named in the status line.
+  them and named in the status line. Points that no reading can measure show the flat
+  floor of the zone instead of false spikes; the graph shades the bands that lost
+  sensitivity ("-NN dB sens.") and marks the removed images. Images of a strong carrier
+  are removed even when it does not clip (dips between TV channels are not counted as
+  lost sensitivity).
 - **Bands.** Band presets of Shure systems (PSM 200/300/900/1000, QLX-D, ULX-D, SLX-D,
   Axient Digital, UHF-R, BLX, SLX, PGX, GLX-D) and Sennheiser systems (ew 100 G3/G4,
   ew 300 G4). Scans only the bands of the chosen systems in one run. Each band is marked

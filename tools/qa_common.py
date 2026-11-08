@@ -45,6 +45,7 @@ MARKERS = [
     ('V19.1', 'ui/pyside/graph.py', "uri.fragment().lower() == 'wsm'"),
     ('V20', 'scanner/sample_processing.py', 'def remeasure_neighbours'),
     ('V20.1', 'scanner/sample_processing.py', 'def carrier_zones'),
+    ('V20.2', 'scanner/sample_processing.py', 'def remove_images'),
 ]
 
 

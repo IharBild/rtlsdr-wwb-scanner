@@ -305,6 +305,81 @@ Item {
                 }
             }
 
+            // V20.2: bands where a strong signal next to the antenna took
+            // sensitivity away (only "not above this level" is known there),
+            // and removed images of strong signals
+            Item {
+                id: lossMarks
+                x: chart.plotArea.x
+                y: chart.plotArea.y
+                width: chart.plotArea.width
+                height: chart.plotArea.height
+                clip: true
+                property var bands: root.activeSpectrum && root.activeSpectrum.lossBands ? root.activeSpectrum.lossBands : []
+                property var images: root.activeSpectrum && root.activeSpectrum.imageMarks ? root.activeSpectrum.imageMarks : []
+                Repeater {
+                    model: lossMarks.bands
+                    Item {
+                        property real span: axisX.max - axisX.min
+                        property real x0: span > 0 ? (modelData.lo - axisX.min) / span * lossMarks.width : 0
+                        property real x1: span > 0 ? (modelData.hi - axisX.min) / span * lossMarks.width : 0
+                        visible: x1 > 0 && x0 < lossMarks.width
+                        x: x0
+                        width: Math.max(2, x1 - x0)
+                        height: lossMarks.height
+                        Rectangle {
+                            anchors.fill: parent
+                            color: '#e0a030'
+                            opacity: 0.13
+                        }
+                        Rectangle {
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.top: parent.top
+                            height: 2
+                            color: '#e0a030'
+                            opacity: 0.8
+                        }
+                        Text {
+                            anchors.top: parent.top
+                            anchors.topMargin: 4
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            visible: parent.width > implicitWidth + 4
+                            text: '-' + modelData.db.toFixed(0) + ' dB sens.'
+                            color: '#e0a030'
+                            font.pointSize: 7
+                        }
+                    }
+                }
+                Repeater {
+                    model: lossMarks.images
+                    Item {
+                        property real span: axisX.max - axisX.min
+                        visible: span > 0 && modelData.f >= axisX.min && modelData.f <= axisX.max
+                        x: span > 0 ? (modelData.f - axisX.min) / span * lossMarks.width : 0
+                        width: 1
+                        height: lossMarks.height
+                        Rectangle {
+                            width: 1
+                            height: parent.height
+                            color: '#9a7cd8'
+                            opacity: 0.45
+                        }
+                        Text {
+                            visible: parent.span < 100
+                            text: 'image of ' + modelData.of.toFixed(3)
+                            color: '#9a7cd8'
+                            opacity: 0.9
+                            font.pointSize: 7
+                            rotation: -90
+                            transformOrigin: Item.TopLeft
+                            x: 2
+                            y: parent.height - 4
+                        }
+                    }
+                }
+            }
+
             // V16: marks of the dongle's own spurs (not in the data, only drawn)
             Item {
                 id: spurMarks

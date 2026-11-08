@@ -41,6 +41,17 @@ def main():
         g = qa_ui.find(win, lambda o: o.metaObject().indexOfSignal('loadFromFile(QUrl)') >= 0)
         g[0].loadFromFile.emit(QtCore.QUrl.fromLocalFile(csv))
         qa_ui.pump(app, 3.0)
+    marks = os.environ.get('SHOT_MARKS')     # V20.2: JSON {"loss_bands": [...], "image_marks": [...]}
+    if marks:
+        import json
+        from wwb_scanner.ui.pyside.graph import SpectrumGraphData
+        m = json.loads(marks)
+        for sg in win.findChildren(SpectrumGraphData):
+            if sg.spectrum is not None:
+                sg.spectrum.loss_bands = m.get('loss_bands', [])
+                sg.spectrum.image_marks = m.get('image_marks', [])
+                sg._update_marks()
+        qa_ui.pump(app, 1.0)
     zoom = os.environ.get('SHOT_ZOOM')       # e.g. "470,800"
     if zoom:
         lo, hi = [float(x) for x in zoom.split(',')]

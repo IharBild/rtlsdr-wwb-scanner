@@ -13,6 +13,9 @@ Item {
     property alias minValue: graphData.minValue
     property alias maxValue: graphData.maxValue
     property alias spectrum: graphData.spectrum
+    // V20.2: drawn on the graph by Graph.qml
+    property alias lossBands: graphData.lossBands
+    property alias imageMarks: graphData.imageMarks
     property alias graphVisible: graphData.graphVisible
     property int index
     property alias color: graphData.color

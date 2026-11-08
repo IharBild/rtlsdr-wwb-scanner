@@ -187,6 +187,24 @@ XTAL_HZ = 28.8e6
 IMAGE_HALF_HZ = 150e3
 IMAGE_OVER_DB = 6.
 
+# V20.2 (user's series 08.11.2026 23:34, V20.1 on the dongle):
+# - where no tile has a real measurement (only "not above the floor of the
+#   low-gain reading") the plateau of that reading is shown, flat, instead
+#   of the spikes of a clipped normal reading (631.05 MHz +31 dB at 49.6 dB:
+#   not a signal, only "unknown up to the plateau"); such bands are drawn
+#   shaded on the graph with the dB lost;
+# - "lost sensitivity" only where the level is not above the plateau of
+#   its zone (dips of a DVB-T multiplex are signal, not loss);
+# - images at +-fs / +-28.8 MHz also of strong narrow carriers that did not
+#   clip (635.325 MHz +12 dB at 0 dB gain), if their level fits the
+#   dongle's image rejection (alias -36...-52 dBc, crystal -60...-80 dBc).
+STRONG_CARRIER_DB = 45.
+ALIAS_DBC = (-52., -36.)       # user's V4: -44 dBc at every gain
+XTAL_DBC = (-80., -60.)        # user's V4: -70 dBc
+PLATEAU_MARGIN_DB = 6.
+# a normal reading at most this far above the usual floor is a real measurement
+KNOWN_AT_FLOOR_DB = 3.
+
 
 def to_db(p):
     return 10. * np.log10(np.maximum(np.asarray(p, dtype=np.float64), 1e-30))
@@ -226,7 +244,7 @@ def merge_low_gain(p_normal, p_low, over_db=None, floor=None, low_floor_db=None)
     return np.where(sig, pl, quiet), sig, low_floor
 
 
-def low_limited_bins(p_normal, p_low, signal_mask):
+def low_limited_bins(p_normal, p_low, signal_mask, floor=None):
     """V20: bins where the merged tile only says "not above the low-gain
     floor": no signal in the low-gain reading and the normal reading was
     higher (false peaks / clipping noise). Such a bin counts in the
@@ -237,7 +255,14 @@ def low_limited_bins(p_normal, p_low, signal_mask):
         return ~np.asarray(signal_mask, bool)
     # a normal reading only a little below the low-gain floor is no
     # better: a tile clipped all the time has its clipping noise there
-    return (~np.asarray(signal_mask, bool)) & (pn > pl * 10. ** (-KNOWN_BELOW_LOW_DB / 10.))
+    lim = (~np.asarray(signal_mask, bool)) & (pn > pl * 10. ** (-KNOWN_BELOW_LOW_DB / 10.))
+    if floor is not None:
+        # V20.2: ... unless it is at the usual floor of the scan: with a small
+        # gain drop the low-gain plateau is only a few dB higher, and a clean
+        # normal reading there is a real measurement
+        fl = np.broadcast_to(np.asarray(floor, dtype=np.float64), pn.shape)
+        lim &= pn > fl * 10. ** (KNOWN_AT_FLOOR_DB / 10.)
+    return lim
 
 MAX_TILE_ERRORS = 5
 TUNE_TIMEOUT = 30.
@@ -600,7 +625,11 @@ class SampleSet(JSONMixin):
         else:
             use = pn * (10. ** (normal_gain_db / 10.)) if normal_gain_db else pn
             merged, sig, low_floor = merge_low_gain(use, p_low, floor=floor, low_floor_db=low_floor_db)
-            limited = low_limited_bins(use, p_low, sig)
+            limited = low_limited_bins(use, p_low, sig, floor=floor)
+        # V20.2: where the normal reading tells nothing (limited) the honest
+        # value is the low-gain reading itself - "unknown up to here" - not
+        # the spikes of the clipped normal reading
+        merged = np.where(limited, p_low, merged)
         self.powers_normal = pn
         self.powers_low = p_low
         self.low_floor_db = low_floor
@@ -760,6 +789,7 @@ class SampleCollection(JSONMixin):
                 complete_events.add(sample_set.complete)
         self.retry_failed_tiles(keys)
         self.remeasure_neighbours(keys)
+        self.remove_images()
         if self.scanning.is_set():
             for e in complete_events.copy():
                 if e.is_set():
@@ -843,6 +873,7 @@ class SampleCollection(JSONMixin):
         read again with it. The spectrum is rebuilt after."""
         self.neighbours = []
         self.zone_rereads = []
+        self.zone_floors = []
         self.neighbours_skipped = 0
         if self.aborted or not self.scanning.is_set():
             return
@@ -1001,13 +1032,10 @@ class SampleCollection(JSONMixin):
             self._raise_deaf_tiles(zones, far_keys)
         except Exception:
             logger.exception('deafness check failed')
+        self.zone_floors = [(z, zone_floor.get(id(z))) for z in zones]
         rebuild = getattr(self.scanner, 'rebuild_spectrum', None)
         if rebuild is not None:
             rebuild()
-        try:
-            self._replace_images(zones)
-        except Exception:
-            logger.exception('image check failed')
 
     def _mark_tile_products(self, low):
         """V20.1: a "signal" of one tile's low-gain reading that another tile
@@ -1070,6 +1098,64 @@ class SampleCollection(JSONMixin):
             logger.info('%d tile(s) near strong carriers were deaf, raised by up to %.1f dB',
                         len(self.desensed), max(self.sample_sets[k].desense_db for k in self.desensed))
 
+    def strong_carriers(self):
+        """V20.2: narrow carriers of the merged spectrum STRONG_CARRIER_DB or
+        more above the usual floor (they need not have clipped):
+        [(Hz, level dB), ...]."""
+        spectrum = getattr(self.scanner, 'spectrum', None)
+        ref = self._reference_floor_db()
+        if spectrum is None or ref is None:
+            return []
+        with spectrum.data_update_lock:
+            f = np.asarray(spectrum.sample_data['frequency'], dtype=np.float64).copy()
+            y = np.asarray(spectrum.sample_data['dbFS'], dtype=np.float64).copy()
+        if f.size < 16:
+            return []
+        out = []
+        df = float(np.median(np.diff(f)))
+        w = max(2, int(round(0.15 / df))) if df > 0 else 6
+        for i in np.flatnonzero(y >= ref + STRONG_CARRIER_DB):
+            a, b = max(i - w, 0), min(i + w, y.size - 1)
+            if y[i] < y[a:b + 1].max():
+                continue
+            # narrow: 150 kHz away it is at least 20 dB lower on both sides
+            if y[a] > y[i] - 20. or y[b] > y[i] - 20.:
+                continue
+            out.append((f[i] * 1e6, float(y[i])))
+        return out
+
+    def remove_images(self):
+        """V20.2: images of strong carriers (clipping zones and, with the
+        auto gain or the spur cleaning on, any strong narrow carrier)."""
+        self.images = []
+        if self.aborted:
+            return
+        zones = list(getattr(self, 'zone_floors', None) and [z for z, _ in self.zone_floors] or [])
+        if not zones:
+            zones = self.carrier_zones() if any(
+                s.powers_low is not None for s in self.sample_sets.values()) else []
+        carriers = [(z['carrier'], None) for z in zones]
+        auto = False
+        try:
+            auto = bool(self.scanner.sampling_config.get('auto_gain'))
+        except Exception:
+            pass
+        spurs = False
+        try:
+            spurs = bool(self.scanner.config.processing.get('clean_spurs'))
+        except Exception:
+            pass
+        if auto or spurs:
+            for c, lv in self.strong_carriers():
+                if all(abs(c - z) > IMAGE_HALF_HZ for z, _ in carriers):
+                    carriers.append((c, lv))
+        if not carriers:
+            return
+        try:
+            self._replace_images([{'carrier': c, 'members': [c], 'level_db': lv} for c, lv in carriers])
+        except Exception:
+            logger.exception('image check failed')
+
     def _replace_images(self, zones):
         """V20.1: images of a strong carrier that every tile there sees - at
         +-fs (aliases of the dongle's filter) and +-28.8 MHz (crystal) - are
@@ -1089,6 +1175,8 @@ class SampleCollection(JSONMixin):
             changed = False
             for z in zones:
                 c = z['carrier'] / 1e6
+                ci = int(np.argmin(np.abs(f - c)))
+                c_db = float(y[max(ci - 2, 0):ci + 3].max()) if abs(f[ci] - c) < 0.1 else None
                 for off in (fs, -fs, XTAL_HZ, -XTAL_HZ):
                     p = c + off / 1e6
                     win = np.abs(f - p) <= IMAGE_HALF_HZ / 1e6
@@ -1103,6 +1191,14 @@ class SampleCollection(JSONMixin):
                         continue
                     if ref is not None and base > ref + IMAGE_OVER_DB:
                         continue            # inside a wide signal (DVB-T): leave it
+                    if c_db is not None and z.get('level_db') is not None:
+                        # V20.2: a carrier that did not clip: the image must
+                        # be as much below it as the dongle's images are (a
+                        # real signal there is left alone). In a clipping
+                        # zone the tiles were merged, levels differ: no check.
+                        lo_dbc, hi_dbc = ALIAS_DBC if abs(off) < 10e6 else XTAL_DBC
+                        if not (lo_dbc <= top - c_db <= hi_dbc):
+                            continue
                     idx = np.flatnonzero(win)
                     # the image is a copy of the carrier: as wide as it is
                     # above the floor around it
@@ -1156,9 +1252,17 @@ class SampleCollection(JSONMixin):
                 y = np.asarray(sd['dbFS'], dtype=np.float64).copy()
                 w = np.asarray(sd._get_counts(), dtype=np.float64).copy()
             if f.size and w.shape == f.shape:
+                zfl = [(z, zf) for z, zf in (getattr(self, 'zone_floors', None) or []) if zf is not None]
+                reach = NEIGHBOUR_HZ + fs
                 for i in np.flatnonzero(w < 0.5):
-                    if y[i] - ref >= 3.:
-                        spans.append((f[i], f[i], y[i] - ref))
+                    if y[i] - ref < 3.:
+                        continue
+                    # V20.2: above the plateau of its zone it is a signal
+                    # (dips of a DVB-T multiplex), not lost sensitivity
+                    hit = [zf for z, zf in zfl if self.zone_of(f[i] * 1e6, [z], reach=reach) is not None]
+                    if hit and y[i] > min(hit) + PLATEAU_MARGIN_DB:
+                        continue
+                    spans.append((f[i], f[i], y[i] - ref))
         for k, s in self.sample_sets.items():
             d = getattr(s, 'desense_db', 0.) or 0.
             if d >= DESENSE_MIN_DB:
@@ -1240,6 +1344,16 @@ class SampleCollection(JSONMixin):
                 '%d tile(s) next to strong carriers not checked' % self.neighbours_skipped
         self.overload_note = note
         self.overload_warn = bool(still) or worst >= LOSS_WARN_DB
+        # V20.2: for the graph (shaded bands, image marks)
+        spectrum = getattr(self.scanner, 'spectrum', None)
+        if spectrum is not None:
+            try:
+                spectrum.loss_bands = [{'lo': float(lo), 'hi': float(hi), 'db': float(loss),
+                                        'signal': float(c) if c is not None else 0.}
+                                       for lo, hi, loss, c in self.sensitivity]
+                spectrum.image_marks = [{'f': float(p), 'of': float(c)} for p, _, c in images]
+            except Exception:
+                logger.exception('graph marks failed')
         if note:
             (logger.warning if self.overload_warn else logger.info)(
                 'Sensitivity: %s (weak signals below that floor are not seen there)', note)

@@ -93,9 +93,10 @@ class WideAdc(object):
       clipping is NOT visible in the 8 output bits (the decimation filter
       removes the strong carrier), but its products fall into the band;
     - the decimation filter keeps +-fs/2, components from the next zones
-      leak in with ``alias_db`` (the real 635.325 = 632.925 + fs alias).
+      leak in with ``alias_db`` (the real 635.325 = 632.925 + fs alias;
+      V20.2: -38 gives the user's -44 dBc in a 0 dB scan).
     """
-    def __init__(self, ratio=8, rolloff_db_per_mhz=12., alias_db=-50., adc_noise_lsb=1.0, seed=7):
+    def __init__(self, ratio=8, rolloff_db_per_mhz=12., alias_db=-38., adc_noise_lsb=1.0, seed=7):
         self.ratio = int(ratio)
         # noise of the ADC itself (rms, in 8-bit steps of the output): it
         # sets the floor at low gain (user: -105.6...-105.9 dBFS at 0-8.7 dB)
