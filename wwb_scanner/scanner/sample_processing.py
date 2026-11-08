@@ -386,7 +386,8 @@ class SampleSet(JSONMixin):
 
         self.powers = Pxx
         if not np.array_equal(freqs, self.frequencies):
-            logger.warning('freq not equal: %s, %s' % (self.frequencies.size, freqs.size))
+            # diagnostic only (the tile is used as measured): no status line message
+            logger.info('freq not equal: %s, %s' % (self.frequencies.size, freqs.size))
             self.frequencies = freqs
         self.raw = None
         self._tick('processed')

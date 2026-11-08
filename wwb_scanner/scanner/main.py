@@ -32,7 +32,9 @@ def get_freq_resolution(nfft, fs):
     freqs = np.fft.fftshift(freqs)
     r = np.unique(np.diff(np.around(freqs)))
     if r.size != 1:
-        logger.error(f'!!! Not unique: {r}')
+        # V18.1: float rounding of the FFT bins (e.g. 2.048 MHz / 96), not an
+        # error; at ERROR level it would open the error dialog in the window
+        logger.debug(f'frequency resolution not unique (rounding): {r}')
         return r.mean()
     return r[0]
 

@@ -284,3 +284,15 @@ def test_A_window_errors_go_to_the_status_line():
             assert len(got) == 2, got
         print('ALL_OK')
     """)
+
+
+def test_A_resolution_rounding_is_not_an_error(caplog):
+    """GitHub version: upstream logged float rounding of the FFT bins at ERROR
+    level, which opens the error dialog of the window (Scan settings at
+    2.048 MHz / 96 points)."""
+    from wwb_scanner.scanner.main import get_freq_resolution
+    with caplog.at_level(logging.DEBUG, logger='wwb_scanner'):
+        r = get_freq_resolution(96, 2.048e6)
+        r2 = get_freq_resolution(96, 2.4e6)
+    assert abs(r - 21333.3) < 1 and r2 == 25000
+    assert not [x for x in caplog.records if x.levelno >= logging.WARNING], caplog.text
