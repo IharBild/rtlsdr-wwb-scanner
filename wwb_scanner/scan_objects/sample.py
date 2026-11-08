@@ -51,6 +51,8 @@ class Sample(JSONMixin):
             i, q = value
             value = np.complex128(float(i) + 1j*float(q))
         ix = self.spectrum_index
+        if ix is None:
+            return
         self.spectrum.sample_data['iq'][ix] = value
         if not self.init_complete:
             return
@@ -74,6 +76,8 @@ class Sample(JSONMixin):
         if not isinstance(value, float):
             value = float(value)
         ix = self.spectrum_index
+        if ix is None:
+            return
         self.spectrum.sample_data['magnitude'][ix] = value
         if not self.init_complete:
             return
@@ -96,6 +100,8 @@ class Sample(JSONMixin):
             return
         m = dbmath.from_dB(value)
         ix = self.spectrum_index
+        if ix is None:
+            return
         self.spectrum.sample_data['dbFS'][ix] = value
         self.spectrum.sample_data['magnitude'][ix] = m
         if not self.init_complete:

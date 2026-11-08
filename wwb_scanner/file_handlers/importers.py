@@ -9,6 +9,7 @@ import itertools
 import numpy as np
 
 from wwb_scanner.scan_objects import Spectrum
+from wwb_scanner.file_handlers.exporters import WSM_LEVEL_SCALE
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,9 @@ class CSVImporter(BaseImporter):
     def parse_file_data(self):
         spectrum = self.spectrum
         spectrum.name = os.path.basename(self.filename)
+        if self.file_data.lstrip().startswith('Receiver;'):
+            self._parse_wsm()
+            return
         bad = []
         def iter_lines():
             for n, line in enumerate(self.file_data.splitlines(), 1):
@@ -89,6 +93,31 @@ class CSVImporter(BaseImporter):
         if freqs.size and np.nanmax(freqs) >= 10000.:
             freqs = freqs / 1000.
         spectrum.add_sample_set(frequency=freqs, dbFS=dB)
+
+    def _parse_wsm(self):
+        """Sennheiser WSM scan file: 'freq_kHz; RF%; RF_dB; ...' rows, the RF
+        level in the 3rd column. The 0..48 dB level is mapped back to our
+        dBFS (inverse of exporters.dbFS_to_wsm_level)."""
+        freqs_khz, db = [], []
+        for line in self.file_data.splitlines():
+            line = line.strip()
+            if not line or ';' not in line:
+                continue
+            parts = [p.strip() for p in line.split(';')]
+            if not parts or not parts[0].isdigit():
+                continue
+            if len(parts) < 3 or not parts[2]:
+                continue
+            try:
+                freqs_khz.append(float(parts[0]))
+                db.append(float(parts[2]))
+            except ValueError:
+                continue
+        if len(freqs_khz) < 2:
+            raise ValueError('%s: no WSM scan data found' % os.path.basename(self.filename))
+        freqs_mhz = np.array(freqs_khz, dtype=np.float64) / 1000.0
+        dbFS = (np.array(db, dtype=np.float64) / WSM_LEVEL_SCALE) - 100.0
+        self.spectrum.add_sample_set(frequency=freqs_mhz, dbFS=dbFS)
 
 class BaseWWBImporter(BaseImporter):
     def load_file(self):
@@ -149,7 +178,10 @@ class WWB3Importer(BaseImporter):
         j = b.rfind(b'@Extended:')
         body = b[i + len(b'@Binary:'):j if j > 0 else len(b)]
         width = int(header.get('BitWidth', 16)) // 8
-        dtype = {1: '>i1', 2: '>i2', 4: '>i4'}[width]
+        dtype = {1: '>i1', 2: '>i2', 4: '>i4'}.get(width)
+        if dtype is None:
+            raise ValueError('%s: unsupported BitWidth %d (expected 8, 16 or 32)'
+                             % (os.path.basename(self.filename), width * 8))
         scale = float(header.get('Scale Factor', 1)) or 1.
         nodata = header.get('NoDataValue')
         layout, freqs = [], []

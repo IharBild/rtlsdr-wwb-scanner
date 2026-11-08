@@ -144,6 +144,64 @@ def test_auto_gain_fixes_clipped_tile(monkeypatch, tmpdir, caplog):
     assert any('measured again' in r.getMessage() for r in caplog.records)
 
 
+def test_auto_gain_peak_threshold_configurable(monkeypatch, tmpdir):
+    """The peak threshold (not just clipping) triggers the re-measure, and a
+    higher threshold suppresses it (V18)."""
+    f0 = 500.0e6
+    air = sim.Air(noise=0.01).tone(f0, 0.6)   # strong (peak ~0.6) but not clipping
+
+    s1, sdr1, _ = sim.run_scan(monkeypatch, tmpdir, 495, 505, gain=29.7, auto_gain=True,
+                                auto_gain_peak_db=-6.0, sdr_kwargs={'air': air, 'gain_affects': True})
+    dropped = [k for k, s in s1.sample_collection.sample_sets.items()
+               if getattr(s, 'gain_drop', 0.) > 0]
+    assert dropped, 'peak above threshold should trigger the re-measure'
+    assert sdr1.gains_set[-1] == 29.7                      # gain set back
+
+    s2, sdr2, _ = sim.run_scan(monkeypatch, tmpdir, 495, 505, gain=29.7, auto_gain=True,
+                                auto_gain_peak_db=0.0, sdr_kwargs={'air': air, 'gain_affects': True})
+    dropped2 = [k for k, s in s2.sample_collection.sample_sets.items()
+                if getattr(s, 'gain_drop', 0.) > 0]
+    assert not dropped2, 'peak below threshold should not trigger'
+
+
+def test_hdr_scan_runs_and_merges(monkeypatch, tmpdir):
+    """run_hdr_scan() does two passes and returns a merged spectrum."""
+    import threading
+    from wwb_scanner.scanner import sdrwrapper, main
+    from wwb_scanner import scan_dll
+    from wwb_scanner.utils import dbstore
+
+    air = sim.Air(noise=0.01).tone(500.0e6, 1.0)   # strong tone
+    made = []
+
+    def factory(serial_number=None):
+        s = sim.FakeRtlSdr(serial_number=serial_number, air=air, gain_affects=True)
+        made.append(s)
+        return s
+
+    monkeypatch.setattr(sdrwrapper, 'RtlSdr', factory)
+    monkeypatch.setitem(scan_dll._cache, 'lib', None)
+    monkeypatch.setattr(dbstore.DBStore, 'DB_PATH', str(tmpdir.join('db.json')))
+    monkeypatch.setattr(dbstore.DBStore, 'SCAN_DB_PATH', str(tmpdir.join('scan_db.json')))
+    monkeypatch.setattr(dbstore.db_store, '_db', None)
+    monkeypatch.setattr(dbstore.db_store, '_scan_db', None)
+    monkeypatch.setenv('HOME', str(tmpdir))
+    monkeypatch.setenv('USERPROFILE', str(tmpdir))
+
+    scanner = main.Scanner(config=sim.make_config(495, 505, gain=29.7,
+                                                  hdr_enabled=True, hdr_gain_drop_db=30.0))
+    th = threading.Thread(target=scanner.run_hdr_scan, daemon=True)
+    th.start()
+    th.join(120)
+    assert not th.is_alive(), 'HDR scan did not finish in 120 s'
+
+    f, y = sim.spectrum_arrays(scanner)
+    assert f.size > 0
+    assert np.isfinite(y).all()
+    tone = y[np.abs(f - 500.0) <= 0.1].max()
+    assert tone > np.median(y) + 10
+
+
 def test_scan_with_cleanup_keeps_raw(monkeypatch, tmpdir, caplog):
     caplog.set_level(logging.INFO, logger='wwb_scanner')
     air = sim.Air(noise=0.01).tone(28.8e6 * 18, 0.003).tone(510.3e6, 0.05)

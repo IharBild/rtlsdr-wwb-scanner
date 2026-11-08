@@ -46,6 +46,9 @@ class SamplingConfig(Config):
         rtl_crop=50,
         rtl_fir_size=4,
         auto_gain=False,          # V17: re-measure clipped tiles with lower gain
+        auto_gain_peak_db=-6.0,   # V18: also re-measure when the peak sample is above this (dBFS)
+        hdr_enabled=False,        # V19: two scans (high + low gain) merged for wider dynamic range
+        hdr_gain_drop_db=48.0,    # V19: gain difference between the two HDR scans (full range)
     )
 
 class ProcessingConfig(Config):

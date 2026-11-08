@@ -228,6 +228,9 @@ class DBStore(object):
         rec = dict(rec)
         name = rec.get('sample_data_file')
         if name:
+            if os.path.basename(name) != name:
+                print('!!! scan %s: refusing bad sample_data_file %r' % (eid, name), flush=True)
+                return rec
             from wwb_scanner.scan_objects.samplearray import SampleArray
             with np.load(os.path.join(self.scans_dir, name)) as z:
                 rec['sample_data'] = SampleArray(data=z['sample_data'])

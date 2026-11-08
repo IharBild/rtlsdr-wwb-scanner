@@ -149,8 +149,9 @@ def decimate_max(d_arr, k=None):
         ix = np.append(ix, m + np.argmax(d_arr['y'][m:]))
     return d_arr[ix]
 
-# "khz" = Shure WWB style CSV, None = old MHz CSV
-CSV_FREQUENCY_FORMAT = 'khz'
+# "wsm" = Sennheiser WSM style CSV (opens in WSM and WWB), "khz" = Shure WWB,
+# None = old MHz CSV
+CSV_FREQUENCY_FORMAT = 'wsm'
 
 class SpectrumGraphData(QtQuick.QQuickItem):
     _n_model = Signal()

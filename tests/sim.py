@@ -220,7 +220,9 @@ class FakeLockLib(object):
 
 
 def make_config(start, end, fs=2.4e6, window=96, sweeps=40, per_sweep=2048,
-                overlap=0.65, window_type='hann', gain=33.8, auto_gain=False, clean=None):
+                overlap=0.65, window_type='hann', gain=33.8, auto_gain=False,
+                auto_gain_peak_db=-6.0, hdr_enabled=False, hdr_gain_drop_db=40.0,
+                clean=None):
     conf = {
         'scan_range': [float(start), float(end)],
         'device': {'gain': gain},
@@ -229,6 +231,9 @@ def make_config(start, end, fs=2.4e6, window=96, sweeps=40, per_sweep=2048,
             'sweeps_per_scan': sweeps, 'samples_per_sweep': per_sweep,
             'window_size': window, 'window_type': window_type,
             'auto_gain': auto_gain,
+            'auto_gain_peak_db': auto_gain_peak_db,
+            'hdr_enabled': hdr_enabled,
+            'hdr_gain_drop_db': hdr_gain_drop_db,
         },
     }
     if clean:

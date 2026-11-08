@@ -22,6 +22,8 @@ Item {
     property alias cleanSpurs: model.cleanSpurs
     property alias cleanFloor: model.cleanFloor
     property alias autoGain: model.autoGain
+    property alias autoGainPeak: model.autoGainPeak
+    property alias hdrEnabled: model.hdrEnabled
 
     signal configUpdate()
 
@@ -43,6 +45,8 @@ Item {
         cleanSpurs: true
         cleanFloor: true
         autoGain: true
+        autoGainPeak: -6.0
+        hdrEnabled: false
 
         onConfigUpdate: {
             root.configUpdate();
@@ -68,5 +72,7 @@ Item {
         property alias cleanSpurs: model.cleanSpurs
         property alias cleanFloor: model.cleanFloor
         property alias autoGain: model.autoGain
+        property alias autoGainPeak: model.autoGainPeak
+        property alias hdrEnabled: model.hdrEnabled
     }
 }

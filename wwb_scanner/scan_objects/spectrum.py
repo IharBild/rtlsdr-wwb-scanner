@@ -200,13 +200,18 @@ class Spectrum(JSONMixin):
         self.set_data_updated()
     def scale(self, min_dB, max_dB):
         with self.data_update_lock:
+            if self.sample_data.size == 0:
+                return
             y = self.sample_data['dbFS']
             ymin = y.min()
             ymax = y.max()
             y -= ymin
             out_scale = max_dB - min_dB
 
-            y /= y.max()
+            span = y.max()
+            if span == 0:
+                return
+            y /= span
             y *= out_scale
             y += min_dB
             self.sample_data['magnitude'] = dbmath.from_dB(y)
@@ -341,3 +346,62 @@ def compare_spectra(spec1, spec2):
         magnitude = sample.magnitude - other_sample.magnitude
         diff_spec.add_sample(frequency=sample.frequency, magnitude=magnitude)
     return diff_spec
+
+
+# HDR (V19): low-gain values above this are "strong" (measured cleanly at low
+# gain); below it the signal is weak and comes from the high-gain scan.
+HDR_MERGE_THRESHOLD_DBFS = -80.0
+# Around each strong signal this zone is taken from the low-gain scan, so its
+# intermodulation spurs (only present at high gain) are not re-introduced.
+# The zone is asymmetric: the dongle's spurs reach further below the carrier
+# (up to ~5.3 MHz) than above it (~3 MHz), and the TV channel starts at
+# ~+5.5 MHz, so the "above" side is kept shorter.
+HDR_PROTECT_LOW_MHZ = 5.5
+HDR_PROTECT_HIGH_MHZ = 4.0
+HDR_BLEND_MHZ = 1.0        # smooth transition at the zone edges (no hard step)
+
+
+def merge_hdr(high, low, threshold_dbFS=HDR_MERGE_THRESHOLD_DBFS,
+              protect_low_mhz=HDR_PROTECT_LOW_MHZ, protect_high_mhz=HDR_PROTECT_HIGH_MHZ,
+              blend_mhz=HDR_BLEND_MHZ):
+    """Merge a high-gain scan (weak signals visible) and a low-gain scan
+    (strong signals clean) into one Spectrum. Strong signals and their
+    neighbourhood come from the low-gain scan (clean, no intermodulation
+    spurs); elsewhere the high-gain value is used (weak signals visible). The
+    transition is blended so the noise floor changes smoothly, not in a step."""
+    hd = high.sample_data
+    ld = low.sample_data
+    freq = np.asarray(hd['frequency'], dtype=np.float64)
+    high_db = np.asarray(hd['dbFS'], dtype=np.float64)
+    low_freq = np.asarray(ld['frequency'], dtype=np.float64)
+    low_db = np.asarray(ld['dbFS'], dtype=np.float64)
+    hkeys = SampleArray._freq_keys(freq)
+    lkeys = SampleArray._freq_keys(low_freq)
+    idx = np.searchsorted(hkeys, lkeys)
+    valid = (idx < hkeys.size) & (hkeys[idx] == lkeys)
+    aligned_low = np.full(freq.size, np.nan)
+    aligned_low[idx[valid]] = low_db[valid]
+    strong = np.isfinite(aligned_low) & (aligned_low > threshold_dbFS)
+    blend = max(float(blend_mhz), 1e-6)
+    # weight of the low-gain scan: 1 inside the protection zone, 0 outside,
+    # linear blend in between
+    weight = np.zeros(freq.size)
+    for sf in freq[strong]:
+        off = freq - sf
+        w = np.where(
+            off >= 0,
+            np.clip((protect_high_mhz + blend - off) / blend, 0.0, 1.0),
+            np.clip((protect_low_mhz + blend + off) / blend, 0.0, 1.0),
+        )
+        weight = np.maximum(weight, w)
+    merged_db = high_db.copy()
+    finite = np.isfinite(aligned_low)
+    use = (weight > 0) & finite
+    merged_db[use] = aligned_low[use] * weight[use] + high_db[use] * (1.0 - weight[use])
+    merged = Spectrum()
+    merged.name = high.name
+    merged.step_size = high.step_size
+    merged.add_sample_set(frequency=freq, dbFS=merged_db, force_lower_freq=True)
+    if high.scan_config is not None:
+        merged.scan_config = high.scan_config
+    return merged

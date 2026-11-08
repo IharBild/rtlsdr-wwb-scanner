@@ -123,6 +123,8 @@ class SampleSet(JSONMixin):
     clip_ratio = 0.
     clip_ratio_first = None     # V17: before the re-measurement with lower gain
     gain_drop = 0.              # V17: dB the gain was lowered for this tile
+    peak = 0.                   # V18: peak |iq| of the last read
+    peak_first = None           # V18: peak before the re-measurement with lower gain
     __slots__ = ('scanner', 'center_frequency', 'raw', 'current_sweep', 'complete',
                  '_frequencies', 'powers', 'collection', 'process_thread', 'samples_discarded')
     _serialize_attrs = ('center_frequency', '_frequencies', 'powers')
@@ -242,7 +244,8 @@ class SampleSet(JSONMixin):
             return
         sweeps, per_sweep = self.raw.shape
         self.clip_ratio = clip_ratio(iq)
-        if self.clip_ratio >= OVERLOAD_RATIO and self._auto_gain_enabled():
+        self.peak = float(np.max(np.abs(iq))) if iq.size else 0.
+        if self._auto_gain_enabled() and (self.clip_ratio >= OVERLOAD_RATIO or self.peak >= self._auto_gain_peak_level()):
             iq = self.remeasure_lower_gain(sdr, num_samples, iq)
         self.raw = np.asarray(iq[:sweeps * per_sweep], dtype=np.complex128).reshape(sweeps, per_sweep)
         self.process_samples()
@@ -251,6 +254,14 @@ class SampleSet(JSONMixin):
             return bool(self.scanner.sampling_config.get('auto_gain'))
         except Exception:
             return False
+    def _auto_gain_peak_level(self):
+        """Peak |iq| above which a tile is re-measured with lower gain
+        (``auto_gain_peak_db`` is in dBFS)."""
+        try:
+            db = float(self.scanner.sampling_config.get('auto_gain_peak_db'))
+        except Exception:
+            db = -6.0
+        return 10.0 ** (db / 20.0)
     def remeasure_lower_gain(self, sdr, num_samples, iq):
         """The ADC clipped: read the tile again with lower gain and scale the
         samples back by the gain difference, so levels stay comparable.
@@ -268,6 +279,8 @@ class SampleSet(JSONMixin):
         if not gains:
             return iq
         first = self.clip_ratio
+        first_peak = self.peak
+        threshold = self._auto_gain_peak_level()
         best = None
         try:
             for drop in AUTO_GAIN_DROPS_DB:
@@ -285,8 +298,9 @@ class SampleSet(JSONMixin):
                 run_with_timeout(sdr.read_samples, READ_TIMEOUT, NUM_SAMPLES_DISCARDED)
                 x = run_with_timeout(sdr.read_samples, READ_TIMEOUT, num_samples)
                 cr = clip_ratio(x)
-                best = (x, g_set, cr)
-                if cr < OVERLOAD_RATIO:
+                pk = float(np.max(np.abs(x))) if x.size else 0.
+                best = (x, g_set, cr, pk)
+                if cr < OVERLOAD_RATIO and pk < threshold:
                     break
         except SdrTimeout as exc:
             logger.error('auto gain at %s Hz: %s', self.center_frequency, exc)
@@ -300,9 +314,11 @@ class SampleSet(JSONMixin):
                 logger.exception('could not set the gain back to %s dB', g0)
         if best is None:
             return iq
-        x, g_set, cr = best
+        x, g_set, cr, pk = best
         self.clip_ratio_first = first
+        self.peak_first = first_peak
         self.clip_ratio = cr
+        self.peak = pk
         self.gain_drop = g0 - g_set
         return np.asarray(x) * (10. ** (self.gain_drop / 20.))
     def samples_callback(self, iq, context):
@@ -319,7 +335,7 @@ class SampleSet(JSONMixin):
         self.raw[current_sweep] = iq
         self.clip_ratio = max(self.clip_ratio, clip_ratio(iq))
         self.current_sweep += 1
-        if current_sweep > self.raw.shape[0]:
+        if self.current_sweep >= self.raw.shape[0]:
             self.on_sample_read_complete()
     def on_sample_read_complete(self):
         sdr = self.scanner.sdr

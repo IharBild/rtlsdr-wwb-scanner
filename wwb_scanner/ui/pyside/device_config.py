@@ -1,4 +1,6 @@
 import enum
+import threading
+
 from rtlsdr import RtlSdr
 
 from PySide2 import QtCore, QtQml
@@ -63,16 +65,28 @@ class DeviceInfo(GenericQObject):
         self.device_index = device_index
         if self.device_serial is None:
             self.device_serial = RtlSdr.get_device_serial_addresses()[device_index]
-        sdr = RtlSdr(device_index)
-        self._get_info_from_device(sdr)
-        sdr.close()
+        sdr = None
+        try:
+            sdr = RtlSdr(device_index)
+            self._get_info_from_device(sdr)
+        except Exception:
+            logger.exception('could not read device %d', device_index)
+        finally:
+            if sdr is not None:
+                sdr.close()
     def get_info_from_device_serial(self, device_serial):
         self.device_serial = device_serial
         if self.device_index is None:
             self.device_index = RtlSdr.get_device_index_by_serial(device_serial)
-        sdr = RtlSdr(device_serial=device_serial)
-        self._get_info_from_device(sdr)
-        sdr.close()
+        sdr = None
+        try:
+            sdr = RtlSdr(device_serial=device_serial)
+            self._get_info_from_device(sdr)
+        except Exception:
+            logger.exception('could not read device %s', device_serial)
+        finally:
+            if sdr is not None:
+                sdr.close()
     def __repr__(self):
         return f'<{self.__class__}: {self}>'
     def __str__(self):
@@ -81,12 +95,16 @@ class DeviceInfo(GenericQObject):
 class DeviceInfoList(GenericQObject):
     _n_devices = Signal()
     update_devices = Signal()
+    _device_ready = Signal(int, str, str, list)   # index, serial, tuner_type, gains
+
     def __init__(self, *args):
         self._devices = {}
         self._devices_by_index = {}
         self._devices_by_serial = {}
+        self._devices_lock = threading.Lock()
         super().__init__(*args)
         self.update_devices.connect(self._on_update_devices)
+        self._device_ready.connect(self._on_device_ready, QtCore.Qt.QueuedConnection)
 
     def _g_devices(self):
         d = self._devices
@@ -103,23 +121,60 @@ class DeviceInfoList(GenericQObject):
 
 
     def _on_update_devices(self):
-        device_serials = RtlSdr.get_device_serial_addresses()
-        logger.debug(f'found sdr serial numbers: {device_serials}')
+        # USB enumeration + opening each dongle is slow and can hang, so it
+        # must not run on the UI thread
+        threading.Thread(target=self._update_devices_bg, daemon=True).start()
+
+    def _update_devices_bg(self):
+        try:
+            device_serials = RtlSdr.get_device_serial_addresses()
+        except Exception:
+            logger.exception('could not list SDR devices')
+            return
+        logger.debug('found sdr serial numbers: %s', device_serials)
         for i, device_serial in enumerate(device_serials):
-            if i in self._devices:
-                continue
-            device = self.add_device(i, device_serial)
+            with self._devices_lock:
+                if i in self._devices:
+                    continue
+            self._read_device_bg(i, device_serial)
+
+    def _read_device_bg(self, device_index, device_serial):
+        tuner_type = 'UNKNOWN'
+        gains = []
+        sdr = None
+        try:
+            sdr = RtlSdr(device_index)
+            tuner_type = TUNER_TYPE(sdr.get_tuner_type()).name
+            gains = [g / 10 for g in sdr.gain_values]
+        except Exception:
+            logger.exception('could not read device %d', device_index)
+        finally:
+            if sdr is not None:
+                try:
+                    sdr.close()
+                except Exception:
+                    pass
+        self._device_ready.emit(device_index, device_serial, tuner_type, gains)
+
+    def _on_device_ready(self, device_index, device_serial, tuner_type, gains):
+        with self._devices_lock:
+            if device_index in self._devices:
+                return
+            device = DeviceInfo()
+            device.device_index = device_index
+            device.device_serial = device_serial
+            device.tuner_type = tuner_type
+            device.gains = gains
+            self._devices[device_index] = device
+            self._devices_by_index[device_index] = device
+            self._devices_by_serial[device_serial] = device
+        self._n_devices.emit()
 
     def add_device(self, device_index, device_serial):
-        assert device_index not in self._devices
-        device = DeviceInfo()
-        device.device_index = device_index
-        device.device_serial = device_serial
-        self._devices_by_index[device_index] = device
-        device.get_info_from_device_index(device_index)
-        self._devices[device_index] = device
-        self._n_devices.emit()
-        return device
+        # non-blocking: read the device info in the background
+        if device_index not in self._devices:
+            threading.Thread(target=self._read_device_bg,
+                             args=(device_index, device_serial), daemon=True).start()
 
 def register_qml_types():
     QtQml.qmlRegisterType(DeviceInfo, 'DeviceConfig', 1, 0, 'DeviceInfo')

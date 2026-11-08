@@ -27,6 +27,22 @@ WWB_STEP_KHZ = 25
 # shown by WWB as the scanner model (WWB itself writes '' for CSV imports)
 SCANNER_MODEL = 'RTL-SDR (rtlsdr-wwb-scanner)'
 
+# Sennheiser WSM "RF level (dB)" runs 0..48, where 0 is the noise floor.
+WSM_LEVEL_MAX_DB = 48.0
+# Our per-bin FFT reads a broadband channel (DVB-T) ~25% lower than the
+# receiver's channel detector, so "dB above noise" is multiplied by this.
+WSM_LEVEL_SCALE = 1.25
+
+
+def dbFS_to_wsm_level(db, noise_dbFS=None, scale=WSM_LEVEL_SCALE):
+    """Map our dBFS to WSM's integer "RF level (dB)" (0..48): the value is the
+    signal level above the scan's noise floor (median), scaled and clipped to
+    0..48. This matches the Sennheiser receiver, where 0 is the noise floor."""
+    db = np.asarray(db, dtype=np.float64)
+    if noise_dbFS is None:
+        noise_dbFS = float(np.median(db))
+    return np.clip(np.rint((db - noise_dbFS) * scale), 0.0, WSM_LEVEL_MAX_DB)
+
 
 def wwb_date(dt):
     """'Wed Nov 4 2026' - the way WWB 7.9 writes the date (no leading zero)."""
@@ -57,6 +73,13 @@ def wwb_grid(spectrum, step=WWB_STEP_KHZ, lo=WWB_MIN_KHZ, hi=WWB_MAX_KHZ):
                          % (freqs_khz[0] / 1000., freqs_khz[-1] / 1000., lo // 1000, hi // 1000))
     grid = np.arange(first, last + 1, step, dtype=np.int64)
     values = np.around(np.interp(grid, freqs_khz, dB), decimals=1)
+    # a hole in the scan (a failed tile) must stay a hole, not be filled by
+    # the interpolation into a straight line that hides a real signal there
+    if freqs_khz.size > 1:
+        nominal = float(np.median(np.diff(freqs_khz)))
+        for lo, hi in zip(freqs_khz[:-1], freqs_khz[1:]):
+            if hi - lo > 1.5 * nominal:
+                values[(grid > lo) & (grid < hi)] = NO_DATA_DB
     return grid, values
 
 
@@ -102,6 +125,8 @@ class BaseExporter(object):
     @classmethod
     def export_to_file(cls, **kwargs):
         filename = kwargs.get('filename')
+        if not filename:
+            raise ValueError('no output file name given')
         ext = os.path.splitext(filename)[1].strip('.').lower()
         def find_exporter(_cls):
             if getattr(_cls, '_extension', None) == ext:
@@ -111,8 +136,10 @@ class BaseExporter(object):
                 if r is not None:
                     return r
             return None
-        cls = find_exporter(cls)
-        fh = cls(**kwargs)
+        found = find_exporter(cls)
+        if found is None:
+            raise ValueError('unsupported file format ".%s" (use .csv, .sdb2, .sdb3 or .npz)' % ext)
+        fh = found(**kwargs)
         fh()
         return fh
     @property
@@ -171,6 +198,10 @@ class CSVExporter(BaseExporter):
     def is_khz(self):
         fmt = self.frequency_format
         return fmt is not None and str(fmt).lower() == 'khz'
+    @property
+    def is_wsm(self):
+        fmt = self.frequency_format
+        return fmt is not None and str(fmt).lower() == 'wsm'
     def build_khz_data(self):
         """Resample onto a whole-kHz grid (step ``khz_step``) like WWB does,
         only inside 30-2000 MHz (WWB refuses anything else)."""
@@ -179,7 +210,54 @@ class CSVExporter(BaseExporter):
         grid, values = wwb_grid(self.spectrum, step=self.khz_step)
         lines = ['%d%s%.1f' % (f, self.delimiter_char, v) for f, v in zip(grid, values)]
         return self.khz_newline_chars.join(lines)
+    def build_wsm_data(self):
+        """Sennheiser WSM scan file: header, semicolon columns, whole-kHz grid,
+        level as integer dB (0..48) + percent, marker + trailing scales.
+        CRLF line endings, exactly like WSM writes them."""
+        sd = self.spectrum.sample_data
+        freqs_mhz = np.asarray(sd['frequency'], dtype=np.float64)
+        db = clean_dB(np.asarray(sd['dbFS'], dtype=np.float64))
+        if freqs_mhz.size == 0:
+            raise ValueError('no scan data to export')
+        freqs_khz = np.rint(freqs_mhz * 1000.0).astype(np.int64)
+        order = np.argsort(freqs_khz, kind='stable')
+        freqs_khz = freqs_khz[order]
+        db = db[order]
+        wsm_db = dbFS_to_wsm_level(db).astype(np.int64)
+        pct = np.minimum(100.0, wsm_db * 2.5)
+        step = int(round(float(np.median(np.diff(freqs_khz))))) if freqs_khz.size > 1 else 25
+        peak_index = int(np.argmax(wsm_db))
+        # squelch: fixed 5 dB / 12.5% (matches the receiver's setting) -> above
+        # this a frequency is "occupied", the noise floor stays "free"
+        squelch = 5
+        squelch_pct = 12.5
+        name = self.spectrum.name or 'scan'
+        now = datetime.datetime.now()
+        lines = [
+            'Receiver;%s' % name,
+            'Date/Time;%s' % now.strftime('%d-%m-%Y %I-%M-%S %p'),
+            'RFUnit;dB;MinimumRFValue;0',
+            'Squelch;Supported',
+            '',
+            'Frequency Range [kHz];%d;%d;%d' % (freqs_khz[0], freqs_khz[-1], step),
+            'Frequency;RF level (%);RF level;Memory (%);Memory;Squelch (%);Squelch',
+        ]
+        for f, p, d in zip(freqs_khz, pct, wsm_db):
+            lines.append('%d;%s;%d;;;%s;%d' % (f, '%g' % float(p), d, '%g' % squelch_pct, squelch))
+        lines += [
+            '',
+            'Marker;1',
+            'Index;Comment',
+            '%d;' % peak_index,
+            '',
+            'Scales;7',
+            'Level (%);Level (units)',
+            '25;10', '37.5;15', '50;20', '62.5;25', '75;30', '87.5;35', '100;40',
+        ]
+        return '\r\n'.join(lines)
     def build_data(self):
+        if self.is_wsm:
+            return self.build_wsm_data()
         if self.is_khz:
             return self.build_khz_data()
         newline_chars = self.newline_chars

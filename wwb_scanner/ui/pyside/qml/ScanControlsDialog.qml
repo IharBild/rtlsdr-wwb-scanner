@@ -22,6 +22,8 @@ Dialog {
     property alias cleanSpurs: cleanSpursSwitch.checked
     property alias cleanFloor: cleanFloorSwitch.checked
     property alias autoGain: autoGainSwitch.checked
+    property alias autoGainPeak: autoGainPeakInput.value
+    property alias hdrEnabled: hdrEnabledSwitch.checked
     title: 'Scan settings'
 
     function updateCalibrationText(){
@@ -214,6 +216,17 @@ Dialog {
                     objectName: 'autoGainSwitch'
                     text: 'Overload: re-measure with less gain'
                 }
+                NumberInput {
+                    id: autoGainPeakInput
+                    objectName: 'autoGainPeakInput'
+                    name: 'Overload threshold (dBFS)'
+                    showFrame: true
+                }
+                Switch {
+                    id: hdrEnabledSwitch
+                    objectName: 'hdrEnabledSwitch'
+                    text: 'HDR: two scans (wide range)'
+                }
                 Label {
                     id: calibrationLbl
                     objectName: 'calibrationLabel'
@@ -278,6 +291,8 @@ Dialog {
         config.cleanSpurs = root.cleanSpurs;
         config.cleanFloor = root.cleanFloor;
         config.autoGain = root.autoGain;
+        config.autoGainPeak = root.autoGainPeak;
+        config.hdrEnabled = root.hdrEnabled;
     }
 
     function reloadSettings(){
@@ -298,6 +313,8 @@ Dialog {
         root.cleanSpurs = config.cleanSpurs;
         root.cleanFloor = config.cleanFloor;
         root.autoGain = config.autoGain;
+        root.autoGainPeak = config.autoGainPeak;
+        root.hdrEnabled = config.hdrEnabled;
         root.updateCalibrationText();
     }
 

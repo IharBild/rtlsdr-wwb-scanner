@@ -31,6 +31,8 @@ class ScanConfigData(GenericQObject):
     _n_cleanSpurs = Signal()
     _n_cleanFloor = Signal()
     _n_autoGain = Signal()
+    _n_autoGainPeak = Signal()
+    _n_hdrEnabled = Signal()
     configUpdate = Signal()
     def __init__(self, *args):
         self._startFreq = 470.
@@ -49,6 +51,8 @@ class ScanConfigData(GenericQObject):
         self._cleanSpurs = True
         self._cleanFloor = True
         self._autoGain = True
+        self._autoGainPeak = -6.0
+        self._hdrEnabled = False
         super().__init__(*args)
 
     def _generic_property_changed(self, attr, old_value, new_value):
@@ -117,6 +121,14 @@ class ScanConfigData(GenericQObject):
     def _g_autoGain(self): return self._autoGain
     def _s_autoGain(self, value): self._generic_setter('_autoGain', value)
     autoGain = Property(bool, _g_autoGain, _s_autoGain, notify=_n_autoGain)
+
+    def _g_autoGainPeak(self): return self._autoGainPeak
+    def _s_autoGainPeak(self, value): self._generic_setter('_autoGainPeak', value)
+    autoGainPeak = Property(float, _g_autoGainPeak, _s_autoGainPeak, notify=_n_autoGainPeak)
+
+    def _g_hdrEnabled(self): return self._hdrEnabled
+    def _s_hdrEnabled(self, value): self._generic_setter('_hdrEnabled', value)
+    hdrEnabled = Property(bool, _g_hdrEnabled, _s_hdrEnabled, notify=_n_hdrEnabled)
 
 class ScannerInterface(GenericQObject):
     _n_running = Signal()
@@ -204,6 +216,8 @@ class ScannerInterface(GenericQObject):
         conf.sampling.window_type = self.scanConfig.windowType
         sc = self.scanConfig
         conf.sampling.auto_gain = bool(getattr(sc, 'autoGain', False))
+        conf.sampling.auto_gain_peak_db = float(getattr(sc, 'autoGainPeak', -6.0))
+        conf.sampling.hdr_enabled = bool(getattr(sc, 'hdrEnabled', False))
         conf.processing.clean_ripple = bool(getattr(sc, 'cleanRipple', False))
         conf.processing.clean_spurs = bool(getattr(sc, 'cleanSpurs', False))
         conf.processing.clean_floor = bool(getattr(sc, 'cleanFloor', False))
@@ -261,7 +275,8 @@ class ScannerInterface(GenericQObject):
             self.spectrum.name = f'{self.startFreq} - {self.endFreq} (live)'
         self.progress = 0.
         self.running = True
-        self.scan_thread = ScanThread(target=self.scanner.run_scan)
+        target = self.scanner.run_hdr_scan if self.scanConfig.hdrEnabled else self.scanner.run_scan
+        self.scan_thread = ScanThread(target=target)
         self.scanner.on_progress = self.scan_thread._on_scanner_progress
         self.scan_thread.complete.connect(self.on_scanner_finished)
         self.scan_thread.scannerProgress.connect(self.on_scanner_progress)

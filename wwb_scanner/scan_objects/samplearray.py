@@ -167,6 +167,9 @@ class SampleArray(JSONMixin):
         self.data = self.data[ix]
         self._counts = counts[ix]
     def smooth(self, window_size):
+        window_size = int(window_size)
+        if window_size < 3 or self.data.size < 3 or window_size > self.data.size:
+            return
         x = self.magnitude
         w = np.hanning(window_size)
 
@@ -188,7 +191,8 @@ class SampleArray(JSONMixin):
         y = self.magnitude
         cs = CubicSpline(x, y)
         xs = np.arange(fmin, fmax+spacing, spacing)
-        n_dec = len(str(spacing).split('.')[1])
+        s = str(spacing)
+        n_dec = len(s.split('.')[1]) if '.' in s else 0
         xs = np.around(xs, n_dec)
 
         ys = cs(xs)

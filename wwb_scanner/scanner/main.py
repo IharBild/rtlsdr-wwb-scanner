@@ -31,9 +31,11 @@ def get_freq_resolution(nfft, fs):
     freqs = np.fft.fftfreq(nfft, 1/fs)
     freqs = np.fft.fftshift(freqs)
     r = np.unique(np.diff(np.around(freqs)))
+    if r.size == 0:
+        return 0.0            # nfft < 2: there is no bin spacing
     if r.size != 1:
         logger.error(f'!!! Not unique: {r}')
-        return r.mean()
+        return float(r.mean())
     return r[0]
 
 def is_equal_spacing(nfft, fs, step_size):
@@ -79,7 +81,10 @@ class ScannerBase(JSONMixin):
         self._current_freq = value
         if value is not None:
             f_min, f_max = self.config.scan_range
-            self.progress = (value - f_min) / (f_max - f_min)
+            if f_max != f_min:
+                self.progress = (value - f_min) / (f_max - f_min)
+            else:
+                self.progress = 1.
         self.on_current_freq(value)
     def on_current_freq(self, value):
         pass
@@ -249,7 +254,6 @@ class Scanner(ScannerBase):
     def __init__(self, **kwargs):
         super(Scanner, self).__init__(**kwargs)
         self.sdr_wrapper = SdrWrapper(scanner=self)
-        self.gain = self.gain
     @property
     def sdr(self):
         return self.sdr_wrapper.sdr
@@ -354,14 +358,22 @@ class Scanner(ScannerBase):
             gains = self._gains = self.get_gains()
         return gains
     def get_gains(self):
-        self.sdr_wrapper.enable_scanner_updates = False
-        with self.sdr_wrapper:
-            sdr = self.sdr
-            if sdr is None:
-                gains = None
-            else:
-                gains = self.sdr.get_gains()
-        self.sdr_wrapper.enable_scanner_updates = True
+        wrapper = self.sdr_wrapper
+        sdr = wrapper.sdr
+        if sdr is not None and getattr(sdr, 'device_opened', True):
+            # The dongle is already open (e.g. during a scan): read the gains
+            # from it without closing it, so the running scan is not stopped.
+            gains = sdr.get_gains()
+        else:
+            wrapper.enable_scanner_updates = False
+            try:
+                wrapper.open_sdr()
+                sdr = self.sdr
+                gains = sdr.get_gains() if sdr is not None else None
+            finally:
+                wrapper.enable_scanner_updates = True
+                if sdr is not None:
+                    wrapper.close_sdr()
         if gains is not None:
             gains = [gain / 10. for gain in gains]
         return gains
@@ -374,6 +386,37 @@ class Scanner(ScannerBase):
     def run_scan(self):
         with self.sdr_wrapper:
             super(Scanner, self).run_scan()
+    def run_hdr_scan(self):
+        """Two scans merged: the current (high) gain and a lower gain. Strong
+        signals come from the low-gain scan (clean), weak signals from the
+        high-gain scan (visible). Doubles the scan time."""
+        from wwb_scanner.scan_objects.spectrum import merge_hdr
+        drop = self.sampling_config.get('hdr_gain_drop_db')
+        drop = 48.0 if drop is None else float(drop)
+        orig_gain = self.gain
+        # high-gain scan into the main spectrum (the UI keeps a reference to it)
+        self.run_scan()
+        high = self.spectrum
+        # low-gain scan into a temporary spectrum
+        self._stopped.clear()
+        self.spectrum = Spectrum()
+        self.spectrum.scan_config = self.config
+        self.sample_collection = SampleCollection(scanner=self)
+        self.gain = orig_gain - drop
+        try:
+            self.run_scan()
+        finally:
+            self.gain = orig_gain
+        low = self.spectrum
+        # merge and write the result back into the main spectrum, so the UI's
+        # reference (still pointing at ``high``) shows the merged data
+        merged = merge_hdr(high, low)
+        high.sample_data = merged.sample_data
+        high.step_size = merged.step_size
+        high.set_data_updated()
+        self.spectrum = high
+        self.save_to_dbstore()
+        return high
     def _run_scan(self, running):
         if self.sdr is None:
             raise IOError('RTL-SDR dongle not found or busy (unplug/replug it, '
