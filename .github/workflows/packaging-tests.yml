@@ -1,16 +1,10 @@
 name: Packaging Tests
 
+# Upstream workflow (nocarryr/rtlsdr-wwb-scanner). In this fork it runs only by
+# hand: the weekly schedule would run it on the default branch v4-fixes, where
+# the tests need PySide2 and pinned libraries (see v4-fixes.yml).
 on:
-  push:
-    branches: [ master, develop ]
-  pull_request:
-    branches: [ master ]
-  release:
-    types: [created]
   workflow_dispatch:
-
-  schedule:
-    - cron: '0 0 * * SUN'
 
 jobs:
   build:
