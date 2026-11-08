@@ -44,6 +44,7 @@ MARKERS = [
     ('V19', 'file_handlers/exporters.py', 'def wsm_csv'),
     ('V19.1', 'ui/pyside/graph.py', "uri.fragment().lower() == 'wsm'"),
     ('V20', 'scanner/sample_processing.py', 'def remeasure_neighbours'),
+    ('V20.1', 'scanner/sample_processing.py', 'def carrier_zones'),
 ]
 
 

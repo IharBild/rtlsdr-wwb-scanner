@@ -30,7 +30,10 @@ Current release: **[v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releas
   4 MHz around it are read again at that gain too (the dongle clips inside there without
   showing it); both readings are merged so the false peaks and the raised floor around the
   carrier go away where the normal reading is usable. The status line names the band that
-  lost sensitivity and by how many dB.
+  lost sensitivity and by how many dB. All tiles of such a zone use one gain; products seen
+  by one tile only are taken from the others; tiles made deaf up to 10 MHz away are raised by
+  the loss; images of the carrier at +-2.4 MHz and +-28.8 MHz are replaced by the floor around
+  them and named in the status line.
 - **Bands.** Band presets of Shure systems (PSM 200/300/900/1000, QLX-D, ULX-D, SLX-D,
   Axient Digital, UHF-R, BLX, SLX, PGX, GLX-D) and Sennheiser systems (ew 100 G3/G4,
   ew 300 G4). Scans only the bands of the chosen systems in one run. Each band is marked

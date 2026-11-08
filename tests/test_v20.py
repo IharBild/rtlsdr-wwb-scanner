@@ -172,6 +172,7 @@ def test_auto_gain_off_reads_nothing_again(monkeypatch, tmpdir):
 
 def test_neighbour_limit_is_reported(monkeypatch, tmpdir):
     monkeypatch.setattr(sp, 'MAX_NEIGHBOUR_SHARE', 0.0)
+    monkeypatch.setattr(sp, 'MIN_NEIGHBOUR_TILES', 8, raising=False)   # V20.1: 30 by default
     monkeypatch.setattr(sp, 'NEIGHBOUR_HZ', 7e6)            # more neighbours than the minimum 8
     sc, sdr, dt = _scan(monkeypatch, tmpdir, 33.8)
     coll = sc.sample_collection

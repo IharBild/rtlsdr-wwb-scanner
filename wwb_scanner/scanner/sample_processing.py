@@ -162,12 +162,37 @@ KNOWN_BELOW_LOW_DB = 6.
 # sensitivity loss reported as a warning from this many dB
 LOSS_WARN_DB = 10.
 
+# V20.1 (user's log 08.11.2026 22:00, 49.6 dB, mic 632.925 MHz):
+# - one gain per carrier zone: some clipped tiles stopped at -6 dB (their
+#   8 output bits no longer clipped, the internal ADC still did) and gave
+#   products of +30...+46 dB (632.300 / 631.65 / 631.05). Every tile of the
+#   zone, clipped or not, is now read with the gain the zone needs;
+# - the carrier of a zone is its strongest level (was: nearest product);
+# - at least MIN_NEIGHBOUR_TILES tiles are read again (was: 13 of 55);
+# - a "signal" seen by the low-gain reading of one tile only, while another
+#   tile shows the same frequency PRODUCT_DB lower, is a product of that tile;
+# - the low-gain floor of a tile is that of its zone, so a wide signal
+#   (DVB-T) is a signal and not "lost sensitivity";
+# - the dongle goes deaf up to ~9 MHz from the mic (49.6 dB: 635.4-642 MHz
+#   6-9 dB below the floor): normal tiles up to DESENSE_HZ are checked
+#   against the floor of the scan and raised by the loss;
+# - images of the carrier at +-fs (aliases, 630.525 / 635.325) and at
+#   +-28.8 MHz (crystal, 661.725) are seen by every tile there; they are
+#   replaced by the floor around them and named in the status line.
+MIN_NEIGHBOUR_TILES = 30
+PRODUCT_DB = 10.
+PRODUCT_WEIGHT = 1e-3
+DESENSE_HZ = 10e6
+XTAL_HZ = 28.8e6
+IMAGE_HALF_HZ = 150e3
+IMAGE_OVER_DB = 6.
+
 
 def to_db(p):
     return 10. * np.log10(np.maximum(np.asarray(p, dtype=np.float64), 1e-30))
 
 
-def merge_low_gain(p_normal, p_low, over_db=None, floor=None):
+def merge_low_gain(p_normal, p_low, over_db=None, floor=None, low_floor_db=None):
     """V20: one tile read with the normal gain (``p_normal``, sensitive, but
     with false peaks when the ADC clips) and with a low gain (``p_low``,
     levels right, floor raised by the gain difference), both linear power
@@ -187,6 +212,10 @@ def merge_low_gain(p_normal, p_low, over_db=None, floor=None):
         return pl.copy(), np.zeros(0, bool), None
     dl = to_db(pl)
     low_floor = float(np.percentile(dl, FLOOR_PERCENTILE))
+    if low_floor_db is not None:
+        # V20.1: floor of the low-gain readings of the whole zone (a tile
+        # full of a wide signal has no floor of its own)
+        low_floor = min(low_floor, float(low_floor_db))
     sig = dl > low_floor + over_db
     if pn.shape != pl.shape:
         return pl.copy(), sig, low_floor
@@ -230,6 +259,10 @@ class SampleSet(JSONMixin):
     bin_weight = None           # V20: weight of every bin in the spectrum merge
     signal_mask = None          # V20: bins with a signal in the low-gain reading
     desense_db = 0.             # V20: normal reading this much below the usual floor
+    carrier_db = None           # V20.1: level of carrier_hz (low gain, scaled back)
+    zone_reread = False         # V20.1: clipped tile read again with the gain of its zone
+    product_bins = None         # V20.1: bins found to be a product of this tile
+    powers_orig = None          # V20.1: powers before the deafness was added back
     __slots__ = ('scanner', 'center_frequency', 'raw', 'current_sweep', 'complete',
                  '_frequencies', 'powers', 'collection', 'process_thread', 'samples_discarded')
     _serialize_attrs = ('center_frequency', '_frequencies', 'powers')
@@ -424,8 +457,14 @@ class SampleSet(JSONMixin):
     def read_low_gain(self, sdr, g_low, g0):
         """V20: this tile is near a strong carrier: read it again with the
         gain ``g_low`` (the caller has set it) and merge the reading with
-        the one of the scan. The spectrum is rebuilt by the caller."""
-        if self.powers is None or self.powers_low is not None:
+        the normal one of the scan. V20.1: also a clipped tile whose own
+        low-gain reading was made with more gain than its zone needs.
+        The spectrum is rebuilt by the caller."""
+        if self.powers is None:
+            return False
+        was_low = self.powers_low is not None
+        normal = self.powers_normal if was_low else self.powers
+        if normal is None:
             return False
         if not self.tune(sdr, self.center_frequency):
             return False
@@ -435,18 +474,37 @@ class SampleSet(JSONMixin):
         x = run_with_timeout(sdr.read_samples, READ_TIMEOUT, n)
         if x is None:
             return False
-        self.clip_ratio_low = clip_ratio(x)
+        cr = clip_ratio(x)
         drop = float(g0) - float(g_low)
         x = np.asarray(x[:sweeps * per_sweep], dtype=np.complex128) * (10. ** (drop / 20.))
-        _, P, keep = self.tile_psd(x)
-        P = P[keep]
-        if P.shape != np.shape(self.powers):
+        offs, Pfull, keep = self.tile_psd(x)
+        P = Pfull[keep]
+        if P.shape != np.shape(normal):
             return False
-        self.powers = self.merge_readings(self.powers, P)
+        self.powers = self.merge_readings(normal, P)
         self.gain_drop = drop
         self.low_gain = float(g_low)
-        self.neighbour = True
+        if was_low:
+            self.zone_reread = True
+            self.clip_ratio = cr
+            self._find_carrier(offs, Pfull)
+        else:
+            self.clip_ratio_low = cr
+            self.neighbour = True
         return True
+
+    def _find_carrier(self, offs, Pfull):
+        """V20: the strongest signal of a clipped tile (anywhere in the tile
+        except DC): its zone is read again after the scan."""
+        cfg = self.scanner.sampling_config
+        gap = getattr(cfg, 'tile_center_gap_hz', None)
+        if gap is None:
+            gap = DEFAULT_TILE_CENTER_GAP_HZ
+        ok = np.abs(offs) > gap
+        if ok.any():
+            i = int(np.flatnonzero(ok)[np.argmax(Pfull[ok])])
+            self.carrier_hz = float(self.center_frequency + offs[i])
+            self.carrier_db = float(to_db(Pfull[i]))
 
     @staticmethod
     def lower_gain_steps(g0, gains):
@@ -528,7 +586,7 @@ class SampleSet(JSONMixin):
         keep = self.good_bins_mask(freqs, rs)
         return freqs, Pxx, keep
 
-    def merge_readings(self, p_normal, p_low, floor=None, normal_gain_db=0.):
+    def merge_readings(self, p_normal, p_low, floor=None, normal_gain_db=0., low_floor_db=None):
         """V20: keep both readings and merge them (merge_low_gain).
         ``normal_gain_db``: the normal reading is raised by this much first
         (desensitization measured by merge_again)."""
@@ -536,12 +594,12 @@ class SampleSet(JSONMixin):
         pn = np.asarray(p_normal, dtype=np.float64)
         if normal_gain_db is None:
             # the normal reading is of no use (dongle completely deaf)
-            merged, sig, low_floor = merge_low_gain(p_low, p_low)
+            merged, sig, low_floor = merge_low_gain(p_low, p_low, low_floor_db=low_floor_db)
             merged = p_low.copy()
             limited = ~sig
         else:
             use = pn * (10. ** (normal_gain_db / 10.)) if normal_gain_db else pn
-            merged, sig, low_floor = merge_low_gain(use, p_low, floor=floor)
+            merged, sig, low_floor = merge_low_gain(use, p_low, floor=floor, low_floor_db=low_floor_db)
             limited = low_limited_bins(use, p_low, sig)
         self.powers_normal = pn
         self.powers_low = p_low
@@ -550,7 +608,7 @@ class SampleSet(JSONMixin):
         self.bin_weight = np.where(limited, REMEASURED_WEIGHT, 1.0)
         return merged
 
-    def merge_again(self, floor):
+    def merge_again(self, floor, low_floor_db=None):
         """V20: merge the two readings again, now that the usual floor of
         the scan at these bins (``floor``, linear) is known. A strong
         carrier can also make the dongle deaf: the whole normal reading
@@ -573,7 +631,7 @@ class SampleSet(JSONMixin):
             self.desense_db = 0.
             gain_db = None
         self.powers = self.merge_readings(self.powers_normal, self.powers_low, floor=floor,
-                                          normal_gain_db=gain_db)
+                                          normal_gain_db=gain_db, low_floor_db=low_floor_db)
         return True
 
     def process_samples(self):
@@ -587,14 +645,7 @@ class SampleSet(JSONMixin):
             # V20: clipped tile read again with low gain. The strongest
             # signal (anywhere in the tile except DC) is the carrier whose
             # neighbour tiles are read again after the scan.
-            cfg = self.scanner.sampling_config
-            gap = getattr(cfg, 'tile_center_gap_hz', None)
-            if gap is None:
-                gap = DEFAULT_TILE_CENTER_GAP_HZ
-            ok = np.abs(offs) > gap
-            if ok.any():
-                i = int(np.flatnonzero(ok)[np.argmax(Pfull[ok])])
-                self.carrier_hz = float(fc + offs[i])
+            self._find_carrier(offs, Pfull)
             _, Pn_full, _ = self.tile_psd(self.raw_normal)
             self.raw_normal = None
             if Pn_full.shape == Pfull.shape:
@@ -751,33 +802,72 @@ class SampleCollection(JSONMixin):
             logger.warning('%d tile(s) have no data, e.g. %.3f MHz: the scan has a gap there',
                            len(self.missing_tiles), self.missing_tiles[0] / 1e6)
 
+    def carrier_zones(self):
+        """V20.1: strong carriers found by clipped tiles, grouped: carriers
+        closer than NEIGHBOUR_HZ belong to one zone. Each zone:
+        {'carrier': Hz of its strongest level, 'level': dB, 'gain': lowest
+        gain any of its clipped tiles needed, 'members': [carrier Hz]}."""
+        cs = sorted((s.carrier_hz, s.carrier_db if s.carrier_db is not None else -1e9, s.low_gain)
+                    for s in self.sample_sets.values()
+                    if s.carrier_hz is not None and s.low_gain is not None and not s.neighbour)
+        zones = []
+        for c, db, g in cs:
+            if zones and c - zones[-1]['members'][-1] <= NEIGHBOUR_HZ:
+                z = zones[-1]
+                z['members'].append(c)
+                z['gain'] = min(z['gain'], g)
+                if db > z['level']:
+                    z['level'], z['carrier'] = db, c
+            else:
+                zones.append({'carrier': c, 'level': db, 'gain': g, 'members': [c]})
+        return zones
+
+    @staticmethod
+    def zone_of(key, zones, reach=None):
+        """V20.1: the zone tile ``key`` belongs to (None: none)."""
+        if reach is None:
+            reach = NEIGHBOUR_HZ
+        best = None
+        for z in zones:
+            d = min(abs(key - c) for c in z['members'])
+            if d <= reach and (best is None or d < best[0]):
+                best = (d, z)
+        return best
+
     def remeasure_neighbours(self, keys):
         """V20: tiles up to NEIGHBOUR_HZ from the carrier of a clipped tile are
         read again with the low gain of that tile and merged. Their own 8
         output bits did not clip, but the dongle's internal ADC did (false
-        peaks next to a strong mic / IEM). The spectrum is rebuilt after."""
+        peaks next to a strong mic / IEM). V20.1: one gain for the whole
+        zone - also clipped tiles that stopped at a smaller gain drop are
+        read again with it. The spectrum is rebuilt after."""
         self.neighbours = []
+        self.zone_rereads = []
         self.neighbours_skipped = 0
         if self.aborted or not self.scanning.is_set():
             return
-        carriers = [(s.carrier_hz, s.low_gain) for s in self.sample_sets.values()
-                    if s.carrier_hz is not None and s.low_gain is not None]
-        if not carriers:
+        zones = self.carrier_zones()
+        if not zones:
             self.finish_low_gain()
             return
         done_keys = self.processed_keys
         targets = {}
         for k in keys:
             s = self.sample_sets[k]
-            if k not in done_keys or s.powers is None or s.powers_low is not None:
+            if k not in done_keys or s.powers is None:
                 continue
-            near = [(abs(k - c), g) for c, g in carriers if abs(k - c) <= NEIGHBOUR_HZ]
-            if near:
-                targets[k] = (min(g for _, g in near), min(d for d, _ in near))
+            hit = self.zone_of(k, zones)
+            if hit is None:
+                continue
+            d, z = hit
+            if s.powers_low is None:
+                targets[k] = (z['gain'], d)
+            elif not s.neighbour and s.low_gain is not None and s.low_gain > z['gain'] + 0.5:
+                targets[k] = (z['gain'], -1.)          # clipped tile first
         if not targets:
             self.finish_low_gain()
             return
-        limit = max(8, int(MAX_NEIGHBOUR_SHARE * len(keys)))
+        limit = max(MIN_NEIGHBOUR_TILES, int(MAX_NEIGHBOUR_SHARE * len(keys)))
         if len(targets) > limit:
             keep = sorted(targets, key=lambda k: targets[k][1])[:limit]
             self.neighbours_skipped = len(targets) - limit
@@ -817,31 +907,48 @@ class SampleCollection(JSONMixin):
                 run_with_timeout(setattr, TUNE_TIMEOUT, sdr, 'gain', g0)
             except Exception:
                 logger.exception('could not set the gain back to %s dB', g0)
-        self.neighbours = sorted(done)
+        self.neighbours = sorted(k for k in done if self.sample_sets[k].neighbour)
+        self.zone_rereads = sorted(k for k in done if self.sample_sets[k].zone_reread)
         self.finish_low_gain()
 
-    def far_tiles(self):
-        """V20: keys of normal tiles far from every strong carrier."""
-        carriers = [s.carrier_hz for s in self.sample_sets.values() if s.carrier_hz is not None]
+    def _sample_rate(self):
         try:
-            fs = float(self.scanner.sample_rate)
+            return float(self.scanner.sample_rate)
         except Exception:
-            fs = 2.4e6
-        far = NEIGHBOUR_HZ + fs
+            return 2.4e6
+
+    def far_tiles(self, reach=None):
+        """V20: keys of normal tiles far from every strong carrier. V20.1:
+        beyond DESENSE_HZ (the dongle can be deaf that far) if there are at
+        least 4 such tiles, else beyond NEIGHBOUR_HZ + fs."""
+        carriers = [s.carrier_hz for s in self.sample_sets.values() if s.carrier_hz is not None]
+        fs = self._sample_rate()
+        reaches = [reach] if reach is not None else [DESENSE_HZ + fs / 2., NEIGHBOUR_HZ + fs]
         out = []
-        for k, s in self.sample_sets.items():
-            if s.powers is None or s.powers_low is not None or not np.size(s.powers):
-                continue
-            if any(abs(k - c) <= far for c in carriers):
-                continue
-            out.append(k)
+        for far in reaches:
+            out = []
+            for k, s in self.sample_sets.items():
+                if s.powers is None or s.powers_low is not None or not np.size(s.powers):
+                    continue
+                if any(abs(k - c) <= far for c in carriers):
+                    continue
+                out.append(k)
+            if len(out) >= 4:
+                break
         return sorted(out)
+
+    def _tile_floor_db(self, k):
+        s = self.sample_sets[k]
+        p = s.powers_orig if s.powers_orig is not None else s.powers
+        return float(np.percentile(to_db(p), FLOOR_PERCENTILE))
 
     def floor_template(self, key, far_keys=None, span_hz=20e6):
         """V20: the usual floor at the bins of the tile ``key`` (linear): per
         bin the 30th percentile of normal tiles far from strong carriers,
-        nearest ones (within ``span_hz``) if there are at least 4. None if
-        there is nothing to compare with."""
+        nearest ones (within ``span_hz``) if there are at least 4. V20.1:
+        only quiet tiles (own floor within 3 dB of the quietest quarter) -
+        a DVB-T multiplex next to the zone is not a floor. None if there is
+        nothing to compare with."""
         if far_keys is None:
             far_keys = self.far_tiles()
         n = np.size(self.sample_sets[key].powers)
@@ -850,31 +957,179 @@ class SampleCollection(JSONMixin):
             return None
         near = [k for k in same if abs(k - key) <= span_hz]
         use = near if len(near) >= 4 else same
-        stack = np.vstack([np.asarray(self.sample_sets[k].powers, dtype=np.float64) for k in use])
+        floors = np.array([self._tile_floor_db(k) for k in use])
+        quiet = [k for k, f in zip(use, floors) if f <= np.percentile(floors, 25) + 3.]
+        if len(quiet) >= 2:
+            use = quiet
+        stack = np.vstack([np.asarray(self.sample_sets[k].powers_orig if self.sample_sets[k].powers_orig
+                                      is not None else self.sample_sets[k].powers, dtype=np.float64)
+                           for k in use])
         return np.percentile(stack, 30, axis=0)
 
     def finish_low_gain(self):
         """V20: after the scan the usual floor is known: tiles with a
         low-gain reading are merged again with it, then the spectrum is
-        built again from all tiles."""
+        built again from all tiles. V20.1: with the low-gain floor of the
+        whole zone, products of single tiles taken out, normal tiles made
+        deaf by the carrier raised, images of the carrier replaced."""
         low = [k for k in sorted(self.sample_sets)
                if self.sample_sets[k].powers_low is not None and k in self.processed_keys]
+        self.desensed = []
+        self.images = []
         if not low:
             return
+        zones = self.carrier_zones()
         far_keys = self.far_tiles()
+        # floor of the low-gain readings of each zone
+        zone_floor = {}
+        for z in zones:
+            ks = [k for k in low if (self.zone_of(k, [z]) is not None)]
+            if ks:
+                allp = np.concatenate([to_db(self.sample_sets[k].powers_low) for k in ks])
+                zone_floor[id(z)] = float(np.percentile(allp, FLOOR_PERCENTILE))
         for k in low:
             s = self.sample_sets[k]
+            hit = self.zone_of(k, zones)
+            zf = zone_floor.get(id(hit[1])) if hit is not None else None
             s.floor_ref = self.floor_template(k, far_keys)
-            s.merge_again(s.floor_ref)
+            s.merge_again(s.floor_ref, low_floor_db=zf)
+        try:
+            self._mark_tile_products(low)
+        except Exception:
+            logger.exception('product check failed')
+        try:
+            self._raise_deaf_tiles(zones, far_keys)
+        except Exception:
+            logger.exception('deafness check failed')
         rebuild = getattr(self.scanner, 'rebuild_spectrum', None)
         if rebuild is not None:
             rebuild()
+        try:
+            self._replace_images(zones)
+        except Exception:
+            logger.exception('image check failed')
+
+    def _mark_tile_products(self, low):
+        """V20.1: a "signal" of one tile's low-gain reading that another tile
+        shows PRODUCT_DB lower at the same frequency is a product of that
+        tile (a real signal is in every tile that covers it): there it gets
+        the other tile's value and almost no weight."""
+        where = {}
+        for k in low:
+            s = self.sample_sets[k]
+            fr = np.round(np.asarray(s.frequencies, dtype=np.float64) * 1e6).astype(np.int64)
+            dl = to_db(s.powers_low)
+            for i in range(fr.size):
+                where.setdefault(int(fr[i]), []).append((k, i, float(dl[i])))
+        n = 0
+        for f, lst in where.items():
+            if len(lst) < 2:
+                continue
+            kmin, imin, ref = min(lst, key=lambda t: t[2])
+            for k, i, v in lst:
+                s = self.sample_sets[k]
+                if v > ref + PRODUCT_DB and s.signal_mask is not None and s.signal_mask[i]:
+                    s.powers[i] = self.sample_sets[kmin].powers[imin]
+                    s.bin_weight[i] = PRODUCT_WEIGHT
+                    if s.product_bins is None:
+                        s.product_bins = []
+                    s.product_bins.append(i)
+                    n += 1
+        self.product_points = n
+        if n:
+            logger.info('%d point(s) seen by one tile only next to strong carriers: taken from the other tiles', n)
+
+    def _raise_deaf_tiles(self, zones, far_keys):
+        """V20.1: normal tiles up to DESENSE_HZ from a strong carrier whose
+        floor is DESENSE_MIN_DB or more below the usual one: the dongle was
+        deaf there (noise and weak signals alike); the loss is added back
+        (up to DESENSE_MAX_DB)."""
+        if not zones:
+            return
+        fs = self._sample_rate()
+        for k in sorted(self.sample_sets):
+            s = self.sample_sets[k]
+            if s.powers is None or s.powers_low is not None or k in far_keys or not np.size(s.powers):
+                continue
+            if self.zone_of(k, zones, reach=DESENSE_HZ + fs / 2.) is None:
+                continue
+            tmpl = self.floor_template(k, far_keys)
+            if tmpl is None:
+                continue
+            base = s.powers_orig if s.powers_orig is not None else s.powers
+            d = float(np.percentile(to_db(tmpl), FLOOR_PERCENTILE)
+                      - np.percentile(to_db(base), FLOOR_PERCENTILE))
+            if d < DESENSE_MIN_DB:
+                continue
+            d = min(d, DESENSE_MAX_DB)
+            s.powers_orig = np.asarray(base, dtype=np.float64)
+            s.powers = s.powers_orig * (10. ** (d / 10.))
+            s.desense_db = d
+            self.desensed.append(k)
+        if self.desensed:
+            logger.info('%d tile(s) near strong carriers were deaf, raised by up to %.1f dB',
+                        len(self.desensed), max(self.sample_sets[k].desense_db for k in self.desensed))
+
+    def _replace_images(self, zones):
+        """V20.1: images of a strong carrier that every tile there sees - at
+        +-fs (aliases of the dongle's filter) and +-28.8 MHz (crystal) - are
+        replaced by the floor around them. Sets self.images = [(MHz of the
+        image, dB above its surroundings, MHz of the carrier), ...]."""
+        spectrum = getattr(self.scanner, 'spectrum', None)
+        if spectrum is None or not zones:
+            return
+        fs = self._sample_rate()
+        ref = self._reference_floor_db()
+        with spectrum.data_update_lock:
+            sd = spectrum.sample_data
+            f = np.asarray(sd['frequency'], dtype=np.float64)
+            if f.size < 8:
+                return
+            y = np.asarray(sd['dbFS'], dtype=np.float64)
+            changed = False
+            for z in zones:
+                c = z['carrier'] / 1e6
+                for off in (fs, -fs, XTAL_HZ, -XTAL_HZ):
+                    p = c + off / 1e6
+                    win = np.abs(f - p) <= IMAGE_HALF_HZ / 1e6
+                    ring = (np.abs(f - p) > IMAGE_HALF_HZ / 1e6) & (np.abs(f - p) <= 2.5 * IMAGE_HALF_HZ / 1e6)
+                    if np.count_nonzero(win) < 3 or np.count_nonzero(ring) < 4:
+                        continue
+                    if np.any(np.abs(f[win] - c) <= IMAGE_HALF_HZ / 1e6):
+                        continue
+                    base = float(np.median(y[ring]))
+                    top = float(y[win].max())
+                    if top < base + IMAGE_OVER_DB:
+                        continue
+                    if ref is not None and base > ref + IMAGE_OVER_DB:
+                        continue            # inside a wide signal (DVB-T): leave it
+                    idx = np.flatnonzero(win)
+                    # the image is a copy of the carrier: as wide as it is
+                    # above the floor around it
+                    hi = idx[y[idx] > base + 3.]
+                    if not hi.size:
+                        continue
+                    a, b = int(hi.min()), int(hi.max())
+                    left = y[max(a - 3, 0):a]
+                    right = y[b + 1:b + 4]
+                    lv = float(np.median(left)) if left.size else base
+                    rv = float(np.median(right)) if right.size else base
+                    for i in range(a, b + 1):
+                        t = (f[i] - f[a]) / (f[b] - f[a]) if f[b] > f[a] else 0.5
+                        v = min(lv + (rv - lv) * t, y[i])
+                        sd.data['magnitude'][i] = 10. ** (v / 10.)
+                        sd.data['dbFS'][i] = v
+                    self.images.append((round(p, 3), round(top - base, 1), round(c, 3)))
+                    changed = True
+        if changed:
+            spectrum.set_data_updated()
+            logger.info('images of strong carriers replaced by the floor around them: %s',
+                        ', '.join('%.3f (+%.0f dB, of %.3f)' % t for t in self.images))
 
     def _reference_floor_db(self):
         """V20: usual floor of this scan - median of the tile floors (20th
         percentile) of tiles far from every strong carrier."""
-        vals = [float(np.percentile(to_db(self.sample_sets[k].powers), FLOOR_PERCENTILE))
-                for k in self.far_tiles()]
+        vals = [self._tile_floor_db(k) for k in self.far_tiles()]
         return float(np.median(vals)) if vals else None
 
     def sensitivity_loss(self):
@@ -883,14 +1138,13 @@ class SampleCollection(JSONMixin):
         points of the merged spectrum where every tile only had the floor of
         a low-gain reading (loss = that floor above the usual one), and tiles
         whose normal reading was made deaf by the carrier (loss = the deafness
-        that was added back; the levels there are less certain)."""
+        that was added back; the levels there are less certain). V20.1: the
+        carrier named is the strongest of its zone; points of a wide signal
+        (above the low-gain floor of the zone) are not "lost"."""
         low = [k for k, s in self.sample_sets.items() if s.powers_low is not None]
         if not low:
             return []
-        try:
-            fs = float(self.scanner.sample_rate)
-        except Exception:
-            fs = 2.4e6
+        fs = self._sample_rate()
         half = DEFAULT_TILE_KEEP_RATIO * fs / 1e6
         spans = []          # (lo, hi, loss) in MHz
         ref = self._reference_floor_db()
@@ -905,8 +1159,8 @@ class SampleCollection(JSONMixin):
                 for i in np.flatnonzero(w < 0.5):
                     if y[i] - ref >= 3.:
                         spans.append((f[i], f[i], y[i] - ref))
-        for k in low:
-            d = getattr(self.sample_sets[k], 'desense_db', 0.) or 0.
+        for k, s in self.sample_sets.items():
+            d = getattr(s, 'desense_db', 0.) or 0.
             if d >= DESENSE_MIN_DB:
                 spans.append((k / 1e6 - half, k / 1e6 + half, d))
         if not spans:
@@ -924,15 +1178,17 @@ class SampleCollection(JSONMixin):
             lo_r, hi_r = [float(v) for v in self.scanner.config.scan_range]
         except Exception:
             lo_r, hi_r = -1e9, 1e9
-        carriers = sorted(set(round(s.carrier_hz / 1e6, 3) for s in self.sample_sets.values()
-                              if s.carrier_hz is not None))
+        zones = self.carrier_zones()
         out = []
         for lo, hi, loss in groups:
             lo, hi = max(lo, lo_r), min(hi, hi_r)
             if hi < lo:
                 continue
             mid = (lo + hi) / 2.
-            c = min(carriers, key=lambda x: abs(x - mid)) if carriers else None
+            c = None
+            if zones:
+                z = min(zones, key=lambda z: min(abs(mid * 1e6 - m) for m in z['members']))
+                c = round(z['carrier'] / 1e6, 3)
             out.append((lo, hi, loss, c))
         return out
 
@@ -975,6 +1231,10 @@ class SampleCollection(JSONMixin):
         if still:
             note = (note + '; ' if note else '') + \
                 '%d tile(s) clipped even at the lowest gain - move the antenna away' % len(still)
+        images = getattr(self, 'images', None) or []
+        if images:
+            note = (note + '; ' if note else '') + 'images of the strong signal removed at ' + \
+                ', '.join('%.3f' % p for p, _, _ in images[:4]) + ' MHz (not measurable there)'
         if getattr(self, 'neighbours_skipped', 0):
             note = (note + '; ' if note else '') + \
                 '%d tile(s) next to strong carriers not checked' % self.neighbours_skipped
@@ -998,6 +1258,9 @@ class SampleCollection(JSONMixin):
                    if getattr(s, 'gain_drop', 0.) > 0 and not s.neighbour]
         nb = len(getattr(self, 'neighbours', None) or [])
         nb_text = ', %d neighbour tile(s) read again too' % nb if nb else ''
+        rr = len(getattr(self, 'zone_rereads', None) or [])
+        if rr:
+            nb_text += ', %d with the gain of the zone' % rr
         still = [k for k, _ in bad if self.sample_sets[k].clip_ratio >= OVERLOAD_RATIO]
         keys = sorted(self.sample_sets)
         steps = [b - a for a, b in zip(keys, keys[1:]) if b > a]
