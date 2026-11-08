@@ -137,7 +137,9 @@ class SampleArray(JSONMixin):
                 self._counts = np.concatenate([head_counts, tail._get_counts()])
                 return
         everything = np.concatenate([self.data, data])
-        weights = np.concatenate([self._get_counts(), np.full(data.size, float(weight))])
+        # V20: ``weight`` may also be one value per new point
+        weights = np.concatenate([self._get_counts(),
+                                  np.broadcast_to(np.asarray(weight, dtype=np.float64), (data.size,))])
         keys = self._freq_keys(everything['frequency'])
         uniq, first, inverse = np.unique(keys, return_index=True, return_inverse=True)
         if uniq.size == everything.size:

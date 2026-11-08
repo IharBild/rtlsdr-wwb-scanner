@@ -261,6 +261,45 @@ class Spectrum(JSONMixin):
         with self.data_update_lock:
             self._add_sample_set(**kwargs)
         self.set_data_updated()
+    def rebuild(self, tiles):
+        """V20: build the points again from ``tiles`` (keyword dicts as for
+        add_sample_set, in frequency order). The new points are made first
+        and swapped in at the end, so the window is not held up meanwhile.
+        The Sample objects are kept."""
+        tiles = [dict(kw) for kw in tiles]
+        sd = SampleArray()
+        if tiles and all(kw.get('force_lower_freq') for kw in tiles):
+            # all points of all tiles in one merge (a weighted mean does not
+            # depend on the order): ~30 times faster than tile by tile
+            parts, weights = [], []
+            for kw in tiles:
+                w = kw.pop('weight', 1.0)
+                a = SampleArray.create(**kw)
+                parts.append(a.data)
+                weights.append(np.broadcast_to(np.asarray(w, dtype=np.float64), (a.data.size,)))
+            allp = SampleArray()
+            allp.data = np.concatenate(parts)
+            sd.insert_sorted(allp, np.concatenate(weights))
+        else:
+            tmp = SampleArray()
+            for kw in tiles:
+                w = kw.pop('weight', 1.0)
+                a = SampleArray.create(**kw)
+                if not kw.get('force_lower_freq') and tmp.data['frequency'].size:
+                    r_ix = np.flatnonzero(np.greater_equal(a['frequency'], [tmp.data['frequency'].max()]))
+                    a = a[r_ix]
+                    if np.ndim(w):
+                        w = np.asarray(w)[r_ix]
+                tmp.insert_sorted(a, w)
+            sd = tmp
+        with self.data_update_lock:
+            self.sample_data = sd
+            skwargs = {'spectrum': self, 'init_complete': True}
+            for f in sd['frequency']:
+                if f not in self.samples:
+                    skwargs['frequency'] = f
+                    self.samples[f] = self._build_sample(**skwargs)
+        self.set_data_updated()
     def _add_sample_set(self, **kwargs):
         weight = kwargs.pop('weight', 1.0)
         force_lower_freq = kwargs.get('force_lower_freq')
@@ -271,6 +310,8 @@ class Spectrum(JSONMixin):
         if not force_lower_freq and sdata['frequency'].size:
             r_ix = np.flatnonzero(np.greater_equal(a['frequency'], [sdata['frequency'].max()]))
             a = a[r_ix]
+            if np.ndim(weight):
+                weight = np.asarray(weight)[r_ix]      # V20: one weight per point
         self.sample_data.insert_sorted(a, weight)
 
         skwargs = {'spectrum':self, 'init_complete':True}

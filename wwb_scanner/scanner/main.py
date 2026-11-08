@@ -214,8 +214,13 @@ class ScannerBase(JSONMixin):
                     'Scan %s done in %.0f s, %d tile(s) without data',
                     what, time.time() - t_start, len(coll.missing_tiles))
             else:
-                logging.getLogger('wwb_scanner.status').info(
-                    'Scan %s done in %.0f s%s', what, time.time() - t_start, clean_note)
+                # V20: a band that lost sensitivity next to a strong signal is
+                # named in the last message (it stays in the status line)
+                note = getattr(coll, 'overload_note', '')
+                st = logging.getLogger('wwb_scanner.status')
+                (st.warning if note and getattr(coll, 'overload_warn', False) else st.info)(
+                    'Scan %s done in %.0f s%s%s', what, time.time() - t_start, clean_note,
+                    ('; ' + note) if note else '')
     def stop_scan(self):
         if not self._running.is_set():
             # not started yet or already finished: nothing to wait for
@@ -462,27 +467,37 @@ class Scanner(ScannerBase):
             raise IOError('RTL-SDR dongle not found or busy (unplug/replug it, '
                           'close other SDR programs)')
         super(Scanner, self)._run_scan(running)
-    def on_sample_set_processed(self, sample_set):
-        powers = sample_set.powers
-        freqs = sample_set.frequencies
-        spectrum = self.spectrum
-        center_freq = sample_set.center_frequency
-        if self.equal_spacing:
-            force_lower_freq = True
-        else:
-            force_lower_freq = False
+    def _tile_kwargs(self, sample_set):
         weight = 1.0
-        if getattr(sample_set, 'gain_drop', 0.) > 0:
+        bw = getattr(sample_set, 'bin_weight', None)
+        if bw is not None and np.size(bw) == np.size(sample_set.powers):
+            # V20: bins that only know the low-gain floor count where no
+            # other tile has a real measurement
+            weight = np.asarray(bw, dtype=np.float64)
+        elif getattr(sample_set, 'gain_drop', 0.) > 0:
+            # V17: only a low-gain reading (V20 merges both readings: weight 1)
             from wwb_scanner.scanner.sample_processing import REMEASURED_WEIGHT
             weight = REMEASURED_WEIGHT
-        spectrum.add_sample_set(
-            frequency=freqs,
-            magnitude=powers,
-            center_frequency=center_freq,
-            force_lower_freq=force_lower_freq,
+        return dict(
+            frequency=sample_set.frequencies,
+            magnitude=sample_set.powers,
+            center_frequency=sample_set.center_frequency,
+            force_lower_freq=bool(self.equal_spacing),
             weight=weight,
         )
+    def on_sample_set_processed(self, sample_set):
+        self.spectrum.add_sample_set(**self._tile_kwargs(sample_set))
         self.progress = self.sample_collection.calc_progress()
+    def rebuild_spectrum(self):
+        """V20: some tiles changed after they were added (read again next to
+        a strong carrier): the spectrum is built again from all tiles."""
+        coll = self.sample_collection
+        done = coll.processed_keys
+        tiles = [self._tile_kwargs(coll.sample_sets[k]) for k in sorted(coll.sample_sets)
+                 if k in done and coll.sample_sets[k].powers is not None]
+        t0 = time.time()
+        self.spectrum.rebuild(tiles)
+        logger.info('spectrum rebuilt from %d tiles in %.2f s', len(tiles), time.time() - t0)
 
 class ThreadedScanner(threading.Thread, Scanner):
     def __init__(self, **kwargs):

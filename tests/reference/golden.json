@@ -1,4 +1,5 @@
 {
+ "note": "V20: uhf_clean_autogain p90 -102.142 -> -102.866 (tiles near the clipping 526 MHz IEM merged as min(normal, low gain) instead of 1 % weight); other scenarios unchanged since V17",
  "scenarios": {
   "uhf_clean_autogain": {
    "f0": 470.0,
@@ -12,7 +13,7 @@
     ]
    ],
    "p10": -103.458,
-   "p90": -102.142,
+   "p90": -102.866,
    "peaks": [
     [
      479.3,
@@ -147,5 +148,5 @@
   }
  },
  "time": "2026-11-04 22:25",
- "version": "V17"
+ "version": "V20"
 }

@@ -25,6 +25,12 @@ Current release: **[v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releas
 - **Clean scan.** Removes the dongle's own spurs (multiples of 28.8 MHz and 480 MHz) and the
   tile ripple, levels the noise floor with a calibration made without an antenna, and
   re-measures overloaded tiles at a lower gain (auto gain).
+- **Strong signal next to the antenna** (own mic / IEM, auto gain on). The gain of a clipped
+  tile goes down as far as needed (to 0 dB), so the carrier level is right; tiles up to
+  4 MHz around it are read again at that gain too (the dongle clips inside there without
+  showing it); both readings are merged so the false peaks and the raised floor around the
+  carrier go away where the normal reading is usable. The status line names the band that
+  lost sensitivity and by how many dB.
 - **Bands.** Band presets of Shure systems (PSM 200/300/900/1000, QLX-D, ULX-D, SLX-D,
   Axient Digital, UHF-R, BLX, SLX, PGX, GLX-D) and Sennheiser systems (ew 100 G3/G4,
   ew 300 G4). Scans only the bands of the chosen systems in one run. Each band is marked

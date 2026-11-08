@@ -58,6 +58,83 @@ class Air(object):
         x += self.dc
         return x
 
+    def iq_wide(self, fc, fs_w, n, seed):
+        """V20: the same air sampled at the rate of the dongle's internal ADC
+        (``fs_w``, several times the output rate), so tones outside the
+        output band are present too. Noise keeps the same density as iq()
+        at the output rate after decimation (``noise`` is per output sample
+        of 2.4 MS/s-like rates: scaled by sqrt(fs_w / out rate) by caller)."""
+        rng = np.random.RandomState(seed % (2 ** 31))
+        x = (rng.randn(n) + 1j * rng.randn(n)) * (self.noise / np.sqrt(2))
+        t = np.arange(n) / fs_w
+        half = fs_w / 2.
+        for f, a in self.tones:
+            off = f - fc
+            if abs(off) < half * 0.98:
+                x += a * np.exp(1j * (2 * np.pi * off * t + rng.uniform(0, 2 * np.pi)))
+        if self.bands:
+            freqs = np.fft.fftfreq(n, 1. / fs_w) + fc
+            for lo, hi, a in self.bands:
+                m = (freqs >= lo) & (freqs <= hi)
+                if m.any():
+                    w = np.fft.fft((rng.randn(n) + 1j * rng.randn(n)) * (a / np.sqrt(2)))
+                    w[~m] = 0
+                    x += np.fft.ifft(w)
+        return x
+
+
+class WideAdc(object):
+    """V20: model of the dongle's internal path for a strong signal just
+    outside the tile (user's series 08.11.2026, mic 632.925 MHz at 49.6 dB):
+
+    - the analog IF filter lets signals beyond +-fs/2 through, falling
+      ``rolloff_db_per_mhz`` per MHz beyond the band edge;
+    - the internal ADC (``ratio`` x the output rate) clips at +-1.0 - this
+      clipping is NOT visible in the 8 output bits (the decimation filter
+      removes the strong carrier), but its products fall into the band;
+    - the decimation filter keeps +-fs/2, components from the next zones
+      leak in with ``alias_db`` (the real 635.325 = 632.925 + fs alias).
+    """
+    def __init__(self, ratio=8, rolloff_db_per_mhz=12., alias_db=-50., adc_noise_lsb=1.0, seed=7):
+        self.ratio = int(ratio)
+        # noise of the ADC itself (rms, in 8-bit steps of the output): it
+        # sets the floor at low gain (user: -105.6...-105.9 dBFS at 0-8.7 dB)
+        # and dithers the quantization of a strong carrier
+        self.adc_noise = float(adc_noise_lsb) / 127.5
+        self.rng = np.random.RandomState(seed)
+        self.rolloff = float(rolloff_db_per_mhz)
+        self.alias_db = float(alias_db)
+        self.clipped = []          # (fc, share of internal samples clipped) per read
+
+    def read(self, air, fc, fs, n, seed, gain_factor):
+        r = self.ratio
+        fs_w = fs * r
+        nw = n * r
+        saved = air.noise
+        air.noise = saved * np.sqrt(r)      # same noise density in the output band
+        try:
+            xw = air.iq_wide(fc, fs_w, nw, seed)
+        finally:
+            air.noise = saved
+        X = np.fft.fft(xw)
+        f = np.fft.fftfreq(nw, 1. / fs_w)
+        beyond = np.maximum(np.abs(f) - fs / 2., 0.) / 1e6
+        X *= 10. ** (-self.rolloff * beyond / 20.)
+        xw = np.fft.ifft(X) * gain_factor
+        if self.adc_noise:
+            # white over the internal band: the output band gets 1/ratio of it
+            sd = self.adc_noise * np.sqrt(r) / np.sqrt(2)
+            xw = xw + (self.rng.randn(nw) + 1j * self.rng.randn(nw)) * sd
+        over = (np.abs(xw.real) >= 1.0) | (np.abs(xw.imag) >= 1.0)
+        self.clipped.append((float(fc), float(np.count_nonzero(over)) / nw))
+        xw = np.clip(xw.real, -1., 1.) + 1j * np.clip(xw.imag, -1., 1.)
+        X = np.fft.fft(xw)
+        k = np.fft.fftfreq(n, 1. / n).astype(int)           # output bins -n/2 .. n/2-1
+        out = X[k % nw].copy()
+        a = 10. ** (self.alias_db / 20.)
+        out += a * (X[(k + n) % nw] + X[(k - n) % nw])
+        return np.fft.ifft(out) / r          # same amplitude as at the internal ADC
+
 
 class IQReplay(object):
     """Real recordings: the tile at fc gets a slice of the recording whose
@@ -96,14 +173,17 @@ class FakeRtlSdr(object):
     instances = []
 
     def __init__(self, serial_number=None, air=None, faults=(), quantize=True,
-                 tune_delay=0.0, read_delay=0.0, fail_open=False, gain_affects=False):
+                 tune_delay=0.0, read_delay=0.0, fail_open=False, gain_affects=False,
+                 wide_adc=None):
         if fail_open:
             raise IOError('No devices found')
         self.air = air if air is not None else Air()
         self.faults = list(faults)
         self.quantize = quantize
         self.gain_affects = gain_affects      # V17: the gain scales what is received
+        self.wide_adc = wide_adc              # V20: WideAdc model (None = old model)
         self.gains_set = []
+        self.read_gains = []                  # V20: gain of every read_samples call
         self.tune_delay = tune_delay
         self.read_delay = read_delay
         self.device_opened = True
@@ -188,11 +268,17 @@ class FakeRtlSdr(object):
         if self.read_delay:
             time.sleep(self.read_delay)
         self.reads.append(int(num_samples))
+        self.read_gains.append(self._gain)
         seed = int(self._fc // 1000) + self.calls['read_samples']
-        x = self.air.iq(self._fc, self._fs, int(num_samples), seed)
-        if self.gain_affects:
-            # levels of the Air are for gain 29.7 dB
-            x = x * 10. ** ((self._gain - 29.7) / 20.)
+        # levels of the Air are for gain 29.7 dB
+        gf = 10. ** ((self._gain - 29.7) / 20.) if self.gain_affects else 1.
+        if self.wide_adc is not None:
+            x = self.wide_adc.read(self.air, self._fc, self._fs, int(num_samples), seed, gf)
+            x = x + self.air.dc
+        else:
+            x = self.air.iq(self._fc, self._fs, int(num_samples), seed)
+            if self.gain_affects:
+                x = x * gf
         if self.quantize:
             i = np.clip(np.round((x.real + 1) * 127.5), 0, 255)
             q = np.clip(np.round((x.imag + 1) * 127.5), 0, 255)
