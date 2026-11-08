@@ -94,7 +94,36 @@ class ScannerBase(JSONMixin):
         self.on_progress(value)
     def on_progress(self, value):
         pass
+    @property
+    def segments(self):
+        """V18: the ranges of this scan, [(lo, hi)] MHz. Several when
+        config.scan_ranges lists them (bands of the chosen systems),
+        otherwise the one scan_range."""
+        from wwb_scanner import bands
+        rs = bands.parse_ranges(self.config.get('scan_ranges'))
+        if rs:
+            segs, outside = bands.scan_segments(rs)
+            if len(segs) > 1:
+                return segs
+            if len(segs) == 1:
+                return [segs[0]]
+        lo, hi = self.config.scan_range
+        return [(float(lo), float(hi))]
+    @property
+    def multi_range(self):
+        return len(self.segments) > 1
+    def range_text(self):
+        segs = self.segments
+        if len(segs) == 1:
+            return '%.1f-%.1f MHz' % segs[0]
+        return '%d ranges (%s MHz)' % (len(segs), ', '.join('%g-%g' % s for s in segs))
     def build_sample_sets(self):
+        try:
+            segs = self.segments
+        except AttributeError:      # a bare object in old tests
+            segs = []
+        if len(segs) > 1:
+            return self._build_multi_range(segs)
         freq,  end_freq = self.config.scan_range
         sample_collection = self.sample_collection
         # Centre frequencies are counted in whole Hz. Adding a float step
@@ -114,6 +143,29 @@ class ScannerBase(JSONMixin):
                 break
             sample_set = sample_collection.build_sample_set(float(freq_hz))
             freq_hz += step_hz
+    def _build_multi_range(self, segs):
+        """V18: tiles for several ranges. All tile centres lie on one grid
+        that starts at the first range, so the tile ripple has the same
+        phase everywhere (clean scan works as for one range). Tiles in
+        the gaps between the ranges are not measured."""
+        self.config.scan_range = [segs[0][0], segs[-1][1]]
+        step_hz = int(round(mhz_to_hz(self.step_size)))
+        if step_hz <= 0:
+            raise ValueError('tile step must be above 0 (check Overlap Ratio)')
+        g0 = int(round(mhz_to_hz(segs[0][0])))
+        centres = set()
+        for lo, hi in segs:
+            k0 = (int(round(mhz_to_hz(lo))) - g0) // step_hz
+            k1 = (int(round(mhz_to_hz(hi))) - g0) // step_hz
+            for k in range(k0, k1 + 1):
+                centres.add(g0 + k * step_hz)
+        for c in sorted(centres):
+            if c > MAX_TUNER_FREQ_HZ:
+                logger.warning('The dongle reaches only %.0f MHz: scan ends there',
+                               MAX_TUNER_FREQ_HZ / 1e6)
+                break
+            self.sample_collection.build_sample_set(float(c))
+        logger.info('scan of %s: %d tiles', self.range_text(), len(centres))
     def run_scan(self):
         """Never raises: an error ends the scan (what was measured is kept),
         so the window does not stay in the "running" state."""
@@ -148,19 +200,19 @@ class ScannerBase(JSONMixin):
             print('cropped in %.1f s, saving...' % (time.time() - t0), flush=True)
             self.save_to_dbstore()
             print('saved, total %.1f s' % (time.time() - t0), flush=True)
-            lo, hi = self.config.scan_range
+            what = self.range_text()
             coll = self.sample_collection
             if getattr(coll, 'aborted', False):
                 logging.getLogger('wwb_scanner.status').info(
-                    'Scan %.1f-%.1f MHz stopped after %.0f s (dongle error), measured part kept',
-                    lo, hi, time.time() - t_start)
+                    'Scan %s stopped after %.0f s (dongle error), measured part kept',
+                    what, time.time() - t_start)
             elif getattr(coll, 'missing_tiles', None):
                 logging.getLogger('wwb_scanner.status').info(
-                    'Scan %.1f-%.1f MHz done in %.0f s, %d tile(s) without data',
-                    lo, hi, time.time() - t_start, len(coll.missing_tiles))
+                    'Scan %s done in %.0f s, %d tile(s) without data',
+                    what, time.time() - t_start, len(coll.missing_tiles))
             else:
                 logging.getLogger('wwb_scanner.status').info(
-                    'Scan %.1f-%.1f MHz done in %.0f s%s', lo, hi, time.time() - t_start, clean_note)
+                    'Scan %s done in %.0f s%s', what, time.time() - t_start, clean_note)
     def stop_scan(self):
         if not self._running.is_set():
             # not started yet or already finished: nothing to wait for
@@ -227,6 +279,10 @@ class ScannerBase(JSONMixin):
         # tiles reach about 1.2 MHz beyond the requested range
         f_min, f_max = self.config.scan_range
         self.spectrum.crop(f_min, f_max)
+        segs = self.segments
+        if len(segs) > 1:
+            # V18: nothing between the ranges (tile edges reach into the gaps)
+            self.spectrum.keep_ranges(segs)
     def save_to_dbstore(self):
         self.spectrum.save_to_dbstore()
     def _serialize(self):

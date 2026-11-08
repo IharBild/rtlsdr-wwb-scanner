@@ -276,6 +276,7 @@ def main():
     check('U5', not si.running, 'second scan after the first: %.1f s' % (time.time() - t_start))
     v16_checks(app, win, controls, si, seen_left)
     v17_checks(app, win, controls, si)
+    v18_checks(app, win, controls, si)
     win.close()
     pump(app, 0.3)
     return 0 if all(RESULTS) else 1
@@ -403,6 +404,94 @@ def v17_checks(app, win, controls, si):
         cleanup.CALIBRATION_RANGE_MHZ = old
     if QML_WARNINGS:
         print('QML warnings so far:', QML_WARNINGS[:5])
+
+
+def v18_checks(app, win, controls, si):
+    """V18: Bands dialog (systems + country), scan of several ranges in the
+    window, regulation strip, back to one range."""
+    try:
+        from wwb_scanner import bands
+    except ImportError:
+        check('U17', False, 'no wwb_scanner.bands (V18 not installed)')
+        return
+    dlg = [o for o in win.findChildren(QtCore.QObject) if o.property('title') == 'Bands: your systems and the country']
+    sets = [o for o in win.findChildren(QtCore.QObject) if o.metaObject().indexOfProperty('selected') >= 0
+            and o.metaObject().indexOfProperty('country') >= 0]
+    if not dlg or not sets:
+        check('U17', False, 'Bands dialog %d, settings %d' % (len(dlg), len(sets)))
+        return
+    d, st = dlg[0], sets[0]
+    if os.environ.get('QA_SHOT_BANDS'):
+        win.setWidth(1500)
+        win.setHeight(900)
+    st.setProperty('country', 'PL')
+    st.setProperty('selected', '[]')
+    n_warn = len(QML_WARNINGS)
+    QtCore.QMetaObject.invokeMethod(d, 'open')
+    pump(app, 0.8)
+    ctx = QtQml.QQmlEngine.contextForObject(d)
+    def js(code):
+        e = QtQml.QQmlExpression(ctx, d, code)
+        v = e.evaluate()
+        return (v[0] if isinstance(v, tuple) else v), (e.error().toString() if e.hasError() else '')
+    errs = []
+    for sid in ('Shure|BLX|K3E', 'Shure|PSM 300|S8'):
+        errs.append(js('setChosen(%s, true)' % json.dumps(sid))[1])
+    pump(app, 0.3)
+    count, e1 = js('info.count')
+    rows, e2 = js('rowCount')
+    text, e3 = js('info.text')
+    shot = os.environ.get('QA_SHOT_BANDS')
+    if shot:
+        img = win.grabWindow()
+        print('screenshot', shot, img.save(shot), img.width(), img.height())
+    check('U17', count == 3 and rows == len(bands.SYSTEMS) and not any(errs + [e1, e2, e3])
+          and len(QML_WARNINGS) == n_warn,
+          'dialog: %s rows, %s ranges chosen; plan: %r; errors %s; new QML warnings %s'
+          % (rows, count, str(text)[:120], [x for x in errs + [e1, e2, e3] if x], QML_WARNINGS[n_warn:][:3]))
+    QtCore.QMetaObject.invokeMethod(d, 'accept')
+    pump(app, 0.5)
+    cfg = si.scanConfig
+    graphs = [o for o in win.findChildren(QtCore.QObject) if o.metaObject().indexOfProperty('regRegions') >= 0]
+    regs = graphs[0].property('regRegions') if graphs else None
+    if hasattr(regs, 'toVariant'):
+        regs = regs.toVariant()
+    btn = [o for o in win.findChildren(QtCore.QObject) if str(o.property('text') or '').startswith('Bands: ')
+           and str(o.property('text') or '').endswith(' ranges')]
+    check('U18', cfg.scanRanges.count('[') == 4 and cfg.startFreq == 606 and cfg.endFreq == 865
+          and bool(regs) and bool(btn),
+          'after "Scan these ranges": scanRanges %r, range %.0f-%.0f, regulation regions %d, button %r'
+          % (cfg.scanRanges, cfg.startFreq, cfg.endFreq, len(regs or []),
+             btn[0].property('text') if btn else None))
+    t0 = time.time()
+    controls[0].scannerState.emit(True)
+    pump(app, 0.5)
+    while si.running and time.time() - t0 < 300:
+        pump(app, 0.1)
+    pump(app, 1.0)
+    sp = si.spectrum
+    f = np.asarray(sp.sample_data.frequency, float) if sp is not None else np.zeros(0)
+    in_gap = int(((f > 630.01) & (f < 822.99)).sum() + ((f > 832.01) & (f < 862.99)).sum())
+    gds = [g for g in find(win, lambda o: isinstance(o, ui_graph.SpectrumGraphData))
+           if getattr(g, 'spectrum', None) is sp and getattr(g, 'xy_data', None) is not None]
+    drops = 0
+    if gds:
+        drops = int((ui_graph.with_gaps(ui_graph.decimate_max(gds[0].xy_data, gds[0]._decim_k))['y'] < -200).sum())
+    hubs = [o for o in win.findChildren(QtCore.QObject) if o.metaObject().indexOfProperty('logFile') >= 0]
+    status = str(hubs[0].property('text')) if hubs else ''
+    shot = os.environ.get('QA_SHOT_MULTI')
+    if shot:
+        img = win.grabWindow()
+        print('screenshot', shot, img.save(shot), img.width(), img.height())
+    check('U19', f.size > 0 and in_gap == 0 and f.min() >= 605.9 and f.max() <= 865.1 and drops == 4
+          and 'ranges' in status,
+          'scan of 3 ranges in %.0f s: %d points, %d in the gaps, %d gap points on the chart; status %r'
+          % (time.time() - t0, f.size, in_gap, drops, status[:100]))
+    acts = [o for o in win.findChildren(QtCore.QObject) if str(o.property('text') or '') == 'Scan &one range again']
+    if acts:
+        QtCore.QMetaObject.invokeMethod(acts[0], 'trigger')
+        pump(app, 0.3)
+    check('U20', bool(acts) and cfg.scanRanges == '', 'Bands > Scan one range again: scanRanges %r' % cfg.scanRanges)
 
 
 def _save_coverage():

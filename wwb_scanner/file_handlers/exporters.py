@@ -37,10 +37,27 @@ def _epoch_ms(local_dt):
     return int(round(time.mktime(local_dt.timetuple()) * 1000 + local_dt.microsecond / 1000.))
 
 
-def wwb_grid(spectrum, step=WWB_STEP_KHZ, lo=WWB_MIN_KHZ, hi=WWB_MAX_KHZ):
+def gap_mask(grid_khz, freqs_khz):
+    """V18: True for grid points inside a gap of the scan (a scan of several
+    ranges): between two measured points more than ``max(200 kHz, 4 x point
+    step)`` apart and more than one point step from both of them."""
+    grid_khz = np.asarray(grid_khz, dtype=np.float64)
+    f = np.asarray(freqs_khz, dtype=np.float64)
+    if f.size < 2 or grid_khz.size == 0:
+        return np.zeros(grid_khz.size, dtype=bool)
+    step = float(np.median(np.diff(f)))
+    limit = max(200.0, 4.0 * step)
+    i = np.clip(np.searchsorted(f, grid_khz), 1, f.size - 1)
+    wide = (f[i] - f[i - 1]) > limit
+    dist = np.minimum(np.abs(grid_khz - f[i - 1]), np.abs(f[i] - grid_khz))
+    return wide & (dist > step)
+
+
+def wwb_grid(spectrum, step=WWB_STEP_KHZ, lo=WWB_MIN_KHZ, hi=WWB_MAX_KHZ, gaps=None):
     """Scan values on a whole-kHz grid (``step`` kHz) inside ``lo``..``hi`` kHz,
     as WWB expects. Returns (grid_khz int64 array, dB array). The spectrum is
-    not changed."""
+    not changed. Grid points in a gap of the scan (V18, several ranges) get
+    NO_DATA_DB; with ``gaps='drop'`` they are left out."""
     freqs_khz = np.rint(np.asarray(spectrum.sample_data['frequency'], dtype=np.float64) * 1000.)
     dB = clean_dB(spectrum.sample_data['dbFS'])
     if freqs_khz.size == 0:
@@ -57,6 +74,12 @@ def wwb_grid(spectrum, step=WWB_STEP_KHZ, lo=WWB_MIN_KHZ, hi=WWB_MAX_KHZ):
                          % (freqs_khz[0] / 1000., freqs_khz[-1] / 1000., lo // 1000, hi // 1000))
     grid = np.arange(first, last + 1, step, dtype=np.int64)
     values = np.around(np.interp(grid, freqs_khz, dB), decimals=1)
+    gap = gap_mask(grid, freqs_khz)
+    if gap.any():
+        if gaps == 'drop':
+            grid, values = grid[~gap], values[~gap]
+        else:
+            values[gap] = NO_DATA_DB
     return grid, values
 
 
@@ -176,7 +199,7 @@ class CSVExporter(BaseExporter):
         only inside 30-2000 MHz (WWB refuses anything else)."""
         if self.spectrum.sample_data['frequency'].size == 0:
             return ''
-        grid, values = wwb_grid(self.spectrum, step=self.khz_step)
+        grid, values = wwb_grid(self.spectrum, step=self.khz_step, gaps='drop')
         lines = ['%d%s%.1f' % (f, self.delimiter_char, v) for f, v in zip(grid, values)]
         return self.khz_newline_chars.join(lines)
     def build_data(self):

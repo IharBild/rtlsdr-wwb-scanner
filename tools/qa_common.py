@@ -39,6 +39,7 @@ MARKERS = [
     ('V16.1', 'ui/pyside/main.py', 'def apply_style'),
     ('V17', 'scanner/cleanup.py', 'def remove_spurs'),
     ('V17.1', 'utils/numpyjson.py', 'class _SafeUnpickler'),
+    ('V18', 'bands.py', 'def scan_segments'),
 ]
 
 

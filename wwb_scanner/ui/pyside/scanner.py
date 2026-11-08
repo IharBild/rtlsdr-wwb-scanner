@@ -31,6 +31,7 @@ class ScanConfigData(GenericQObject):
     _n_cleanSpurs = Signal()
     _n_cleanFloor = Signal()
     _n_autoGain = Signal()
+    _n_scanRanges = Signal()
     configUpdate = Signal()
     def __init__(self, *args):
         self._startFreq = 470.
@@ -49,6 +50,7 @@ class ScanConfigData(GenericQObject):
         self._cleanSpurs = True
         self._cleanFloor = True
         self._autoGain = True
+        self._scanRanges = ''
         super().__init__(*args)
 
     def _generic_property_changed(self, attr, old_value, new_value):
@@ -117,6 +119,11 @@ class ScanConfigData(GenericQObject):
     def _g_autoGain(self): return self._autoGain
     def _s_autoGain(self, value): self._generic_setter('_autoGain', value)
     autoGain = Property(bool, _g_autoGain, _s_autoGain, notify=_n_autoGain)
+
+    # V18: several ranges as JSON '[[470, 534], [823, 832]]'; '' = one range
+    def _g_scanRanges(self): return self._scanRanges
+    def _s_scanRanges(self, value): self._generic_setter('_scanRanges', value or '')
+    scanRanges = Property(str, _g_scanRanges, _s_scanRanges, notify=_n_scanRanges)
 
 class ScannerInterface(GenericQObject):
     _n_running = Signal()
@@ -207,15 +214,27 @@ class ScannerInterface(GenericQObject):
         conf.processing.clean_ripple = bool(getattr(sc, 'cleanRipple', False))
         conf.processing.clean_spurs = bool(getattr(sc, 'cleanSpurs', False))
         conf.processing.clean_floor = bool(getattr(sc, 'cleanFloor', False))
+        segs = self.scan_segments()
+        if len(segs) > 1:
+            conf.scan_ranges = [list(s) for s in segs]
+            conf.scan_range = [segs[0][0], segs[-1][1]]
         if self.calibrating:
             # calibration: whole range, values exactly as measured
             from wwb_scanner.scanner import cleanup
             conf.scan_range = list(cleanup.CALIBRATION_RANGE_MHZ)
+            conf.scan_ranges = None
             conf.sampling.auto_gain = False
             conf.processing.clean_ripple = False
             conf.processing.clean_spurs = False
             conf.processing.clean_floor = False
         return conf
+
+    def scan_segments(self):
+        """V18: [(lo, hi)] of the next scan (several when Bands chose them)."""
+        from wwb_scanner import bands
+        rs = bands.parse_ranges(getattr(self.scanConfig, 'scanRanges', ''))
+        segs = bands.scan_segments(rs)[0] if rs else []
+        return segs if len(segs) > 1 else []
 
     @Slot(result=str)
     def calibrationStatus(self):
@@ -258,7 +277,11 @@ class ScannerInterface(GenericQObject):
         if self.calibrating:
             self.spectrum.name = 'Calibration without antenna, gain %s dB' % self.gain
         else:
-            self.spectrum.name = f'{self.startFreq} - {self.endFreq} (live)'
+            segs = self.scan_segments()
+            if segs:
+                self.spectrum.name = 'Bands %s (live)' % ', '.join('%g-%g' % s for s in segs)
+            else:
+                self.spectrum.name = f'{self.startFreq} - {self.endFreq} (live)'
         self.progress = 0.
         self.running = True
         self.scan_thread = ScanThread(target=self.scanner.run_scan)

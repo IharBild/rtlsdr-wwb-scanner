@@ -80,10 +80,28 @@ ApplicationWindow {
             }
         }
         Menu {
+            title: qsTr("&Bands")
+            Action {
+                text: qsTr("&Systems and country...")
+                onTriggered: bandsDialog.open()
+            }
+            Action {
+                text: qsTr("Scan &one range again")
+                enabled: scanConfig.scanRanges !== ''
+                onTriggered: scanConfig.scanRanges = ''
+            }
+        }
+        Menu {
             title: qsTr("&View")
             Action {
                 text: qsTr("&Theme")
                 onTriggered: themeSelect.open()
+            }
+            Action {
+                text: qsTr("&Regulation strip") + (bandSettings.country ? ' (' + bandSettings.country + ')' : '')
+                checkable: true
+                checked: bandSettings.showRegulation
+                onTriggered: bandSettings.showRegulation = checked
             }
         }
     }
@@ -94,6 +112,7 @@ ApplicationWindow {
             anchors.fill: parent
             config: scanConfig
             progress: scanner.progress
+            onOpenBands: bandsDialog.open()
             onScannerState: {
                 if (state) {
                     scanner.start();
@@ -133,7 +152,28 @@ ApplicationWindow {
                 horizontalAlignment: Qt.AlignLeft
             }
 
-            Item { Layout.preferredWidth: 24 }
+            Item { Layout.preferredWidth: 12 }
+
+            // V18: rule of the chosen country at the cursor
+            Label {
+                id: regLabel
+                property var r: {
+                    var rr = chartWrapper.regRegions, f = chartWrapper.mouseDataPoint.x;
+                    if (!(f > 0) || !rr) return ({});
+                    for (var i = 0; i < rr.length; i++)
+                        if (f >= rr[i].lo && f < rr[i].hi) return rr[i];
+                    return ({});
+                }
+                visible: bandSettings.showRegulation && r.label !== undefined
+                text: visible ? bandSettings.country + ': ' + r.label : ''
+                color: visible ? r.color : palette.windowText
+                font.pointSize: 9
+                ToolTip.visible: regMouse.containsMouse && visible
+                ToolTip.text: visible ? r.lo.toFixed(1) + '-' + r.hi.toFixed(1) + ' MHz: ' + r.label
+                                        + (r.note ? '\n' + r.note : '') : ''
+                MouseArea { id: regMouse; anchors.fill: parent; hoverEnabled: true }
+            }
+            Item { Layout.preferredWidth: 12 }
 
             // V16: last warning / error / info of the scanner (click clears)
             Label {
@@ -168,6 +208,8 @@ ApplicationWindow {
             accent: window.accent
             tvPlan: themeSelect.tvPlan
             showSpurs: themeSelect.showSpurs
+            showRegulation: bandSettings.showRegulation
+            regRegions: bandsData.regions(bandSettings.country)
         }
     }
 
@@ -200,6 +242,24 @@ ApplicationWindow {
 
     ScanConfig {
         id: scanConfig
+    }
+
+    // V18: systems and country rules
+    Settings {
+        id: bandSettings
+        category: 'Bands'
+        property string country: 'PL'
+        property string selected: '[]'
+        property bool showRegulation: true
+    }
+    BandsData {
+        id: bandsData
+    }
+    BandsDialog {
+        id: bandsDialog
+        bands: bandsData
+        config: scanConfig
+        settings: bandSettings
     }
 
     StatusHub {

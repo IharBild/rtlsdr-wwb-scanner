@@ -35,6 +35,8 @@ def register_qml_types():
     device_config.register_qml_types()
     graph.register_qml_types()
     scanner.register_qml_types()
+    from wwb_scanner.ui.pyside import bands_qt
+    bands_qt.register_qml_types()
 
 QML_PATH = get_resource_filename('qml')
 

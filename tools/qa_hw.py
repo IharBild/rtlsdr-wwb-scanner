@@ -174,6 +174,13 @@ def check_environment(args):
     miss171 = [k for k, v in m171.items() if not v]
     result('E3g', 'WARN' if miss171 else 'PASS', 'установлен V17.1 (безопасность)',
            ('нет: ' + ', '.join(miss171) + ' - поставьте fix-V17.1-pip-files.zip') if miss171 else 'все отметки найдены')
+    m18 = {'bands.py': 'def scan_segments' in read(os.path.join(base, 'bands.py')),
+           'окно Bands': os.path.exists(os.path.join(pq, 'qml', 'BandsDialog.qml')),
+           'несколько диапазонов': '_build_multi_range' in read(os.path.join(base, 'scanner', 'main.py')),
+           'экспорт без промежутков': 'def gap_mask' in read(os.path.join(base, 'file_handlers', 'exporters.py'))}
+    miss18 = [k for k, v in m18.items() if not v]
+    result('E3h', 'WARN' if miss18 else 'PASS', 'установлен V18 (диапазоны систем и стран)',
+           ('нет: ' + ', '.join(miss18) + ' - поставьте fix-V18-pip-files.zip') if miss18 else 'все отметки найдены')
     m17 = {'cleanup.py': os.path.exists(os.path.join(base, 'scanner', 'cleanup.py')),
            'автоусиление': 'remeasure_lower_gain' in read(os.path.join(base, 'scanner', 'sample_processing.py')),
            'калибровка в окне': 'calibrateButton' in read(os.path.join(pq, 'qml', 'ScanControlsDialog.qml')),
@@ -315,7 +322,8 @@ class Lab(object):
         spmod.Spectrum.save_to_dbstore = lambda self: None
         self.home_report = os.path.join(os.path.expanduser('~'), 'wwb_scan_timing.txt')
 
-    def config(self, start, end, window_type='hann', overlap=0.65, sweeps=40, auto_gain=False, clean=False):
+    def config(self, start, end, window_type='hann', overlap=0.65, sweeps=40, auto_gain=False, clean=False,
+               ranges=None):
         c = {
             'scan_range': [float(start), float(end)],
             'device': {'gain': 33.8},
@@ -327,6 +335,8 @@ class Lab(object):
             c['sampling']['auto_gain'] = True          # V17
         if clean:
             c['processing'] = {'clean_ripple': True, 'clean_spurs': True, 'clean_floor': True}
+        if ranges:
+            c['scan_ranges'] = [list(r) for r in ranges]   # V18
         return c
 
     def scan(self, name, start, end, timeout=1200, **kw):
@@ -952,6 +962,49 @@ def h11_clean(lab, s):
               else 'пол не выровнен: %s' % info.get('floor_skipped'), int(big.sum())))
 
 
+BANDS_H12 = [(470.0, 534.0), (606.0, 630.0), (823.0, 832.0), (863.0, 865.0)]
+
+
+def v18_installed():
+    try:
+        from wwb_scanner import bands  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+@guard('H12', 'скан нескольких диапазонов (V18)')
+def h12_bands(lab, h2):
+    """QLX-D G51 + BLX K3E + PSM300 S8 in one run: only these ranges are
+    measured, nothing in the gaps, faster than one range over all of them."""
+    import numpy as np
+    s = lab.scan('bands', 470, 865, ranges=BANDS_H12, clean=True, auto_gain=True)
+    f = s['f']
+    gaps = [(534.0, 606.0), (630.0, 823.0), (832.0, 863.0)]
+    in_gap = int(sum(((f > a + 0.01) & (f < b - 0.01)).sum() for a, b in gaps))
+    have = ['%g-%g: %d' % (a, b, int(((f >= a) & (f <= b)).sum())) for a, b in BANDS_H12]
+    empty = [a for a, b in BANDS_H12 if not ((f >= a) & (f <= b)).any()]
+    files = []
+    try:
+        files = list(lab.save(s, 'scan_bands'))
+        p3 = os.path.join(lab.outdir, 'scan_bands.sdb3')
+        s['scanner'].spectrum.export_to_file(filename=p3)
+        files.append(p3)
+    except Exception as exc:
+        files.append('export error %r' % (exc,))
+    full = None
+    if h2:
+        full = per_tile(h2[0]) * ((865 - 470) / 0.775 + 1)
+    ok = not s['hung'] and not s['error'] and in_gap == 0 and not empty
+    fast = full is None or s['time'] < 0.6 * full
+    result('H12', 'PASS' if ok and fast else ('WARN' if ok else 'FAIL'),
+           'скан 4 диапазонов (470-534, 606-630, 823-832, 863-865)',
+           '%.1f с, плиток %d (один диапазон 470-865 ~ %s с); точек: %s; в промежутках %d; файлы: %s'
+           % (s['time'], s['tiles'], '%.0f' % full if full else '?', ', '.join(have), in_gap,
+              ', '.join(os.path.basename(x) for x in files if x)))
+    return s
+
+
 # ---------------------------------------------------------------- report
 
 def write_report(outdir, args, started):
@@ -1032,6 +1085,8 @@ def main():
                 h10_gain_steps(lab, h2[0])
                 if h9:
                     h11_clean(lab, h9[0])
+            if v18_installed():
+                h12_bands(lab, h2)
             v10 = any(r[0] == 'E3' and r[1] == 'PASS' for r in RESULTS)
             if v10:
                 h4_windows(lab)

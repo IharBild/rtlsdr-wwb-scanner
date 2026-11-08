@@ -166,6 +166,16 @@ class SampleArray(JSONMixin):
         counts = self._get_counts()
         self.data = self.data[ix]
         self._counts = counts[ix]
+    def keep_ranges(self, ranges):
+        """V18: keep only points inside any of ``ranges`` [(lo, hi)] MHz."""
+        keys = self._freq_keys(self.frequency)
+        keep = np.zeros(keys.size, dtype=bool)
+        for lo, hi in ranges:
+            keep |= (keys >= int(round(lo * 1e6))) & (keys <= int(round(hi * 1e6)))
+        ix = np.flatnonzero(keep)
+        counts = self._get_counts()
+        self.data = self.data[ix]
+        self._counts = counts[ix]
     def smooth(self, window_size):
         x = self.magnitude
         w = np.hanning(window_size)

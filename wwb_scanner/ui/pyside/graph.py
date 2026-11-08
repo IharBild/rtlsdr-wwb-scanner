@@ -149,6 +149,26 @@ def decimate_max(d_arr, k=None):
         ix = np.append(ix, m + np.argmax(d_arr['y'][m:]))
     return d_arr[ix]
 
+GAP_Y = -300.     # below any axis: the line drops out of the plot in a gap
+
+def with_gaps(pts):
+    """V18: a scan of several ranges has holes between them. A line chart
+    would join the ends with a straight line (a "measurement" where there
+    was none); two points far below the plot make the hole visible."""
+    x = pts['x']
+    if x.size < 3:
+        return pts
+    d = np.diff(x)
+    med = float(np.median(d))
+    big = np.flatnonzero(d > max(1.0, 20 * med))
+    if not big.size:
+        return pts
+    ins = np.zeros(2 * big.size, dtype=pts.dtype)
+    ins['x'][0::2] = x[big] + med
+    ins['x'][1::2] = x[big + 1] - med
+    ins['y'] = GAP_Y
+    return np.insert(pts, np.repeat(big + 1, 2), ins)
+
 # "khz" = Shure WWB style CSV, None = old MHz CSV
 CSV_FREQUENCY_FORMAT = 'khz'
 
@@ -335,7 +355,7 @@ class SpectrumGraphData(QtQuick.QQuickItem):
         if self.model is None:
             return
         t0 = time.time()
-        pts = decimate_max(self.xy_data, self._decim_k)
+        pts = with_gaps(decimate_max(self.xy_data, self._decim_k))
         if not self._replace_series(pts):
             self.model.set_from_graph_dtype(pts)
         dt = time.time() - t0

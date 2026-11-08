@@ -50,12 +50,13 @@ UNIT_FILES = {'test_tile_processing', 'test_merge_crop', 'test_csv_format', 'tes
 OVERRIDES = [
     ('test_v17', ('ripple', 'spurs_removed', 'profile', 'calibration_refused', 'merge_weight'), 'UNIT'),
     ('test_v16', ('clip_ratio_values', 'compare_tool'), 'UNIT'),
+    ('test_v18', ('test_B', 'test_G1'), 'UNIT'),
     ('test_qa_stability', ('S8_S10', 'S11'), 'PERFORMANCE'),
 ]
 FILE_CAT = {'test_sim_smoke': 'INTEGRATION', 'test_qa_correctness': 'INTEGRATION', 'test_v16': 'INTEGRATION',
             'test_v17': 'INTEGRATION', 'test_integration': 'INTEGRATION', 'test_qa_formats': 'FUNCTIONAL',
             'test_io': 'FUNCTIONAL', 'test_qa_stability': 'SYSTEM', 'test_golden': 'REGRESSION',
-            'test_security': 'SECURITY'}
+            'test_security': 'SECURITY', 'test_v18': 'FUNCTIONAL'}
 
 
 def category_of(fn, name):
@@ -326,7 +327,7 @@ def run_pytest(out, args, cov_src):
 
 def run_ui(out, cov_src):
     if not have_pyside():
-        R.add('U', 'FUNCTIONAL', 'SKIP', 'окно программы (U1-U16)', 'PySide2 нет')
+        R.add('U', 'FUNCTIONAL', 'SKIP', 'окно программы (U1-U20)', 'PySide2 нет')
         return None
     env = sub_env()
     env.setdefault('QT_QPA_PLATFORM', 'offscreen')
@@ -345,7 +346,7 @@ def run_ui(out, cov_src):
         fh.write(txt)
     checks = re.findall(r'^(U\d+b?) +(OK|FAIL) +(.*)$', txt, re.M)
     if not checks:
-        R.add('U', 'FUNCTIONAL', 'FAIL', 'окно программы (U1-U16)', 'окно не запустилось, см. ui.txt')
+        R.add('U', 'FUNCTIONAL', 'FAIL', 'окно программы (U1-U20)', 'окно не запустилось, см. ui.txt')
         return None
     perf = {'U3'}
     for uid, ok, det in checks:
@@ -361,7 +362,9 @@ UI_TITLES = {
     'U6': 'экспорт через график', 'U7': 'все точки на графике', 'U8': 'без анимации графика',
     'U9': 'File > Export, все форматы', 'U10': 'строка сообщений и окно ошибки', 'U11': 'метки спуров',
     'U12': 'пресеты диапазонов', 'U13': 'время до конца скана', 'U14': 'блок Clean scan в настройках',
-    'U15': 'скан очищен, сырые данные сохранены', 'U16': 'калибровка из окна, затем выровненный скан'}
+    'U15': 'скан очищен, сырые данные сохранены', 'U16': 'калибровка из окна, затем выровненный скан',
+    'U17': 'окно Bands: системы и страна', 'U18': 'выбор диапазонов передан в скан, полоса правил на графике',
+    'U19': 'скан нескольких диапазонов из окна, промежутки пустые', 'U20': 'возврат к одному диапазону'}
 
 
 # ======================================================================= SYSTEM
@@ -653,6 +656,9 @@ ACCEPTANCE = [
     ('AC7', 'Окно отзывчиво: замирание < 0,5 с, есть время до конца скана', ['U3', 'U13'], ''),
     ('AC8', 'История сохраняет и открывает сканы (очищенные и сырые)', ['T.IN.integration', 'PF6'], ''),
     ('AC9', 'Калибровка донгла из окна, затем выровненный скан', ['U16', 'T.IN.integration'], 'H8d на ПК (без антенны)'),
+    ('AC10', 'Диапазоны: системы Shure/Sennheiser и правила страны, скан только их диапазонов, в промежутках нет '
+             'выдуманных данных (окно, график, экспорт)', ['U17', 'U18', 'U19', 'U20', 'T.FU.v18', 'T.UN.v18'],
+     'PW.U19 на ПК; экспорт открыть в WWB'),
 ]
 
 

@@ -22,6 +22,9 @@ Item {
     // measured without antenna: 3 dB or more above its noise (V10-V15)
     readonly property var spurFreqs: [86.4, 115.2, 144.0, 172.8, 201.6, 230.4, 259.2, 288.0,
                                       316.8, 345.6, 374.4, 403.2, 432.0, 460.8, 489.6, 518.4]
+    // V18: what the regulator allows (strip at the bottom of the plot)
+    property var regRegions: []
+    property bool showRegulation: true
     property alias theme: chart.theme
     property var spectrumGraphs: []
     property var activeSpectrum
@@ -253,6 +256,53 @@ Item {
                 y: chart.plotArea.y
                 width: chart.plotArea.width
                 height: 18
+            }
+
+            // V18: regulation of the chosen country: faint colour over the
+            // plot and a labelled strip at its bottom
+            Item {
+                id: regStrip
+                x: chart.plotArea.x
+                y: chart.plotArea.y
+                width: chart.plotArea.width
+                height: chart.plotArea.height
+                visible: root.showRegulation && root.regRegions.length > 0
+                clip: true
+                Repeater {
+                    model: root.regRegions
+                    Item {
+                        property real span: axisX.max - axisX.min
+                        property real x0: span > 0 ? (modelData.lo - axisX.min) / span * regStrip.width : 0
+                        property real x1: span > 0 ? (modelData.hi - axisX.min) / span * regStrip.width : 0
+                        visible: x1 > 0 && x0 < regStrip.width && modelData.status != 'unknown'
+                        x: x0
+                        width: Math.max(1, x1 - x0)
+                        height: regStrip.height
+                        Rectangle {
+                            anchors.fill: parent
+                            color: modelData.color
+                            opacity: modelData.status == 'no' ? 0.10 : 0.05
+                        }
+                        Rectangle {
+                            id: regBar
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.bottom: parent.bottom
+                            height: 14
+                            color: modelData.color
+                            opacity: 0.75
+                            border.color: root.darkUi ? '#0d0f11' : '#ffffff'
+                            border.width: 1
+                        }
+                        Text {
+                            anchors.centerIn: regBar
+                            visible: parent.width > implicitWidth + 8
+                            text: modelData.label
+                            color: '#ffffff'
+                            font.pointSize: 7
+                        }
+                    }
+                }
             }
 
             // V16: marks of the dongle's own spurs (not in the data, only drawn)

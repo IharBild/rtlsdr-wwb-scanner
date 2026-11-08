@@ -3,6 +3,7 @@ from wwb_scanner.utils.config import Config
 class ScanConfig(Config):
     DEFAULTS = dict(
         scan_range=[400., 900.],
+        scan_ranges=None,         # V18: several ranges [[lo, hi], ...] in one scan
         save_raw_values=False,
     )
     def __init__(self, initdict=None, **kwargs):

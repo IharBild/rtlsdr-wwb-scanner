@@ -220,7 +220,8 @@ class FakeLockLib(object):
 
 
 def make_config(start, end, fs=2.4e6, window=96, sweeps=40, per_sweep=2048,
-                overlap=0.65, window_type='hann', gain=33.8, auto_gain=False, clean=None):
+                overlap=0.65, window_type='hann', gain=33.8, auto_gain=False, clean=None,
+                ranges=None):
     conf = {
         'scan_range': [float(start), float(end)],
         'device': {'gain': gain},
@@ -233,6 +234,8 @@ def make_config(start, end, fs=2.4e6, window=96, sweeps=40, per_sweep=2048,
     }
     if clean:
         conf['processing'] = dict(clean)
+    if ranges:
+        conf['scan_ranges'] = [list(r) for r in ranges]     # V18: several ranges
     return conf
 
 

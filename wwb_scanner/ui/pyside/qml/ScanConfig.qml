@@ -22,6 +22,7 @@ Item {
     property alias cleanSpurs: model.cleanSpurs
     property alias cleanFloor: model.cleanFloor
     property alias autoGain: model.autoGain
+    property alias scanRanges: model.scanRanges
 
     signal configUpdate()
 
@@ -43,6 +44,7 @@ Item {
         cleanSpurs: true
         cleanFloor: true
         autoGain: true
+        scanRanges: ''
 
         onConfigUpdate: {
             root.configUpdate();
@@ -68,5 +70,6 @@ Item {
         property alias cleanSpurs: model.cleanSpurs
         property alias cleanFloor: model.cleanFloor
         property alias autoGain: model.autoGain
+        property alias scanRanges: model.scanRanges
     }
 }

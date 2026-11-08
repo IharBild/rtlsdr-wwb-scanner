@@ -89,10 +89,13 @@ def test_S5_hole_in_csv(monkeypatch, tmpdir):
     k = np.array([int(l.split(',')[0]) for l in lines])
     v = np.array([float(l.split(',')[1]) for l in lines])
     hole = (k > f[gaps[0]] * 1000) & (k < f[gaps[0] + 1] * 1000) if gaps.size else np.zeros(k.size, bool)
-    print('S5 gap in scan %s MHz; CSV has %d points there, filled by straight line (%.1f..%.1f dB) - tone at 480.5 is gone'
-          % ([(round(f[g], 3), round(f[g + 1], 3)) for g in gaps], hole.sum(),
-             v[hole].min() if hole.any() else 0, v[hole].max() if hole.any() else 0))
-    assert set(np.diff(k)) == {25}
+    print('S5 gap in scan %s MHz; CSV has %d points there (V18: only the 25 kHz next to measured points)'
+          % ([(round(f[g], 3), round(f[g + 1], 3)) for g in gaps], hole.sum()))
+    assert gaps.size == 1
+    # V18: no invented values deep inside the hole (it used to be a straight line)
+    deep = (k > f[gaps[0]] * 1000 + 25) & (k < f[gaps[0] + 1] * 1000 - 25)
+    assert not deep.any()
+    assert set(np.diff(k)) <= {25, int(round((f[gaps[0] + 1] - f[gaps[0]]) * 1000)) - 50}
     assert scanner.sample_collection.missing_tiles      # the gap is reported
 
 

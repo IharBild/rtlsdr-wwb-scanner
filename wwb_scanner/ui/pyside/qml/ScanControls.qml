@@ -14,6 +14,12 @@ RowLayout {
     property alias progress: progressBar.value
 
     signal scannerState(bool state)
+    signal openBands()
+    // V18: several ranges chosen in Bands (JSON), '' = one range
+    property string scanRanges: config ? config.scanRanges : ''
+    property int rangeCount: {
+        try { var r = JSON.parse(scanRanges); return r.length || 0; } catch (e) { return 0; }
+    }
 
     onConfigChanged: {
         if (!config){
@@ -39,6 +45,7 @@ RowLayout {
         Layout.leftMargin: 6
         labelFontSize: 10
         onSubmit: {
+            root.config.scanRanges = '';
             root.config.startFreq = startFreqInput.value;
         }
     }
@@ -47,6 +54,7 @@ RowLayout {
         name: 'End Freq'
         labelFontSize: 10
         onSubmit: {
+            root.config.scanRanges = '';
             root.config.endFreq = endFreqInput.value;
         }
     }
@@ -92,6 +100,7 @@ RowLayout {
         onActivated: {
             var it = presetModel.get(index);
             if (it.hi > it.lo && root.config) {
+                root.config.scanRanges = '';
                 root.config.startFreq = it.lo;
                 root.config.endFreq = it.hi;
             }
@@ -132,6 +141,19 @@ RowLayout {
     }
 
     ToolSeparator { }
+
+    // V18: bands of the systems + country rules
+    ToolButton {
+        id: bandsBtn
+        text: root.rangeCount > 1 ? 'Bands: ' + root.rangeCount + ' ranges' : 'Bands...'
+        enabled: !root.scanRunning
+        highlighted: root.rangeCount > 1
+        ToolTip.visible: hovered
+        ToolTip.text: root.rangeCount > 1
+                      ? 'Next scan covers only the chosen system bands. Type a range or pick a preset to scan one range again.'
+                      : 'Choose your systems (Shure, Sennheiser) and the country: scan only their bands'
+        onClicked: root.openBands()
+    }
 
     Item {
         Layout.fillWidth: true
