@@ -56,7 +56,7 @@ OVERRIDES = [
 FILE_CAT = {'test_sim_smoke': 'INTEGRATION', 'test_qa_correctness': 'INTEGRATION', 'test_v16': 'INTEGRATION',
             'test_v17': 'INTEGRATION', 'test_integration': 'INTEGRATION', 'test_qa_formats': 'FUNCTIONAL',
             'test_io': 'FUNCTIONAL', 'test_qa_stability': 'SYSTEM', 'test_golden': 'REGRESSION',
-            'test_security': 'SECURITY', 'test_v18': 'FUNCTIONAL'}
+            'test_security': 'SECURITY', 'test_v18': 'FUNCTIONAL', 'test_v181': 'UNIT'}
 
 
 def category_of(fn, name):
@@ -327,7 +327,7 @@ def run_pytest(out, args, cov_src):
 
 def run_ui(out, cov_src):
     if not have_pyside():
-        R.add('U', 'FUNCTIONAL', 'SKIP', 'окно программы (U1-U20)', 'PySide2 нет')
+        R.add('U', 'FUNCTIONAL', 'SKIP', 'окно программы (U1-U22)', 'PySide2 нет')
         return None
     env = sub_env()
     env.setdefault('QT_QPA_PLATFORM', 'offscreen')
@@ -346,7 +346,7 @@ def run_ui(out, cov_src):
         fh.write(txt)
     checks = re.findall(r'^(U\d+b?) +(OK|FAIL) +(.*)$', txt, re.M)
     if not checks:
-        R.add('U', 'FUNCTIONAL', 'FAIL', 'окно программы (U1-U20)', 'окно не запустилось, см. ui.txt')
+        R.add('U', 'FUNCTIONAL', 'FAIL', 'окно программы (U1-U22)', 'окно не запустилось, см. ui.txt')
         return None
     perf = {'U3'}
     for uid, ok, det in checks:
@@ -364,7 +364,8 @@ UI_TITLES = {
     'U12': 'пресеты диапазонов', 'U13': 'время до конца скана', 'U14': 'блок Clean scan в настройках',
     'U15': 'скан очищен, сырые данные сохранены', 'U16': 'калибровка из окна, затем выровненный скан',
     'U17': 'окно Bands: системы и страна', 'U18': 'выбор диапазонов передан в скан, полоса правил на графике',
-    'U19': 'скан нескольких диапазонов из окна, промежутки пустые', 'U20': 'возврат к одному диапазону'}
+    'U19': 'скан нескольких диапазонов из окна, промежутки пустые', 'U20': 'возврат к одному диапазону',
+    'U21': 'повреждённый файл: сообщение в окне, окно работает', 'U22': 'сглаживание короткого скана не вешает окно'}
 
 
 # ======================================================================= SYSTEM
@@ -659,6 +660,9 @@ ACCEPTANCE = [
     ('AC10', 'Диапазоны: системы Shure/Sennheiser и правила страны, скан только их диапазонов, в промежутках нет '
              'выдуманных данных (окно, график, экспорт)', ['U17', 'U18', 'U19', 'U20', 'T.FU.v18', 'T.UN.v18'],
      'PW.U19 на ПК; экспорт открыть в WWB'),
+    ('AC11', 'Надёжность (аудит): ошибки видны в окне, окно не застревает в "идёт скан", донгл не '
+             'открывается в потоке окна, зависший USB не открывается повторно',
+     ['U21', 'U22', 'T.UN.v181'], 'PW.U21 на ПК; --unplug'),
 ]
 
 

@@ -171,10 +171,20 @@ class DBStore(object):
         except Exception:
             pass
         return 'scan_%05d_%s%s.npz' % (eid, stamp, rng)
+    @staticmethod
+    def _safe_name(name):
+        """V18.1 (audit 2.4): a points file name from scan_index.json must be
+        a plain file name inside the scans folder (no ../, no other drive)."""
+        if not name or not isinstance(name, str):
+            return None
+        bad_chars = any(c in name for c in ':/\\')
+        if bad_chars or os.path.basename(name) != name or name in ('.', '..') or os.path.isabs(name):
+            return None
+        return name
     def _write_points(self, eid, data, sample_data, name=None, raw_dbFS=None):
         if not os.path.isdir(self.scans_dir):
             os.makedirs(self.scans_dir)
-        name = name or self._scan_file_name(eid, data, sample_data)
+        name = self._safe_name(name) or self._scan_file_name(eid, data, sample_data)
         path = os.path.join(self.scans_dir, name)
         tmp = path + '.tmp.npz'
         if raw_dbFS is not None:
@@ -227,6 +237,11 @@ class DBStore(object):
             return None
         rec = dict(rec)
         name = rec.get('sample_data_file')
+        if name and self._safe_name(name) is None:
+            import logging
+            logging.getLogger(__name__).error(
+                'scan %s: points file name %r is not a plain file name, not read', eid, name)
+            name = None
         if name:
             from wwb_scanner.scan_objects.samplearray import SampleArray
             with np.load(os.path.join(self.scans_dir, name)) as z:

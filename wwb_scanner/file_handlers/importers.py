@@ -18,7 +18,9 @@ class BaseImporter(object):
         self.filename = kwargs.get('filename')
     @classmethod
     def import_file(cls, filename):
-        ext = os.path.splitext(filename)[1].strip('.').lower()
+        if not filename:
+            raise ValueError('Open: no file name given')
+        ext = os.path.splitext(str(filename))[1].strip('.').lower()
         def find_importer(_cls):
             if getattr(_cls, '_extension', None) == ext:
                 return _cls
@@ -27,12 +29,20 @@ class BaseImporter(object):
                 if r is not None:
                     return r
             return None
-        cls = find_importer(BaseImporter)
-        fh = cls(filename=filename)
+        found = find_importer(BaseImporter)
+        if found is None:                                            # V18.1 (audit 3.2)
+            raise ValueError('Open: format ".%s" is not supported - use .csv, .sdb2, .sdb3 or .npz' % ext)
+        fh = found(filename=filename)
         return fh()
     def __call__(self):
         self.file_data = self.load_file()
-        self.parse_file_data()
+        try:
+            self.parse_file_data()
+        except (KeyError, IndexError, TypeError, AttributeError, ZeroDivisionError,
+                OverflowError) as exc:
+            # V18.1 (audit 3.3): a damaged file gives one clear message
+            raise ValueError('%s: the file is damaged or not a supported scan file (%s: %s)'
+                             % (os.path.basename(str(self.filename)), type(exc).__name__, exc))
         return self.spectrum
     def load_file(self):
         with open(self.filename, 'r') as f:
@@ -149,6 +159,9 @@ class WWB3Importer(BaseImporter):
         j = b.rfind(b'@Extended:')
         body = b[i + len(b'@Binary:'):j if j > 0 else len(b)]
         width = int(header.get('BitWidth', 16)) // 8
+        if width not in (1, 2, 4):                                    # V18.1 (audit 3.3)
+            raise ValueError('%s: BitWidth %r is not supported'
+                             % (os.path.basename(self.filename), header.get('BitWidth')))
         dtype = {1: '>i1', 2: '>i2', 4: '>i4'}[width]
         scale = float(header.get('Scale Factor', 1)) or 1.
         nodata = header.get('NoDataValue')
@@ -164,6 +177,11 @@ class WWB3Importer(BaseImporter):
             else:
                 layout.append((item.get('DataValue'), int(item['Bytes'])))
         rec = sum(size for _, size in layout)
+        if rec <= 0:
+            raise ValueError('%s: empty sweep layout' % os.path.basename(self.filename))
+        if len(body) % rec:
+            logger.warning('%s: %d bytes at the end do not make a whole sweep, ignored',
+                           os.path.basename(self.filename), len(body) % rec)
         nsweeps = len(body) // rec
         if nsweeps < 1:
             raise ValueError('%s: no sweeps' % os.path.basename(self.filename))

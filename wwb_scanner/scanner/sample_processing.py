@@ -90,6 +90,15 @@ def clip_ratio(iq):
 class SdrTimeout(Exception):
     """The dongle did not answer in time (a USB call that never returns)."""
 
+_STUCK = []      # V18.1: helper threads still inside a USB call that never returned
+
+
+def stuck_usb_calls():
+    """V18.1 (audit 1.2): how many USB calls of earlier scans still hang."""
+    _STUCK[:] = [t for t in _STUCK if t.is_alive()]
+    return len(_STUCK)
+
+
 def run_with_timeout(func, timeout, *args):
     """Call ``func`` in a helper thread. If it does not return within
     ``timeout`` seconds raise SdrTimeout, so the scan can stop instead of
@@ -104,6 +113,7 @@ def run_with_timeout(func, timeout, *args):
     t.start()
     t.join(timeout)
     if t.is_alive():
+        _STUCK.append(t)
         raise SdrTimeout('no answer from the dongle in %s s' % timeout)
     if 'exc' in box:
         raise box['exc']
@@ -326,6 +336,7 @@ class SampleSet(JSONMixin):
         if not sdr.read_async_canceling:
             sdr.cancel_read_async()
         self.process_samples()
+    # not used (old tile layout), kept for reference
     def translate_freq(self, samples, freq, rs):
         # Adapted from https://github.com/vsergeev/luaradio/blob/master/radio/blocks/signal/frequencytranslator.lua
         if not np.iscomplexobj(samples):

@@ -304,18 +304,24 @@ class ScannerInterface(GenericQObject):
 
     @Slot()
     def on_scanner_finished(self):
-        self.scan_thread.stop()
-        logger.info('scan_thread stopped')
-        if self.calibrating:
-            self._finish_calibration()
-        elif self.scanConfig.smoothingEnabled:
-            self.smooth_scan()
-        if self.scanConfig.scalingEnabled and not self.calibrating:
-            self.scale_scan()
-        self.calibrating = False
-        self.scan_thread = None
-        self.scanner = None
-        self.running = False
+        # V18.1: whatever fails after the scan, the window leaves "scanning"
+        try:
+            if self.scan_thread is not None:
+                self.scan_thread.stop()
+            logger.info('scan_thread stopped')
+            if self.calibrating:
+                self._finish_calibration()
+            elif self.scanConfig.smoothingEnabled:
+                self.smooth_scan()
+            if self.scanConfig.scalingEnabled and not self.calibrating:
+                self.scale_scan()
+        except Exception as exc:
+            logging.getLogger('wwb_scanner.ui').error('After the scan: %s', exc, exc_info=True)
+        finally:
+            self.calibrating = False
+            self.scan_thread = None
+            self.scanner = None
+            self.running = False
 
     def _finish_calibration(self):
         from wwb_scanner.scanner import cleanup
@@ -348,7 +354,10 @@ class ScannerInterface(GenericQObject):
     def smooth_scan(self):
         logger.info('Smoothing scan')
         N = int(self.spectrum.sample_data.size * self.scanConfig.smoothingFactor / 100.)
-        self.spectrum.smooth(N)
+        if not self.spectrum.smooth(N):
+            # V18.1 (audit 1.4)
+            logging.getLogger('wwb_scanner.status').warning(
+                'Smoothing skipped: %d points is too short for a %d-point window', self.spectrum.sample_data.size, N)
         # TODO: figure out why interpolate stopped working
         # self.spectrum.interpolate()
 
@@ -356,7 +365,9 @@ class ScannerInterface(GenericQObject):
     def scale_scan(self):
         logger.info('Scaling scan')
         conf = self.scanConfig
-        self.spectrum.scale(conf.scalingMinDB, conf.scalingMaxDB)
+        if not self.spectrum.scale(conf.scalingMinDB, conf.scalingMaxDB):
+            # V18.1 (audit 1.3)
+            logging.getLogger('wwb_scanner.status').warning('Scaling skipped: the scan is empty or flat')
 
     @Slot()
     def on_scanner_ready(self):

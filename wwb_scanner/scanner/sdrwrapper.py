@@ -59,6 +59,10 @@ class SdrWrapper(object):
                 else:
                     self.sdr = self._open_sdr_local()
                 if self.sdr is not None:
+                    # V18.1 (audit 1.1): gain table read here, in the scan thread
+                    learn = getattr(self.scanner, 'learn_gains', None)
+                    if learn is not None and self.enable_scanner_updates:
+                        learn(self.sdr)
                     self.set_sdr_values()
                     self.device_open.set()
         return self.sdr

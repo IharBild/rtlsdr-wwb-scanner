@@ -64,15 +64,19 @@ class DeviceInfo(GenericQObject):
         if self.device_serial is None:
             self.device_serial = RtlSdr.get_device_serial_addresses()[device_index]
         sdr = RtlSdr(device_index)
-        self._get_info_from_device(sdr)
-        sdr.close()
+        try:                       # V18.1 (audit 1.6): always closed
+            self._get_info_from_device(sdr)
+        finally:
+            sdr.close()
     def get_info_from_device_serial(self, device_serial):
         self.device_serial = device_serial
         if self.device_index is None:
             self.device_index = RtlSdr.get_device_index_by_serial(device_serial)
         sdr = RtlSdr(device_serial=device_serial)
-        self._get_info_from_device(sdr)
-        sdr.close()
+        try:
+            self._get_info_from_device(sdr)
+        finally:
+            sdr.close()
     def __repr__(self):
         return f'<{self.__class__}: {self}>'
     def __str__(self):
@@ -103,12 +107,34 @@ class DeviceInfoList(GenericQObject):
 
 
     def _on_update_devices(self):
-        device_serials = RtlSdr.get_device_serial_addresses()
-        logger.debug(f'found sdr serial numbers: {device_serials}')
+        """V18.1 (audit 1.6): a dongle pulled out during the update, or busy in
+        another program, is skipped with a message; dongles no longer
+        plugged in leave the list."""
+        print('update_devices')
+        try:
+            device_serials = list(RtlSdr.get_device_serial_addresses())
+        except Exception as exc:
+            logger.warning('Could not list the RTL-SDR dongles: %s', exc)
+            return
+        print(device_serials)
+        gone = [i for i, d in self._devices.items()
+                if i >= len(device_serials) or d.device_serial != device_serials[i]]
+        for i in gone:
+            self._devices.pop(i, None)
+            self._devices_by_index.pop(i, None)
+        if gone:
+            self._n_devices.emit()
         for i, device_serial in enumerate(device_serials):
             if i in self._devices:
                 continue
-            device = self.add_device(i, device_serial)
+            try:
+                device = self.add_device(i, device_serial)
+            except Exception as exc:
+                self._devices_by_index.pop(i, None)
+                logger.warning('Dongle %d (%s) can not be opened - pulled out, or busy in another '
+                               'program: %s', i, device_serial, exc)
+                continue
+            logger.debug('added %s', device)
 
     def add_device(self, device_index, device_serial):
         assert device_index not in self._devices

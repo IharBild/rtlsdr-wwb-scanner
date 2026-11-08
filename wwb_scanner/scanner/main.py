@@ -79,7 +79,8 @@ class ScannerBase(JSONMixin):
         self._current_freq = value
         if value is not None:
             f_min, f_max = self.config.scan_range
-            self.progress = (value - f_min) / (f_max - f_min)
+            # V18.1 (audit 2.2): a range of one point
+            self.progress = (value - f_min) / (f_max - f_min) if f_max > f_min else 0.
         self.on_current_freq(value)
     def on_current_freq(self, value):
         pass
@@ -305,7 +306,10 @@ class Scanner(ScannerBase):
     def __init__(self, **kwargs):
         super(Scanner, self).__init__(**kwargs)
         self.sdr_wrapper = SdrWrapper(scanner=self)
-        self.gain = self.gain
+        # V18.1 (audit 1.1): the gain used to be rounded to the dongle's
+        # gain table here, which opened the dongle in the window thread
+        # (no timeout: a stuck USB froze the window). Now the table is
+        # read when the scan opens the dongle (SdrWrapper.open_sdr).
     @property
     def sdr(self):
         return self.sdr_wrapper.sdr
@@ -400,9 +404,21 @@ class Scanner(ScannerBase):
         return self.device_config.get('gain')
     @gain.setter
     def gain(self, value):
-        if value is not None and hasattr(self, 'sdr_wrapper'):
+        # V18.1: round only with a gain table already read from the dongle;
+        # never open the dongle from here
+        if value is not None and getattr(self, '_gains', None):
             value = self.get_nearest_gain(value)
         self.device_config.gain = value
+    def learn_gains(self, sdr):
+        """V18.1: read the gain table of an open dongle and round the gain."""
+        try:
+            gains = [g / 10. for g in sdr.get_gains()]
+        except Exception:
+            return
+        if gains:
+            self._gains = gains
+            if self.gain is not None:
+                self.gain = self.gain
     @property
     def gains(self):
         gains = getattr(self, '_gains', None)
@@ -428,9 +444,18 @@ class Scanner(ScannerBase):
         npgains = np.array(gains)
         return gains[np.abs(npgains - gain).argmin()]
     def run_scan(self):
+        # V18.1 (audit 1.2): a USB call of an earlier scan never returned.
+        # Opening the dongle again would only hang another thread.
+        from wwb_scanner.scanner.sample_processing import stuck_usb_calls
+        if stuck_usb_calls():
+            self._refused = True
+            return super(Scanner, self).run_scan()
         with self.sdr_wrapper:
             super(Scanner, self).run_scan()
     def _run_scan(self, running):
+        if getattr(self, '_refused', False):
+            raise IOError('The dongle stopped answering in the last scan. Unplug it, plug it back '
+                          'in and start again; if this message comes back, restart the program')
         if self.sdr is None:
             raise IOError('RTL-SDR dongle not found or busy (unplug/replug it, '
                           'close other SDR programs)')
@@ -499,12 +524,16 @@ class ThreadedScanner(threading.Thread, Scanner):
         self.stopped.wait()
 
 def scan_and_plot(**kwargs):
+    # not used by the window (old command line helper)
     scanner = Scanner(**kwargs)
     scanner.run_scan()
     scanner.spectrum.show_plot()
     return scanner
 
 def scan_and_save(filename=None, frequency_format=None, **kwargs):
+    # not used by the window (command line helper)
+    if not filename:
+        raise ValueError('scan_and_save: give a file name (.csv, .sdb2, .sdb3 or .npz)')
     scanner = Scanner(**kwargs)
     scanner.run_scan()
     scanner.spectrum.export_to_file(filename=filename, frequency_format=frequency_format)

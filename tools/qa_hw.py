@@ -181,6 +181,12 @@ def check_environment(args):
     miss18 = [k for k, v in m18.items() if not v]
     result('E3h', 'WARN' if miss18 else 'PASS', 'установлен V18 (диапазоны систем и стран)',
            ('нет: ' + ', '.join(miss18) + ' - поставьте fix-V18-pip-files.zip') if miss18 else 'все отметки найдены')
+    m181 = {'ошибки в окне': 'def install_error_hooks' in read(os.path.join(pq, 'main.py')),
+            'донгл не в потоке окна': 'def learn_gains' in read(os.path.join(base, 'scanner', 'main.py')),
+            'зависший USB': 'def stuck_usb_calls' in read(os.path.join(base, 'scanner', 'sample_processing.py'))}
+    miss181 = [k for k, v in m181.items() if not v]
+    result('E3i', 'WARN' if miss181 else 'PASS', 'установлен V18.1 (надёжность по аудиту)',
+           ('нет: ' + ', '.join(miss181) + ' - поставьте fix-V18.1-pip-files.zip') if miss181 else 'все отметки найдены')
     m17 = {'cleanup.py': os.path.exists(os.path.join(base, 'scanner', 'cleanup.py')),
            'автоусиление': 'remeasure_lower_gain' in read(os.path.join(base, 'scanner', 'sample_processing.py')),
            'калибровка в окне': 'calibrateButton' in read(os.path.join(pq, 'qml', 'ScanControlsDialog.qml')),

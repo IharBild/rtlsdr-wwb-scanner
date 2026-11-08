@@ -365,7 +365,13 @@ class SpectrumGraphData(QtQuick.QQuickItem):
     @Slot(QtCore.QUrl)
     def load_from_file(self, uri):
         filename = uri.toLocalFile()
-        spectrum = BaseImporter.import_file(filename)
+        try:
+            spectrum = BaseImporter.import_file(filename)
+        except Exception as exc:
+            # V18.1: shown in the window (status line + dialog), not only the console
+            logger.error('Could not open %s: %s', os.path.basename(filename), exc,
+                         exc_info=not isinstance(exc, (ValueError, OSError)))
+            return
         spectrum.set_data_updated()
         self.spectrum = spectrum
         self.update_spectrum_data()
@@ -376,7 +382,12 @@ class SpectrumGraphData(QtQuick.QQuickItem):
         # CSV is written in the Shure WWB layout (kHz, 25 kHz step, "\\n").
         # Change to None to get the old MHz format back.
         print('export to %s' % filename, flush=True)
-        self.spectrum.export_to_file(filename=filename, frequency_format=CSV_FREQUENCY_FORMAT)
+        try:
+            self.spectrum.export_to_file(filename=filename, frequency_format=CSV_FREQUENCY_FORMAT)
+        except Exception as exc:
+            logger.error('Could not save %s: %s', os.path.basename(filename), exc,
+                         exc_info=not isinstance(exc, (ValueError, OSError)))
+            return
         print('export done: %s' % filename, flush=True)
 
     @Slot(QtCore.QUrl, str)

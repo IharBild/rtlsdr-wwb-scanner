@@ -4,12 +4,12 @@ import logging.handlers
 
 USER_HOME = Path.home()
 LOG_DIR = USER_HOME / '.config' / 'rtlsdr-wwb-scanner' / 'logs'
-if not LOG_DIR.exists():
-    LOG_DIR.mkdir(parents=True)
 LOG_BASE_FILENAME = LOG_DIR / 'wwb_scanner.log'
 
 def setup(use_console=True, use_file=False):
     handlers = []
+    if use_file and not LOG_DIR.exists():     # V18.1 (audit 3.6): not at import time
+        LOG_DIR.mkdir(parents=True)
 
     if use_console:
         term_handler = logging.StreamHandler()

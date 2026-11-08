@@ -40,6 +40,30 @@ def register_qml_types():
 
 QML_PATH = get_resource_filename('qml')
 
+
+def install_error_hooks():
+    """V18.1: an error nobody caught (in a button handler, a file dialog,
+    a background thread) used to show only in the console, or nowhere.
+    Now it goes to the status line, the error dialog and the log file."""
+    import logging
+    import threading
+    log = logging.getLogger('wwb_scanner.ui')
+    old = sys.excepthook
+
+    def hook(etype, value, tb):
+        if issubclass(etype, KeyboardInterrupt):
+            return old(etype, value, tb)
+        try:
+            log.error('Unexpected error: %s: %s (details in the log file)', etype.__name__, value,
+                      exc_info=(etype, value, tb))
+        except Exception:
+            old(etype, value, tb)
+    sys.excepthook = hook
+    if getattr(threading, 'excepthook', None) is not None:      # Python 3.8+
+        def thook(args):
+            hook(args.exc_type, args.exc_value, args.exc_traceback)
+        setattr(threading, 'excepthook', thook)
+
 def on_app_quit():
     logger.info('exiting application')
 
@@ -58,8 +82,11 @@ def qt_message_handler(mode, context, message):
     lvl = getattr(logging, levelname)
     # show_trace = lvl not in [logging.INFO, logging.DEBUG]
     fn = QtCore.QUrl(context.file)
-    p = Path(fn.toLocalFile()).relative_to(QML_PATH)
-    name = '.'.join(p.parts)
+    try:                         # V18.1 (audit 3.5): empty or qrc: path
+        p = Path(fn.toLocalFile()).relative_to(QML_PATH)
+        name = '.'.join(p.parts)
+    except ValueError:
+        name = 'qml'
     _logger = logging.getLogger(name)
     _logger.log(lvl, message)
 
@@ -68,6 +95,7 @@ def run(argv=None):
         argv = sys.argv
     logger.info('starting application')
     app = QApplication(argv)
+    install_error_hooks()
     apply_style()
     app.setOrganizationName('rtlsdr-wwb-scanner')
     app.setApplicationName('wwb_scanner')

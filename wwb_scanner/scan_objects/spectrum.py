@@ -172,11 +172,16 @@ class Spectrum(JSONMixin):
         plot.build_plot()
         return plot
     def smooth(self, N):
+        """Returns False when the scan is too short for this window (V18.1,
+        audit 1.4: it used to fail and leave the window in "scanning")."""
+        N = int(N)
+        if N % 2 != 0:
+            N += 1
         with self.data_update_lock:
-            if N % 2 != 0:
-                N += 1
-            self.sample_data.smooth(N)
-        self.set_data_updated()
+            done = self.sample_data.smooth(N)
+        if done:
+            self.set_data_updated()
+        return done
     def interpolate(self, spacing=0.025):
         with self.data_update_lock:
             self.sample_data.interpolate(spacing)
@@ -209,6 +214,11 @@ class Spectrum(JSONMixin):
                 self._build_sample(**kwargs)
         self.set_data_updated()
     def scale(self, min_dB, max_dB):
+        """Returns False when there is nothing to scale (V18.1, audit 1.3:
+        an empty or flat scan used to fail or give NaN)."""
+        y = self.sample_data['dbFS']
+        if y.size == 0 or not np.isfinite(y).all() or float(y.max() - y.min()) <= 0:
+            return False
         with self.data_update_lock:
             y = self.sample_data['dbFS']
             ymin = y.min()
@@ -222,6 +232,7 @@ class Spectrum(JSONMixin):
             self.sample_data['magnitude'] = dbmath.from_dB(y)
             self.sample_data['dbFS'] = y
         self.set_data_updated()
+        return True
     def add_sample(self, **kwargs):
         f = kwargs.get('frequency')
         iq = kwargs.get('iq')

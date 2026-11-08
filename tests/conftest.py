@@ -6,6 +6,20 @@ import pytest
 import numpy as np
 from scipy import signal
 
+@pytest.fixture(autouse=True)
+def _forget_hung_usb_calls():
+    """V18.1: a test that makes a USB call hang on purpose would make every
+    later scan in this process refuse to start (as it must on a real
+    dongle). Each test starts with a "fresh dongle"."""
+    yield
+    try:
+        from wwb_scanner.scanner import sample_processing
+        stuck = getattr(sample_processing, '_STUCK', None)
+        if stuck is not None:
+            del stuck[:]
+    except ImportError:
+        pass
+
 @pytest.fixture
 def tmp_db_store(tmpdir, monkeypatch):
     db_root = tmpdir.mkdir('db_root')

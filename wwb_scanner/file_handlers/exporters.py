@@ -125,7 +125,9 @@ class BaseExporter(object):
     @classmethod
     def export_to_file(cls, **kwargs):
         filename = kwargs.get('filename')
-        ext = os.path.splitext(filename)[1].strip('.').lower()
+        if not filename:
+            raise ValueError('Export: no file name given')          # V18.1 (audit 1.5)
+        ext = os.path.splitext(str(filename))[1].strip('.').lower()
         def find_exporter(_cls):
             if getattr(_cls, '_extension', None) == ext:
                 return _cls
@@ -134,8 +136,10 @@ class BaseExporter(object):
                 if r is not None:
                     return r
             return None
-        cls = find_exporter(cls)
-        fh = cls(**kwargs)
+        found = find_exporter(cls)
+        if found is None:                                            # V18.1 (audit 3.2)
+            raise ValueError('Export: format ".%s" is not supported - use .csv, .sdb2, .sdb3 or .npz' % ext)
+        fh = found(**kwargs)
         fh()
         return fh
     @property

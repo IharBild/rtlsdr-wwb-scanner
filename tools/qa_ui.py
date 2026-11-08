@@ -277,6 +277,7 @@ def main():
     v16_checks(app, win, controls, si, seen_left)
     v17_checks(app, win, controls, si)
     v18_checks(app, win, controls, si)
+    v181_checks(app, win, controls, si)
     win.close()
     pump(app, 0.3)
     return 0 if all(RESULTS) else 1
@@ -492,6 +493,53 @@ def v18_checks(app, win, controls, si):
         QtCore.QMetaObject.invokeMethod(acts[0], 'trigger')
         pump(app, 0.3)
     check('U20', bool(acts) and cfg.scanRanges == '', 'Bands > Scan one range again: scanRanges %r' % cfg.scanRanges)
+
+
+def v181_checks(app, win, controls, si):
+    """V18.1 (audit): a damaged file and a too short scan for smoothing give a
+    message in the window and leave it working."""
+    hubs = [o for o in win.findChildren(QtCore.QObject) if o.metaObject().indexOfProperty('logFile') >= 0]
+    if not hubs:
+        check('U21', False, 'no status hub')
+        return
+    msgs = []
+    hubs[0].message.connect(lambda level, text: msgs.append((level, text)))
+    import tempfile
+    bad = os.path.join(tempfile.mkdtemp(prefix='qa_ui_'), 'damaged.sdb3')
+    with open(bad, 'wb') as fh:
+        fh.write(b'//@ShureScan{"BitWidth": 24, "BinarySchema": []}@Binary:' + os.urandom(200))
+    gds = [g for g in find(win, lambda o: isinstance(o, ui_graph.SpectrumGraphData))
+           if hasattr(g, 'load_from_file')]
+    err = None
+    try:
+        gds[0].load_from_file(QtCore.QUrl.fromLocalFile(bad))
+    except Exception as exc:
+        err = exc
+    pump(app, 0.5)
+    got = [t for lvl, t in msgs if lvl == 'error' and 'Could not open' in t]
+    check('U21', err is None and bool(got) and bool(gds),
+          'damaged .sdb3 opened from the window: exception %r; messages %s' % (err, got[:1] or msgs[-2:]))
+    if os.environ.get('QA_UI_REAL'):
+        check('U22', True, 'INFO: skipped with the real dongle (would need a short scan with smoothing)')
+        return
+    cfg = si.scanConfig
+    old = (cfg.smoothingEnabled, cfg.smoothingFactor, cfg.startFreq, cfg.endFreq, cfg.scanRanges)
+    cfg.scanRanges = ''
+    cfg.smoothingEnabled = True
+    cfg.smoothingFactor = 1.0
+    cfg.startFreq, cfg.endFreq = 863.0, 865.0
+    del msgs[:]
+    t0 = time.time()
+    controls[0].scannerState.emit(True)
+    pump(app, 0.5)
+    while si.running and time.time() - t0 < 120:
+        pump(app, 0.1)
+    pump(app, 1.0)
+    skipped = [t for lvl, t in msgs if 'Smoothing skipped' in t]
+    check('U22', not si.running and bool(skipped),
+          'scan 863-865 MHz with smoothing 1 %%: window running=%s after %.0f s; messages %s'
+          % (si.running, time.time() - t0, skipped[:1] or msgs[-3:]))
+    cfg.smoothingEnabled, cfg.smoothingFactor, cfg.startFreq, cfg.endFreq, cfg.scanRanges = old
 
 
 def _save_coverage():

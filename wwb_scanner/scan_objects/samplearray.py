@@ -178,6 +178,11 @@ class SampleArray(JSONMixin):
         self._counts = counts[ix]
     def smooth(self, window_size):
         x = self.magnitude
+        # V18.1 (audit 1.4): a window under 4 points is all zeros (NaN), a
+        # window longer than the data gives a wrong size
+        window_size = int(window_size)
+        if window_size < 4 or window_size > x.size:
+            return False
         w = np.hanning(window_size)
 
         s = np.r_[x[window_size-1:0:-1], x, x[-2:-window_size-1:-1]]
@@ -190,7 +195,9 @@ class SampleArray(JSONMixin):
 
         self.data['magnitude'] = m
         self.data['dbFS'] = dbmath.to_dB(m)
+        return True
     def interpolate(self, spacing=0.025):
+        # not used by the window (the call is switched off in ui/pyside/scanner.py)
         fmin = np.ceil(self.frequency.min())
         fmax = np.floor(self.frequency.max())
 
@@ -198,7 +205,8 @@ class SampleArray(JSONMixin):
         y = self.magnitude
         cs = CubicSpline(x, y)
         xs = np.arange(fmin, fmax+spacing, spacing)
-        n_dec = len(str(spacing).split('.')[1])
+        from decimal import Decimal
+        n_dec = max(0, -Decimal(str(spacing)).normalize().as_tuple().exponent)   # V18.1 (audit 2.5)
         xs = np.around(xs, n_dec)
 
         ys = cs(xs)
