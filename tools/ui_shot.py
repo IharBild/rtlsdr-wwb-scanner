@@ -50,6 +50,7 @@ def main():
             if sg.spectrum is not None:
                 sg.spectrum.loss_bands = m.get('loss_bands', [])
                 sg.spectrum.image_marks = m.get('image_marks', [])
+                sg.spectrum.unmeasurable_bands = m.get('unmeasurable_bands', [])
                 sg._update_marks()
         qa_ui.pump(app, 1.0)
     zoom = os.environ.get('SHOT_ZOOM')       # e.g. "470,800"

@@ -185,6 +185,7 @@ class SpectrumGraphData(QtQuick.QQuickItem):
         self.xy_data = np.zeros(0, dtype=GRAPH_DTYPE)
         self._loss_bands = []
         self._image_marks = []
+        self._unmeasurable = []
         self._min_value = QtCore.QPointF(0., 0.)
         self._max_value = QtCore.QPointF(0., 0.)
         self._model = None
@@ -312,12 +313,15 @@ class SpectrumGraphData(QtQuick.QQuickItem):
     lossBands = Property('QVariantList', _g_loss_bands, notify=_n_marks)
     def _g_image_marks(self): return self._image_marks
     imageMarks = Property('QVariantList', _g_image_marks, notify=_n_marks)
+    def _g_unmeasurable(self): return self._unmeasurable
+    unmeasurableBands = Property('QVariantList', _g_unmeasurable, notify=_n_marks)
     def _update_marks(self):
         sp = self.spectrum
         lb = list(getattr(sp, 'loss_bands', None) or []) if sp is not None else []
+        um = list(getattr(sp, 'unmeasurable_bands', None) or []) if sp is not None else []
         im = list(getattr(sp, 'image_marks', None) or []) if sp is not None else []
-        if lb != self._loss_bands or im != self._image_marks:
-            self._loss_bands, self._image_marks = lb, im
+        if lb != self._loss_bands or im != self._image_marks or um != self._unmeasurable:
+            self._loss_bands, self._image_marks, self._unmeasurable = lb, im, um
             self._n_marks.emit()
 
     def _set_from_graph_dtype(self, d_arr):

@@ -287,6 +287,7 @@ def main():
     v18_checks(app, win, controls, si)
     v181_checks(app, win, controls, si)
     v203_checks(app, win)
+    v204_checks(app, win, controls, si)
     win.close()
     pump(app, 0.3)
     return 0 if all(RESULTS) else 1
@@ -597,6 +598,55 @@ def v203_checks(app, win):
           and [str(v).lower() for v in stored] == ['true', 'true'])
     check('U23', ok, 'marks on %d spectra; shown %s, bands off %s, images off %s, both on %s; saved %s'
           % (marked, shown, seq[0], seq[1], back, stored))
+
+
+def v204_checks(app, win, controls, si):
+    """U24: File > Export while a scan is running asks first (the file would
+    hold only the part measured so far); after the scan it does not."""
+    if os.environ.get('QA_UI_REAL'):
+        check('U24', True, 'INFO: skipped with the real dongle (needs a running scan)')
+        return
+    dlg = win.findChild(QtCore.QObject, 'exportUnfinishedDialog')
+    act = [o for o in win.findChildren(QtCore.QObject)
+           if str(o.property('text') or '') == '&Export' and 'Action' in o.metaObject().className()]
+    if dlg is None or not act:
+        check('U24', False, 'dialog %r, export action %d' % (dlg, len(act)))
+        return
+    cfg = si.scanConfig
+    old = (cfg.startFreq, cfg.endFreq, cfg.scanRanges)
+    cfg.scanRanges = ''
+    cfg.startFreq, cfg.endFreq = 470.0, 560.0
+    t0 = time.time()
+    controls[0].scannerState.emit(True)
+    pump(app, 0.3)
+    while not si.running and time.time() - t0 < 10:
+        pump(app, 0.1)
+    pump(app, 0.5)
+    was_running = bool(si.running)
+    QtCore.QMetaObject.invokeMethod(act[0], 'trigger')
+    pump(app, 0.3)
+    during = bool(dlg.property('opened')) or bool(dlg.property('visible'))
+    QtCore.QMetaObject.invokeMethod(dlg, 'reject')
+    pump(app, 0.3)
+    while si.running and time.time() - t0 < 120:
+        pump(app, 0.1)
+    pump(app, 1.0)
+    fd = [o for o in win.findChildren(QtCore.QObject)
+          if o.metaObject().indexOfProperty('graphData') >= 0 and o.metaObject().indexOfProperty('folder') >= 0]
+    after_ok = None
+    if fd:
+        QtCore.QMetaObject.invokeMethod(act[0], 'trigger')
+        pump(app, 0.5)
+        after_ok = not (bool(dlg.property('opened')) or bool(dlg.property('visible')))
+        try:
+            QtCore.QMetaObject.invokeMethod(fd[0], 'close')
+        except Exception:
+            pass
+        pump(app, 0.3)
+    cfg.startFreq, cfg.endFreq, cfg.scanRanges = old
+    check('U24', was_running and during and after_ok is not False,
+          'scan running %s; Export during the scan asks first %s; after the scan asks %s'
+          % (was_running, during, None if after_ok is None else not after_ok))
 
 
 def _save_coverage():

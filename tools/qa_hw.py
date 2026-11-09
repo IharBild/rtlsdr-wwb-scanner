@@ -892,6 +892,9 @@ def h9_auto_gain(lab, h2):
     return scans
 
 
+H10_MIN_SNR_DB = 15      # V20.4
+
+
 @guard('H10', 'точность шагов усиления (V17)')
 def h10_gain_steps(lab, s):
     """Auto gain scales a re-measured tile by the nominal gain difference.
@@ -933,19 +936,32 @@ def h10_gain_steps(lab, s):
             fr, p = fr[o], p[o]
             k = int(np.argmin(np.abs(fr + off)))
             lvl = 10 * np.log10(p[k - 2:k + 3].mean()) + (g0 - g)
+            # V20.4: signal over the floor of this reading - a signal sunk
+            # in the noise at a low gain says nothing about the gain step
+            snr = 10 * np.log10(p[k - 2:k + 3].mean() / np.median(p))
             if ref is None:
                 ref = lvl
-            rows.append((g, lvl - ref, clip_ratio(x)))
+            rows.append((g, lvl - ref, clip_ratio(x), snr))
     finally:
         try:
             sdr.close()
         except Exception:
             pass
-    bad = [r for r in rows[1:] if abs(r[1]) > 1.5 and r[2] < 1e-3]
+    bad = [r for r in rows[1:] if abs(r[1]) > 1.5 and r[2] < 1e-3 and r[3] >= H10_MIN_SNR_DB]
+    weak = [r for r in rows[1:] if r[3] < H10_MIN_SNR_DB]
+
+    def mark(c, snr):
+        if c >= 1e-3:
+            return ' перегр.'
+        if snr < H10_MIN_SNR_DB:
+            return ' (сигнал +%.0f дБ над шумом - не считается)' % snr
+        return ''
     result('H10', 'WARN' if bad else 'PASS', 'точность шагов усиления (сигнал %.3f МГц, +%.0f дБ)' % (fpk, e[i]),
-           'отклонение уровня после пересчёта, дБ: %s (норма +-1,5)%s'
-           % (', '.join('%.1f дБ: %+.1f%s' % (g, d, ' перегр.' if c >= 1e-3 else '') for g, d, c in rows),
-              '; автоусиление даёт ошибку уровня на этих шагах' if bad else ''))
+           'отклонение уровня после пересчёта, дБ: %s (норма +-1,5; шаги, где сигнал меньше %d дБ над шумом, '
+           'не оцениваются)%s%s'
+           % (', '.join('%.1f дБ: %+.1f%s' % (g, d, mark(c, q)) for g, d, c, q in rows), H10_MIN_SNR_DB,
+              '; автоусиление даёт ошибку уровня на этих шагах' if bad else '',
+              '; для слабых шагов нужен сигнал сильнее' if weak and not bad else ''))
 
 
 @guard('H11', 'чистый скан с антенной (V17)')

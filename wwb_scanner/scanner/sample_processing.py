@@ -203,11 +203,62 @@ ALIAS_DBC = (-52., -36.)       # user's V4: -44 dBc at every gain
 XTAL_DBC = (-80., -60.)        # user's V4: -70 dBc
 PLATEAU_MARGIN_DB = 6.
 # a normal reading at most this far above the usual floor is a real measurement
+# V20.4: a wide signal (DVB-T, DAB) is where the measured points, median
+# over WIDE_SIGNAL_MHZ, stand WIDE_SIGNAL_DB above the floor; its dips are not
+# lost sensitivity. Tiles clipped even at the lowest gain are "not measurable".
+WIDE_SIGNAL_MHZ = 1.0
+WIDE_SIGNAL_DB = 10.
 KNOWN_AT_FLOOR_DB = 3.
 
 
 def to_db(p):
     return 10. * np.log10(np.maximum(np.asarray(p, dtype=np.float64), 1e-30))
+
+
+def wide_signal_mask(f_mhz, y_db, w, ref_db, width_mhz=None, over_db=None):
+    """V20.4: True where a point lies inside a wide signal (DVB-T, DAB).
+    Only measured points (weight >= 0.5) decide: a measured point is
+    occupied when most measured points within +-width/2 stand ``over_db``
+    above the floor ``ref_db``. A run of occupied points, which may jump
+    over points that were not measured (dips known only as "not above the
+    low-gain floor") but not over a measured quiet point, is a wide signal
+    when it spans ``width_mhz`` and its occupied points cover half of it.
+    Narrow carriers with a plateau between them never are."""
+    width_mhz = WIDE_SIGNAL_MHZ if width_mhz is None else width_mhz
+    over_db = WIDE_SIGNAL_DB if over_db is None else over_db
+    f = np.asarray(f_mhz, dtype=np.float64)
+    out = np.zeros(f.shape, bool)
+    if f.size < 3 or ref_db is None:
+        return out
+    step = float(np.median(np.diff(f)))
+    if not step > 0:
+        return out
+    meas = np.asarray(w, dtype=np.float64) >= 0.5
+    sig = meas & (np.asarray(y_db, dtype=np.float64) > ref_db + over_db)
+    h = max(1, int(round(width_mhz / step / 2.)))
+    cm = np.concatenate([[0], np.cumsum(meas)])
+    cs = np.concatenate([[0], np.cumsum(sig)])
+    idx = np.arange(f.size)
+    a, b = np.clip(idx - h, 0, f.size), np.clip(idx + h + 1, 0, f.size)
+    nm, ns = cm[b] - cm[a], cs[b] - cs[a]
+    occ = sig & (ns * 2 >= nm)
+    i = 0
+    n = f.size
+    while i < n:
+        if not occ[i]:
+            i += 1
+            continue
+        j, last, count = i, i, 0
+        while j < n and (occ[j] or not meas[j]):
+            if occ[j]:
+                last = j
+                count += 1
+            j += 1
+        span = f[last] - f[i] + step
+        if span >= width_mhz and count * step >= 0.5 * span:
+            out[i:last + 1] = True
+        i = j
+    return out
 
 
 def merge_low_gain(p_normal, p_low, over_db=None, floor=None, low_floor_db=None):
@@ -267,6 +318,14 @@ def low_limited_bins(p_normal, p_low, signal_mask, floor=None):
 MAX_TILE_ERRORS = 5
 TUNE_TIMEOUT = 30.
 READ_TIMEOUT = 40.
+# V20.4: one tile normally takes 0.1 s (up to ~1 s with auto gain). A USB that
+# answers every call just under READ_TIMEOUT kept one tile 458 s on the PC.
+TILE_BUDGET_S = 15.
+# V20.4: after a USB error the dongle is opened again (once per scan), with
+# up to REOPEN_WAIT_S for it to come back; a new scan also waits that long.
+REOPEN_WAIT_S = 10.
+REOPEN_PAUSE_S = 1.
+MAX_REOPENS = 1
 
 class SampleSet(JSONMixin):
     clip_ratio = 0.
@@ -288,6 +347,7 @@ class SampleSet(JSONMixin):
     zone_reread = False         # V20.1: clipped tile read again with the gain of its zone
     product_bins = None         # V20.1: bins found to be a product of this tile
     powers_orig = None          # V20.1: powers before the deafness was added back
+    tile_t0 = None              # V20.4: when reading this tile started (TILE_BUDGET_S)
     __slots__ = ('scanner', 'center_frequency', 'raw', 'current_sweep', 'complete',
                  '_frequencies', 'powers', 'collection', 'process_thread', 'samples_discarded')
     _serialize_attrs = ('center_frequency', '_frequencies', 'powers')
@@ -326,12 +386,29 @@ class SampleSet(JSONMixin):
     def device_closed(self, sdr):
         """pyrtlsdr closes the device after any library error. Another call
         on a closed device uses a freed handle (can crash the program), so
-        the scan has to stop instead of retrying."""
+        this tile stops. V20.4: the dongle is opened again (a new handle) and
+        the scan goes on; the tile is read again at the end. Only when that
+        fails does the scan stop."""
         if getattr(sdr, 'device_opened', True):
             return False
+        coll = self.collection
+        reopen = getattr(coll, 'reopen_dongle', None)
+        if reopen is not None and reopen():
+            logger.error('the dongle was closed after an error at %.3f MHz; opened again, '
+                         'the scan goes on', self.center_frequency / 1e6)
+            return True
         logger.error('the dongle was closed after an error, stopping the scan')
         self.abort_scan()
         return True
+
+    def check_budget(self):
+        """V20.4: raise SdrTimeout when this tile has taken TILE_BUDGET_S."""
+        t0 = self.tile_t0
+        if t0 is None:
+            return
+        el = time.monotonic() - t0
+        if el > TILE_BUDGET_S:
+            raise SdrTimeout('the dongle needed %.0f s for one tile (normally 0.1 s): USB problem' % el)
 
     def abort_scan(self):
         coll = self.collection
@@ -341,6 +418,10 @@ class SampleSet(JSONMixin):
     def tune(self, sdr, freq):
         """Set the centre frequency. A tuner that cannot lock must not
         kill the whole scan: retry once, then give up on this tile."""
+        if not getattr(sdr, 'device_opened', True):
+            # V20.4: closed by an error in the last tile: never call it again
+            self.device_closed(sdr)
+            return False
         for attempt in range(2):
             try:
                 run_with_timeout(sdr.set_center_freq, TUNE_TIMEOUT, freq)
@@ -363,6 +444,7 @@ class SampleSet(JSONMixin):
 
     def read_samples(self):
         self._tick('start')
+        self.tile_t0 = time.monotonic()
         scanner = self.scanner
         freq = self.center_frequency
         sweeps_per_scan = scanner.sweeps_per_scan
@@ -392,6 +474,7 @@ class SampleSet(JSONMixin):
             try:
                 run_with_timeout(sdr.read_samples, READ_TIMEOUT, NUM_SAMPLES_DISCARDED)    # old data from before retuning
                 iq = run_with_timeout(sdr.read_samples, READ_TIMEOUT, num_samples)
+                self.check_budget()
                 break
             except SdrTimeout as exc:
                 logger.error('read at %s Hz: %s', self.center_frequency, exc)
@@ -451,6 +534,7 @@ class SampleSet(JSONMixin):
                     g_set = g
                 run_with_timeout(sdr.read_samples, READ_TIMEOUT, NUM_SAMPLES_DISCARDED)
                 x = run_with_timeout(sdr.read_samples, READ_TIMEOUT, num_samples)
+                self.check_budget()
                 cr = clip_ratio(x)
                 tried.append((x, g_set, cr))
                 best = (x, g_set, cr)
@@ -467,7 +551,8 @@ class SampleSet(JSONMixin):
             logger.exception('auto gain at %s Hz failed, clipped tile kept', self.center_frequency)
         finally:
             try:
-                run_with_timeout(setattr, TUNE_TIMEOUT, sdr, 'gain', g0)
+                if getattr(sdr, 'device_opened', True):     # V20.4: never on a closed handle
+                    run_with_timeout(setattr, TUNE_TIMEOUT, sdr, 'gain', g0)
             except Exception:
                 logger.exception('could not set the gain back to %s dB', g0)
         if best is None:
@@ -491,12 +576,14 @@ class SampleSet(JSONMixin):
         normal = self.powers_normal if was_low else self.powers
         if normal is None:
             return False
+        self.tile_t0 = time.monotonic()
         if not self.tune(sdr, self.center_frequency):
             return False
         sweeps, per_sweep = self.sweeps_per_scan, self.samples_per_sweep
         n = int(-(-(sweeps * per_sweep) // 512) * 512)
         run_with_timeout(sdr.read_samples, READ_TIMEOUT, NUM_SAMPLES_DISCARDED)
         x = run_with_timeout(sdr.read_samples, READ_TIMEOUT, n)
+        self.check_budget()
         if x is None:
             return False
         cr = clip_ratio(x)
@@ -759,6 +846,7 @@ class SampleCollection(JSONMixin):
         return sample_set
     def scan_all_freqs(self):
         self.scanning.set()
+        self.reopened = 0        # V20.4: dongle opened again after a USB error
         complete_events = set()
         self.aborted = False
         self.tile_errors = 0
@@ -801,6 +889,33 @@ class SampleCollection(JSONMixin):
         self.report_overload()
         self.timing.write_report()
         self.stopped.set()
+    def reopen_dongle(self):
+        """V20.4: after a USB error pyrtlsdr has closed the dongle. Open it
+        again (it often comes back after a few seconds), at most MAX_REOPENS
+        times per scan and never while a USB call is still stuck.
+        Returns True when the scan can go on with the new handle."""
+        if getattr(self, 'reopened', 0) >= MAX_REOPENS or stuck_usb_calls():
+            return False
+        wrapper = getattr(self.scanner, 'sdr_wrapper', None)
+        if wrapper is None or not hasattr(wrapper, 'open_sdr'):
+            return False
+        self.reopened = getattr(self, 'reopened', 0) + 1
+        try:
+            wrapper.close_sdr()
+        except Exception:
+            logger.exception('closing the dongle after the error failed')
+        deadline = time.monotonic() + REOPEN_WAIT_S
+        while time.monotonic() < deadline and self.scanning.is_set():
+            time.sleep(REOPEN_PAUSE_S)
+            try:
+                sdr = wrapper.open_sdr()
+            except Exception:
+                sdr = None
+            if sdr is not None:
+                print('dongle opened again after a USB error', flush=True)
+                return True
+        return False
+
     def retry_failed_tiles(self, keys):
         """One more try for tiles that gave no data (PLL not locked, USB
         error). Without it the WWB file gets a straight line there and a
@@ -928,6 +1043,13 @@ class SampleCollection(JSONMixin):
                         break
                     if self.sample_sets[k].read_low_gain(sdr, g_set, g0):
                         done.append(k)
+                    if not getattr(sdr, 'device_opened', True):
+                        # V20.4: USB error - the old handle must not be used again
+                        logger.error('dongle error while reading tiles next to a strong carrier: '
+                                     'the rest are kept as measured')
+                        break
+                if not getattr(sdr, 'device_opened', True):
+                    break
         except SdrTimeout as exc:
             logger.error('reading tiles next to a strong carrier: %s', exc)
             self.aborted = True
@@ -935,7 +1057,8 @@ class SampleCollection(JSONMixin):
             logger.exception('reading tiles next to a strong carrier failed, they are kept as measured')
         finally:
             try:
-                run_with_timeout(setattr, TUNE_TIMEOUT, sdr, 'gain', g0)
+                if getattr(sdr, 'device_opened', True):     # V20.4: never on a closed handle
+                    run_with_timeout(setattr, TUNE_TIMEOUT, sdr, 'gain', g0)
             except Exception:
                 logger.exception('could not set the gain back to %s dB', g0)
         self.neighbours = sorted(k for k in done if self.sample_sets[k].neighbour)
@@ -1254,9 +1377,12 @@ class SampleCollection(JSONMixin):
             if f.size and w.shape == f.shape:
                 zfl = [(z, zf) for z, zf in (getattr(self, 'zone_floors', None) or []) if zf is not None]
                 reach = NEIGHBOUR_HZ + fs
+                wide = wide_signal_mask(f, y, w, ref)
                 for i in np.flatnonzero(w < 0.5):
                     if y[i] - ref < 3.:
                         continue
+                    if wide[i]:
+                        continue    # V20.4: a dip inside a TV multiplex / DAB block
                     # V20.2: above the plateau of its zone it is a signal
                     # (dips of a DVB-T multiplex), not lost sensitivity
                     hit = [zf for z, zf in zfl if self.zone_of(f[i] * 1e6, [z], reach=reach) is not None]
@@ -1306,6 +1432,7 @@ class SampleCollection(JSONMixin):
         self.sensitivity = []
         self.overload_note = ''
         self.overload_warn = False
+        self.unmeasurable = []
         try:
             self._report_overload()
         finally:
@@ -1344,6 +1471,7 @@ class SampleCollection(JSONMixin):
                 '%d tile(s) next to strong carriers not checked' % self.neighbours_skipped
         self.overload_note = note
         self.overload_warn = bool(still) or worst >= LOSS_WARN_DB
+        self.unmeasurable = self.unmeasurable_bands(still)
         # V20.2: for the graph (shaded bands, image marks)
         spectrum = getattr(self.scanner, 'spectrum', None)
         if spectrum is not None:
@@ -1352,11 +1480,50 @@ class SampleCollection(JSONMixin):
                                         'signal': float(c) if c is not None else 0.}
                                        for lo, hi, loss, c in self.sensitivity]
                 spectrum.image_marks = [{'f': float(p), 'of': float(c)} for p, _, c in images]
+                spectrum.unmeasurable_bands = [{'lo': float(lo), 'hi': float(hi), 'clip': float(r)}
+                                               for lo, hi, r in self.unmeasurable]
             except Exception:
                 logger.exception('graph marks failed')
         if note:
             (logger.warning if self.overload_warn else logger.info)(
                 'Sensitivity: %s (weak signals below that floor are not seen there)', note)
+
+    def unmeasurable_bands(self, keys=None):
+        """V20.4: [(lo_mhz, hi_mhz, clip_ratio), ...] - kept bands of the tiles
+        that clipped even at the lowest gain (``keys``), joined where they
+        touch. The dongle cannot measure there; the scan data is left as it
+        is (WWB then keeps away from those frequencies)."""
+        if keys is None:
+            keys = [k for k, s in self.sample_sets.items()
+                    if s.powers_low is not None and not s.neighbour
+                    and getattr(s, 'clip_ratio', 0.) >= OVERLOAD_RATIO]
+        if not keys:
+            return []
+        half = DEFAULT_TILE_KEEP_RATIO * self._sample_rate()
+        try:
+            lo_r, hi_r = [float(v) * 1e6 for v in self.scanner.config.scan_range]
+        except Exception:
+            lo_r, hi_r = -1e18, 1e18
+        groups = []
+        for k in sorted(keys):
+            r = float(getattr(self.sample_sets[k], 'clip_ratio', 0.) or 0.)
+            lo, hi = max(k - half, lo_r), min(k + half, hi_r)
+            if hi <= lo:
+                continue
+            if groups and lo <= groups[-1][1]:
+                groups[-1][1] = max(groups[-1][1], hi)
+                groups[-1][2] = max(groups[-1][2], r)
+            else:
+                groups.append([lo, hi, r])
+        return [(lo / 1e6, hi / 1e6, r) for lo, hi, r in groups]
+
+    @staticmethod
+    def _mhz_list(spans, n=6):
+        """V20.4: 'a-b, c-d, ... and N more' (all zones were cut to 6 before)."""
+        text = ', '.join('%.1f-%.1f' % (s[0], s[1]) for s in spans[:n])
+        if len(spans) > n:
+            text += ' and %d more' % (len(spans) - n)
+        return text
 
     def _report_overload(self):
         def first(s):
@@ -1395,20 +1562,21 @@ class SampleCollection(JSONMixin):
         if fixed:
             drops = [self.sample_sets[k].gain_drop for k in fixed]
             self.remeasured = sorted(fixed)
-            where = ', '.join('%.1f-%.1f' % (lo, hi) for lo, hi, _ in self.overload[:6])
+            where = self._mhz_list(self.overload)
             if not still:
                 logger.info('Overload at %s MHz: %d tile(s) measured again with %.0f-%.0f dB less gain%s '
                             '(levels right)', where, len(fixed), min(drops), max(drops), nb_text)
                 return
         if lowered:
-            where = ', '.join('%.1f-%.1f' % (lo, hi) for lo, hi, _ in self.overload[:6])
-            logger.warning('Overload at %s MHz: %d tile(s) still clipped even with %.0f dB less gain: '
-                           'move the antenna away from the transmitters', where, len(still),
-                           max(lowered))
+            where = self._mhz_list(self.overload)
+            bad_at = self._mhz_list(self.unmeasurable_bands(still))
+            logger.warning('Overload at %s MHz: %d tile(s) still clipped even with %.0f dB less gain '
+                           '(at %s MHz): move the antenna away from the transmitters', where,
+                           len(still), max(lowered), bad_at)
             return
         logger.warning('Overload (signal too strong for the dongle) at %s MHz, up to %.1f %% of samples '
                        'clipped: lower the gain or move the antenna away from transmitters',
-                       ', '.join('%.1f-%.1f' % (lo, hi) for lo, hi, _ in self.overload[:6]),
+                       self._mhz_list(self.overload),
                        100. * max(r for _, _, r in self.overload))
 
     def report_pll(self):

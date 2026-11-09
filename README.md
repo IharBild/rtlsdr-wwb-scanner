@@ -39,6 +39,13 @@ Current release: **[v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releas
   are removed even when it does not clip (dips between TV channels are not counted as
   lost sensitivity). Both kinds of marks can be turned off in the View menu ("Lost
   sensitivity bands", "Removed image marks"); the choice is kept between runs.
+  Where the dongle clips even at its lowest gain the graph marks the band "not
+  measurable" (red; the data stays in the file, so WWB keeps away from it). Dips
+  inside a TV multiplex or DAB block are not counted as lost sensitivity.
+- **USB errors**: after a USB error the dongle is opened again and the scan goes on
+  (once per scan); a new scan waits up to 10 s for a dongle that is "not found or
+  busy"; a tile that takes over 15 s (normally 0.1 s) stops the scan with a message.
+  File > Export asks first while the scan in the graph is still running.
 - **Bands.** Band presets of Shure systems (PSM 200/300/900/1000, QLX-D, ULX-D, SLX-D,
   Axient Digital, UHF-R, BLX, SLX, PGX, GLX-D) and Sennheiser systems (ew 100 G3/G4,
   ew 300 G4). Scans only the bands of the chosen systems in one run. Each band is marked

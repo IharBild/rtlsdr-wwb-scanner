@@ -458,7 +458,25 @@ class Scanner(ScannerBase):
             self._refused = True
             return super(Scanner, self).run_scan()
         with self.sdr_wrapper:
+            if self.sdr is None:
+                self._wait_for_dongle()
             super(Scanner, self).run_scan()
+    def _wait_for_dongle(self):
+        """V20.4: just after a USB error the dongle is "not found or busy"
+        for a few seconds. Try again for up to REOPEN_WAIT_S before failing."""
+        from wwb_scanner.scanner import sample_processing as sp
+        if self.device_config.is_remote:
+            return
+        print('dongle not found or busy, waiting up to %.0f s...' % sp.REOPEN_WAIT_S, flush=True)
+        deadline = time.monotonic() + sp.REOPEN_WAIT_S
+        while self.sdr is None and time.monotonic() < deadline:
+            time.sleep(sp.REOPEN_PAUSE_S)
+            try:
+                self.sdr_wrapper.open_sdr()
+            except Exception:
+                logger.exception('opening the dongle failed')
+        if self.sdr is not None:
+            print('dongle found', flush=True)
     def _run_scan(self, running):
         if getattr(self, '_refused', False):
             raise IOError('The dongle stopped answering in the last scan. Unplug it, plug it back '

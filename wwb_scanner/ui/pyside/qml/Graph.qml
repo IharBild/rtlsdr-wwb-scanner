@@ -319,6 +319,9 @@ Item {
                 clip: true
                 property var bands: root.showLossBands && root.activeSpectrum && root.activeSpectrum.lossBands ? root.activeSpectrum.lossBands : []
                 property var images: root.showImageMarks && root.activeSpectrum && root.activeSpectrum.imageMarks ? root.activeSpectrum.imageMarks : []
+                property var unmeasurable: root.showLossBands && root.activeSpectrum && root.activeSpectrum.unmeasurableBands ? root.activeSpectrum.unmeasurableBands : []
+                // V20.4: labels below the TV channel numbers
+                property real labelTop: channelLabels.visible ? channelLabels.height + 4 : 4
                 Repeater {
                     objectName: 'lossBandRepeater'
                     model: lossMarks.bands
@@ -345,11 +348,48 @@ Item {
                         }
                         Text {
                             anchors.top: parent.top
-                            anchors.topMargin: 4
+                            anchors.topMargin: lossMarks.labelTop
                             anchors.horizontalCenter: parent.horizontalCenter
                             visible: parent.width > implicitWidth + 4
                             text: '-' + modelData.db.toFixed(0) + ' dB sens.'
                             color: '#e0a030'
+                            font.pointSize: 7
+                        }
+                    }
+                }
+                // V20.4: the dongle clipped here even at the lowest gain
+                Repeater {
+                    objectName: 'unmeasurableRepeater'
+                    model: lossMarks.unmeasurable
+                    Item {
+                        property real span: axisX.max - axisX.min
+                        property real x0: span > 0 ? (modelData.lo - axisX.min) / span * lossMarks.width : 0
+                        property real x1: span > 0 ? (modelData.hi - axisX.min) / span * lossMarks.width : 0
+                        visible: x1 > 0 && x0 < lossMarks.width
+                        x: x0
+                        width: Math.max(2, x1 - x0)
+                        height: lossMarks.height
+                        Rectangle {
+                            anchors.fill: parent
+                            color: '#d84040'
+                            opacity: 0.12
+                        }
+                        Rectangle {
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.top: parent.top
+                            anchors.topMargin: 2
+                            height: 2
+                            color: '#d84040'
+                            opacity: 0.9
+                        }
+                        Text {
+                            anchors.top: parent.top
+                            anchors.topMargin: lossMarks.labelTop + 12
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            visible: parent.width > implicitWidth + 4
+                            text: 'not measurable'
+                            color: '#e06060'
                             font.pointSize: 7
                         }
                     }

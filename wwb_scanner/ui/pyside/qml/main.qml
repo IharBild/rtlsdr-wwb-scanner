@@ -64,6 +64,11 @@ ApplicationWindow {
             Action {
                 text: qsTr("&Export")
                 onTriggered: {
+                    // V20.4: the graph of a running scan holds only its first part
+                    if (window.exportOfRunningScan()) {
+                        exportUnfinishedDialog.open();
+                        return;
+                    }
                     exportDialog.graphData = chartWrapper.activeSpectrum;
                     exportDialog.open();
                 }
@@ -288,6 +293,33 @@ ApplicationWindow {
                 if (!errorDialog.opened)
                     errorDialog.open();
             }
+        }
+    }
+
+    // V20.4: true when the selected graph is the scan that is still running
+    function exportOfRunningScan() {
+        var s = chartWrapper.activeSpectrum;
+        return !!(s && s.scanner && s.scanner.running);
+    }
+
+    Dialog {
+        id: exportUnfinishedDialog
+        objectName: 'exportUnfinishedDialog'
+        title: 'Scan not finished'
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(560, window.width - 40)
+        standardButtons: Dialog.Yes | Dialog.Cancel
+        Label {
+            width: parent.width
+            wrapMode: Text.Wrap
+            text: 'The scan is still running: the file would hold only the part measured so far. ' +
+                  'Wait until the scan ends, or export this part anyway?'
+        }
+        onAccepted: {
+            console.log('export: unfinished scan exported on request');
+            exportDialog.graphData = chartWrapper.activeSpectrum;
+            exportDialog.open();
         }
     }
 
