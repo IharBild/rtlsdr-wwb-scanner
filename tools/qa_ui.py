@@ -35,8 +35,11 @@ class UIFakeRtlSdr(sim.FakeRtlSdr):
     """pyrtlsdr RtlSdr as the window uses it (device list, tuner type)."""
     gain_values = sim.R828D_GAINS
     air = None
+    extra_kw = {}               # V20.5 (U25): e.g. gain_affects
     def __init__(self, device_index=0, serial_number=None, device_serial=None, **kw):
         kw.setdefault('air', UIFakeRtlSdr.air or _ui_air())
+        for k, v in UIFakeRtlSdr.extra_kw.items():
+            kw.setdefault(k, v)
         # QA_USB_DELAY=1: like the real V4 on Windows (V7 report: tune 0.053 s, data 0.042 s)
         if os.environ.get('QA_USB_DELAY') == '1':
             kw.setdefault('tune_delay', 0.053)
@@ -288,6 +291,7 @@ def main():
     v181_checks(app, win, controls, si)
     v203_checks(app, win)
     v204_checks(app, win, controls, si)
+    v205_checks(app, win, si)
     win.close()
     pump(app, 0.3)
     return 0 if all(RESULTS) else 1
@@ -647,6 +651,50 @@ def v204_checks(app, win, controls, si):
     check('U24', was_running and during and after_ok is not False,
           'scan running %s; Export during the scan asks first %s; after the scan asks %s'
           % (was_running, during, None if after_ok is None else not after_ok))
+
+
+def v205_checks(app, win, si):
+    """U25: Scan settings > Calibrate gain steps: survey + steps, table saved,
+    status and the calibration label say so (simulator: 470-640 MHz)."""
+    if REAL:
+        check('U25', True, 'INFO: skipped with the real dongle (writes the table of your dongle)')
+        return
+    from wwb_scanner.scanner import gain_cal
+    btn = win.findChild(QtCore.QObject, 'calibrateGainsButton')
+    lbl = win.findChild(QtCore.QObject, 'calibrationLabel')
+    hubs = [o for o in win.findChildren(QtCore.QObject) if o.metaObject().indexOfProperty('logFile') >= 0]
+    old = (gain_cal.GAIN_CAL_RANGE_MHZ, UIFakeRtlSdr.air, UIFakeRtlSdr.extra_kw)
+    gain_cal.GAIN_CAL_RANGE_MHZ = (470.0, 640.0)
+    UIFakeRtlSdr.extra_kw = {'gain_affects': True}
+    UIFakeRtlSdr.air = (sim.Air(noise=0.002).band(474e6, 482e6, 0.3).band(530e6, 538e6, 0.06)
+                        .band(602e6, 610e6, 0.2).band(626e6, 634e6, 0.05))
+    try:
+        t0 = time.time()
+        si.calibrateGains()
+        pump(app, 0.5)
+        while si.running and time.time() - t0 < 300:
+            pump(app, 0.1)
+        pump(app, 0.5)
+        dt = time.time() - t0
+        path = gain_cal.table_path(si.sampleRate * 1e3)
+        saved = os.path.exists(path)
+        text = str(hubs[0].property('text')) if hubs else ''
+        lbl_text = ''
+        if lbl is not None:
+            try:
+                lbl_text = str(si.calibrationStatus())
+            except Exception:
+                lbl_text = str(lbl.property('text'))
+        check('U25', btn is not None and saved and 'Gain steps calibrated' in text
+              and 'Gain steps calibrated' in lbl_text and not si.running,
+              'gain %.1f dB; button %s; %.0f s; table saved %s; status %r; label %r'
+              % (si.gain, btn is not None, dt, saved, text[:90], lbl_text[-90:]))
+    finally:
+        gain_cal.GAIN_CAL_RANGE_MHZ, UIFakeRtlSdr.air, UIFakeRtlSdr.extra_kw = old
+        try:
+            os.remove(gain_cal.table_path(si.sampleRate * 1e3))     # later checks: nominal steps
+        except OSError:
+            pass
 
 
 def _save_coverage():

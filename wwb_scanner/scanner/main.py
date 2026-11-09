@@ -485,6 +485,13 @@ class Scanner(ScannerBase):
             raise IOError('RTL-SDR dongle not found or busy (unplug/replug it, '
                           'close other SDR programs)')
         super(Scanner, self)._run_scan(running)
+        if self.config.get('gain_calibration') and running.is_set():
+            # V20.5: the survey is done, the dongle is still open
+            from wwb_scanner.scanner import gain_cal
+            ok, text = gain_cal.calibrate(self, running)
+            self.gain_cal_result = (ok, text)
+            (logging.getLogger('wwb_scanner.status').info if ok else
+             logging.getLogger('wwb_scanner.status').warning)(text)
     def _tile_kwargs(self, sample_set):
         weight = 1.0
         bw = getattr(sample_set, 'bin_weight', None)

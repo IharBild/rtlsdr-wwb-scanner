@@ -330,7 +330,8 @@ MAX_REOPENS = 1
 class SampleSet(JSONMixin):
     clip_ratio = 0.
     clip_ratio_first = None     # V17: before the re-measurement with lower gain
-    gain_drop = 0.              # V17: dB the gain was lowered for this tile
+    gain_drop = 0.              # V17: dB the gain was lowered for this tile (V20.5: real)
+    nominal_drop = 0.           # V20.5: the same, nominal (for messages)
     raw_normal = None           # V20: samples of the normal-gain reading (until processed)
     powers_normal = None        # V20: PSD with the normal gain (kept bins)
     powers_low = None           # V20: PSD with the low gain, scaled back
@@ -560,9 +561,22 @@ class SampleSet(JSONMixin):
         x, g_set, cr = best
         self.clip_ratio_first = first
         self.clip_ratio = cr
-        self.gain_drop = g0 - g_set
+        self.nominal_drop = g0 - g_set
+        self.gain_drop = self.real_drop(g0, g_set)
         self.low_gain = g_set
         return np.asarray(x) * (10. ** (self.gain_drop / 20.))
+
+    def real_drop(self, g_hi, g_lo):
+        """V20.5: real gain difference at this tile (gain step table of
+        Scan settings > Calibrate gain steps), nominal without a table."""
+        try:
+            from wwb_scanner.scanner import gain_cal
+            d = gain_cal.real_drop(g_hi, g_lo, self.center_frequency,
+                                   sample_rate=self.scanner.sample_rate)
+            return d if d > 0 else float(g_hi) - float(g_lo)
+        except Exception:
+            logger.exception('gain step table')
+            return float(g_hi) - float(g_lo)
 
     def read_low_gain(self, sdr, g_low, g0):
         """V20: this tile is near a strong carrier: read it again with the
@@ -587,7 +601,8 @@ class SampleSet(JSONMixin):
         if x is None:
             return False
         cr = clip_ratio(x)
-        drop = float(g0) - float(g_low)
+        drop = self.real_drop(g0, g_low)        # V20.5 (nominal without a table)
+        self.nominal_drop = float(g0) - float(g_low)
         x = np.asarray(x[:sweeps * per_sweep], dtype=np.complex128) * (10. ** (drop / 20.))
         offs, Pfull, keep = self.tile_psd(x)
         P = Pfull[keep]
@@ -1535,7 +1550,7 @@ class SampleCollection(JSONMixin):
             return
         fixed = [k for k, s in self.sample_sets.items() if getattr(s, 'gain_drop', 0.) > 0
                  and not s.neighbour and getattr(s, 'clip_ratio', 0.) < OVERLOAD_RATIO]
-        lowered = [s.gain_drop for s in self.sample_sets.values()
+        lowered = [s.nominal_drop or s.gain_drop for s in self.sample_sets.values()
                    if getattr(s, 'gain_drop', 0.) > 0 and not s.neighbour]
         nb = len(getattr(self, 'neighbours', None) or [])
         nb_text = ', %d neighbour tile(s) read again too' % nb if nb else ''
@@ -1560,7 +1575,7 @@ class SampleCollection(JSONMixin):
                 groups.append([k, k, r])
         self.overload = [((a - half) / 1e6, (b + half) / 1e6, r) for a, b, r in groups]
         if fixed:
-            drops = [self.sample_sets[k].gain_drop for k in fixed]
+            drops = [self.sample_sets[k].nominal_drop or self.sample_sets[k].gain_drop for k in fixed]
             self.remeasured = sorted(fixed)
             where = self._mhz_list(self.overload)
             if not still:

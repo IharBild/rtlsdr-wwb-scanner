@@ -35,7 +35,10 @@ Dialog {
     Connections {
         target: root.scanner
         // 'running' has no change signal for bindings: follow the run state
-        onScannerRunState: calibrateBtn.enabled = !root.scanner.running
+        onScannerRunState: {
+            calibrateBtn.enabled = !root.scanner.running;
+            calibrateGainsBtn.enabled = !root.scanner.running;
+        }
     }
 
     onWindowTypeChanged: {
@@ -230,7 +233,43 @@ Dialog {
                     text: 'Calibrate dongle...'
                     onClicked: calibrateConfirm.open()
                 }
+                Button {
+                    // V20.5
+                    id: calibrateGainsBtn
+                    objectName: 'calibrateGainsButton'
+                    text: 'Calibrate gain steps...'
+                    onClicked: calibrateGainsConfirm.open()
+                }
             }
+        }
+    }
+
+    Dialog {
+        id: calibrateGainsConfirm
+        objectName: 'calibrateGainsConfirm'
+        title: 'Calibrate gain steps'
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: 520
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        Label {
+            width: calibrateGainsConfirm.availableWidth
+            wrapMode: Text.Wrap
+            text: '1. Keep the antenna CONNECTED: the real gain steps are measured on ' +
+                  'signals of the air (FM, DAB, TV, mobile).\n' +
+                  '2. Your own transmitters may stay on, but not right next to the antenna.\n' +
+                  '3. OK starts a short survey 30-1766 MHz and then reads the strongest ' +
+                  'tiles at every gain (about 1 minute).\n\n' +
+                  'Auto gain then scales re-measured tiles by the real steps of this dongle ' +
+                  'instead of the nominal ones. Repeat it after changing the dongle or the ' +
+                  'sample rate.'
+        }
+        onAccepted: {
+            if (root.scanner.running)
+                return;
+            root.commitSettings();
+            root.close();
+            root.scanner.calibrateGains();
         }
     }
 

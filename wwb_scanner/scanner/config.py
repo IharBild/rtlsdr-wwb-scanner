@@ -4,6 +4,7 @@ class ScanConfig(Config):
     DEFAULTS = dict(
         scan_range=[400., 900.],
         scan_ranges=None,         # V18: several ranges [[lo, hi], ...] in one scan
+        gain_calibration=False,   # V20.5: survey + gain step calibration (gain_cal)
         save_raw_values=False,
     )
     def __init__(self, initdict=None, **kwargs):

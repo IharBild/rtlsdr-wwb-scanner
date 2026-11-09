@@ -147,6 +147,7 @@ class ScannerInterface(GenericQObject):
         self._scannerInitialized = False
         self._progress = -1
         self._calibrating = False
+        self._gain_calibrating = False      # V20.5
         super().__init__(*args)
         self.scanner = None
         self.scan_thread = None
@@ -218,6 +219,17 @@ class ScannerInterface(GenericQObject):
         if len(segs) > 1:
             conf.scan_ranges = [list(s) for s in segs]
             conf.scan_range = [segs[0][0], segs[-1][1]]
+        if self._gain_calibrating:
+            # V20.5: survey tiles for the gain step calibration
+            from wwb_scanner.scanner import gain_cal
+            conf.scan_range = list(gain_cal.GAIN_CAL_RANGE_MHZ)
+            conf.scan_ranges = gain_cal.survey_ranges()
+            conf.gain_calibration = True
+            conf.device.gain = gain_cal.SURVEY_GAIN_DB
+            conf.sampling.auto_gain = False
+            conf.processing.clean_ripple = False
+            conf.processing.clean_spurs = False
+            conf.processing.clean_floor = False
         if self.calibrating:
             # calibration: whole range, values exactly as measured
             from wwb_scanner.scanner import cleanup
@@ -239,11 +251,24 @@ class ScannerInterface(GenericQObject):
     @Slot(result=str)
     def calibrationStatus(self):
         """One line about the dongle calibration for the current gain."""
-        from wwb_scanner.scanner import cleanup
+        from wwb_scanner.scanner import cleanup, gain_cal
         try:
-            return cleanup.status_text(self.gain, (self.sampleRate or 0) * 1e3)
+            text = cleanup.status_text(self.gain, (self.sampleRate or 0) * 1e3)
         except Exception as exc:
-            return 'calibration: %s' % exc
+            text = 'calibration: %s' % exc
+        try:
+            text += '\n' + gain_cal.status_text((self.sampleRate or 0) * 1e3)    # V20.5
+        except Exception as exc:
+            text += '\ngain steps: %s' % exc
+        return text
+
+    @Slot()
+    def calibrateGains(self):
+        """V20.5: measure the real gain steps on signals of the air (antenna on)."""
+        if self.running:
+            return
+        self._gain_calibrating = True
+        self._start()
 
     @Slot()
     def calibrate(self):
@@ -276,6 +301,9 @@ class ScannerInterface(GenericQObject):
         self.spectrum = self.scanner.spectrum
         if self.calibrating:
             self.spectrum.name = 'Calibration without antenna, gain %s dB' % self.gain
+        elif self._gain_calibrating:
+            from wwb_scanner.scanner import gain_cal
+            self.spectrum.name = 'Gain step calibration (survey, gain %s dB)' % gain_cal.SURVEY_GAIN_DB
         else:
             segs = self.scan_segments()
             if segs:
@@ -311,6 +339,8 @@ class ScannerInterface(GenericQObject):
             logger.info('scan_thread stopped')
             if self.calibrating:
                 self._finish_calibration()
+            elif self._gain_calibrating:
+                self.calibrationChanged.emit()      # V20.5: status set by the scanner
             elif self.scanConfig.smoothingEnabled:
                 self.smooth_scan()
             if self.scanConfig.scalingEnabled and not self.calibrating:
@@ -319,6 +349,7 @@ class ScannerInterface(GenericQObject):
             logging.getLogger('wwb_scanner.ui').error('After the scan: %s', exc, exc_info=True)
         finally:
             self.calibrating = False
+            self._gain_calibrating = False
             self.scan_thread = None
             self.scanner = None
             self.running = False

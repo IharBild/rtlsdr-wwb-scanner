@@ -907,9 +907,19 @@ def h10_gain_steps(lab, s):
     z = _zone_mask(f, s.get('overload') or [], pad=3.0)
     floor = floor_level(y)          # kit-8.1: wide TV multiplexes fooled a running median
     e = np.where(z, -99, y - floor)
-    i = int(np.argmax(e))
-    if e[i] < 20:
-        result('H10', 'INFO', 'точность шагов усиления', 'нет сильного сигнала (> 20 дБ над полом) вне перегрузки')
+    # V20.5: a NARROW carrier - a wide one (LTE, DVB-T) fills the tile and
+    # leaves no noise to compare with (kit 9.9: 798.6 MHz, nothing evaluated)
+    i = None
+    for j in np.argsort(e)[::-1][:400]:
+        if e[j] < 20:
+            break
+        side = (np.abs(f - f[j]) > 0.35) & (np.abs(f - f[j]) < 0.8)
+        if np.count_nonzero(side) >= 4 and np.median(y[side]) <= y[j] - 20:
+            i = int(j)
+            break
+    if i is None:
+        result('H10', 'INFO', 'точность шагов усиления',
+               'нет сильной узкой несущей (> 20 дБ над полом и над соседними 0,5 МГц) вне перегрузки')
         return
     fpk = float(f[i])
     if lab.simulate:
@@ -947,7 +957,26 @@ def h10_gain_steps(lab, s):
             sdr.close()
         except Exception:
             pass
-    bad = [r for r in rows[1:] if abs(r[1]) > 1.5 and r[2] < 1e-3 and r[3] >= H10_MIN_SNR_DB]
+    # V20.5: with the gain step table (Scan settings > Calibrate gain steps)
+    # auto gain scales by the real step: the error left is d - nominal + real
+    table_note = ''
+    try:
+        from wwb_scanner.scanner import gain_cal
+        table = gain_cal.load_table(2.4e6)
+    except Exception:
+        table = None
+    if table is not None:
+        g0 = rows[0][0]
+        corr = [(g, d - (g0 - g) + gain_cal.real_drop(g0, g, fpk * 1e6, table=table), c, q)
+                for g, d, c, q in rows]
+        table_note = '; по таблице шагов (%s): %s' % (
+            table.get('date', '?'), ', '.join('%.1f дБ: %+.1f' % (g, d) for g, d, c, q in corr[1:]
+                                              if q >= H10_MIN_SNR_DB and c < 1e-3))
+        rows_eval = corr
+    else:
+        table_note = '; таблица шагов не откалибрована (Scan settings > Calibrate gain steps)'
+        rows_eval = rows
+    bad = [r for r in rows_eval[1:] if abs(r[1]) > 1.5 and r[2] < 1e-3 and r[3] >= H10_MIN_SNR_DB]
     weak = [r for r in rows[1:] if r[3] < H10_MIN_SNR_DB]
 
     def mark(c, snr):
@@ -956,12 +985,14 @@ def h10_gain_steps(lab, s):
         if snr < H10_MIN_SNR_DB:
             return ' (сигнал +%.0f дБ над шумом - не считается)' % snr
         return ''
-    result('H10', 'WARN' if bad else 'PASS', 'точность шагов усиления (сигнал %.3f МГц, +%.0f дБ)' % (fpk, e[i]),
+    evaluated = [r for r in rows_eval[1:] if r[2] < 1e-3 and r[3] >= H10_MIN_SNR_DB]
+    result('H10', 'WARN' if bad else ('PASS' if evaluated else 'INFO'),
+           'точность шагов усиления (сигнал %.3f МГц, +%.0f дБ)' % (fpk, e[i]),
            'отклонение уровня после пересчёта, дБ: %s (норма +-1,5; шаги, где сигнал меньше %d дБ над шумом, '
            'не оцениваются)%s%s'
            % (', '.join('%.1f дБ: %+.1f%s' % (g, d, mark(c, q)) for g, d, c, q in rows), H10_MIN_SNR_DB,
               '; автоусиление даёт ошибку уровня на этих шагах' if bad else '',
-              '; для слабых шагов нужен сигнал сильнее' if weak and not bad else ''))
+              '; для слабых шагов нужен сигнал сильнее' if weak and not bad else '') + table_note)
 
 
 @guard('H11', 'чистый скан с антенной (V17)')

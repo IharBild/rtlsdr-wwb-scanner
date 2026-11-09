@@ -175,7 +175,7 @@ class FakeRtlSdr(object):
 
     def __init__(self, serial_number=None, air=None, faults=(), quantize=True,
                  tune_delay=0.0, read_delay=0.0, fail_open=False, gain_affects=False,
-                 wide_adc=None):
+                 wide_adc=None, gain_error=None):
         if fail_open:
             raise IOError('No devices found')
         self.air = air if air is not None else Air()
@@ -183,6 +183,7 @@ class FakeRtlSdr(object):
         self.quantize = quantize
         self.gain_affects = gain_affects      # V17: the gain scales what is received
         self.wide_adc = wide_adc              # V20: WideAdc model (None = old model)
+        self.gain_error = gain_error          # V20.5: f(fc_hz, gain) -> dB the real gain differs
         self.gains_set = []
         self.read_gains = []                  # V20: gain of every read_samples call
         self.tune_delay = tune_delay
@@ -272,7 +273,8 @@ class FakeRtlSdr(object):
         self.read_gains.append(self._gain)
         seed = int(self._fc // 1000) + self.calls['read_samples']
         # levels of the Air are for gain 29.7 dB
-        gf = 10. ** ((self._gain - 29.7) / 20.) if self.gain_affects else 1.
+        g_real = self._gain + (self.gain_error(self._fc, self._gain) if self.gain_error else 0.)
+        gf = 10. ** ((g_real - 29.7) / 20.) if self.gain_affects else 1.
         if self.wide_adc is not None:
             x = self.wide_adc.read(self.air, self._fc, self._fs, int(num_samples), seed, gf)
             x = x + self.air.dc
@@ -288,6 +290,14 @@ class FakeRtlSdr(object):
 
     def close(self):
         self.device_opened = False
+
+
+def vhf_gain_error(fc_hz, gain):
+    """V20.5: like the user's V4 (09.11.2026): below 300 MHz the gain steps
+    above 29.7 dB give only half of their nominal gain."""
+    if fc_hz < 300e6 and gain > 29.7:
+        return -0.5 * (gain - 29.7)
+    return 0.
 
 
 class FakeLockLib(object):
@@ -308,7 +318,7 @@ class FakeLockLib(object):
 
 def make_config(start, end, fs=2.4e6, window=96, sweeps=40, per_sweep=2048,
                 overlap=0.65, window_type='hann', gain=33.8, auto_gain=False, clean=None,
-                ranges=None):
+                ranges=None, gain_calibration=False):
     conf = {
         'scan_range': [float(start), float(end)],
         'device': {'gain': gain},
@@ -323,6 +333,8 @@ def make_config(start, end, fs=2.4e6, window=96, sweeps=40, per_sweep=2048,
         conf['processing'] = dict(clean)
     if ranges:
         conf['scan_ranges'] = [list(r) for r in ranges]     # V18: several ranges
+    if gain_calibration:
+        conf['gain_calibration'] = True                     # V20.5
     return conf
 
 
