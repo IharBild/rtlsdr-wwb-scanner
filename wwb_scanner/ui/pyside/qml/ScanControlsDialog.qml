@@ -258,7 +258,7 @@ Dialog {
             text: '1. Keep the antenna CONNECTED: the real gain steps are measured on ' +
                   'signals of the air (FM, DAB, TV, mobile).\n' +
                   '2. Your own transmitters may stay on, but not right next to the antenna.\n' +
-                  '3. OK starts a short survey 30-1766 MHz and then reads the strongest ' +
+                  '3. OK starts a short survey 30-1200 MHz and then reads the strongest ' +
                   'tiles at every gain (about 1 minute).\n\n' +
                   'Auto gain then scales re-measured tiles by the real steps of this dongle ' +
                   'instead of the nominal ones. Repeat it after changing the dongle or the ' +

@@ -49,6 +49,7 @@ MARKERS = [
     ('V20.3', 'ui/pyside/qml/main.qml', 'showLossBands'),
     ('V20.4', 'scanner/sample_processing.py', 'def reopen_dongle'),
     ('V20.5', 'scanner/gain_cal.py', 'def real_drop'),
+    ('V20.5.1', 'scanner/gain_cal.py', 'def _reopen'),
 ]
 
 

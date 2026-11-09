@@ -35,12 +35,17 @@ from scipy.signal import welch
 
 logger = logging.getLogger(__name__)
 
-GAIN_CAL_RANGE_MHZ = (30., 1766.)
+# V20.5.1: up to 1200 MHz. On the user's V4 the first tuner write after
+# working near 1.76 GHz failed (i2c wr failed=-9, LIBUSB_ERROR_PIPE) - the
+# survey ended there and the first sweep could not tune (09.11.2026 19:32).
+GAIN_CAL_RANGE_MHZ = (30., 1200.)
 SURVEY_STEP_MHZ = 4.
 SURVEY_WIDTH_MHZ = 0.3
 SURVEY_GAIN_DB = 33.8    # the survey finds the signals; the window's gain may be 0 dB
 GROUPS_MHZ = ((30., 100.), (100., 170.), (170., 250.), (250., 400.), (400., 550.),
-              (550., 700.), (700., 900.), (900., 1200.), (1200., 1766.))
+              (550., 700.), (700., 900.), (900., 1200.))     # above: the 900-1200 group
+REOPEN_WAIT_S = 10.
+MAX_REOPENS = 3          # per calibration (one more is the fresh start after the survey)
 ANCHORS_PER_GROUP = 2
 STRONG_DB = 20.          # survey: a bin this much over the floor counts for the choice
 MIN_SNR_DB = 15.         # a bin must stand this much over the noise at both gains
@@ -321,16 +326,43 @@ def build_table(anchors, sweeps, gains, meta=None):
     return table
 
 
+def _reopen(scanner):
+    """Close the dongle and open it again (a fresh tuner). The new handle or None."""
+    wrapper = getattr(scanner, 'sdr_wrapper', None)
+    if wrapper is None:
+        return None
+    from wwb_scanner.scanner.sample_processing import stuck_usb_calls
+    if stuck_usb_calls():
+        return None                     # a USB call still hangs: never open again
+    try:
+        wrapper.close_sdr()
+    except Exception:
+        logger.exception('closing the dongle failed')
+    deadline = time.monotonic() + REOPEN_WAIT_S
+    while time.monotonic() < deadline:
+        time.sleep(0.5)
+        try:
+            sdr = wrapper.open_sdr()
+        except Exception:
+            sdr = None
+        if sdr is not None:
+            return sdr
+    return None
+
+
 def calibrate(scanner, running=None):
     """Run after the survey scan, with the dongle still open. Returns
-    (ok, text). Saves the table on success."""
+    (ok, text). Saves the table when at least one group was measured.
+    V20.5.1: the dongle is opened again before the sweeps (fresh tuner); a
+    tile that fails with a USB error is tried once more after opening the
+    dongle again, then skipped - the error never ends as "Scan failed"."""
+    from wwb_scanner.scanner.sample_processing import run_with_timeout, TUNE_TIMEOUT, SdrTimeout
     coll = scanner.sample_collection
-    sdr = scanner.sdr
-    if sdr is None:
+    if scanner.sdr is None:
         return False, 'Gain step calibration: no dongle'
     if getattr(coll, 'aborted', False):
         return False, 'Gain step calibration not saved: the survey did not finish'
-    anchors = pick_anchors(coll)
+    anchors = sorted(pick_anchors(coll))
     if not anchors:
         return False, ('Gain step calibration not saved: no strong signals found. Connect the antenna '
                        '(it needs FM, DAB, TV or mobile signals on the air)')
@@ -338,29 +370,64 @@ def calibrate(scanner, running=None):
         gains = sorted(float(g) for g in (scanner.gains or []))
     except Exception:
         gains = []
-    if len(gains) < 2:
-        gains = sorted(g / 10. for g in sdr.get_gains())
     fs = float(scanner.sample_rate)
     try:
-        g0 = float(sdr.gain)
+        g0 = float(scanner.gain)
     except Exception:
-        g0 = float(scanner.gain or gains[-1])
+        g0 = None
+    sdr = _reopen(scanner) or scanner.sdr
+    if sdr is None or not getattr(sdr, 'device_opened', True):
+        return False, 'Gain step calibration not saved: the dongle could not be opened again after the survey'
+    if len(gains) < 2:
+        gains = sorted(g / 10. for g in sdr.get_gains())
     print('measuring the gain steps on %d tile(s): %s MHz' % (
         len(anchors), ', '.join('%.1f' % (k / 1e6) for k in anchors)), flush=True)
-    sweeps, used = [], []
-    from wwb_scanner.scanner.sample_processing import run_with_timeout, TUNE_TIMEOUT
-    try:
-        for k in anchors:
-            if running is not None and not running.is_set():
-                return False, 'Gain step calibration stopped'
-            sweeps.append(sweep(sdr, k, gains, fs, budget_s=60.))
+    sweeps, used, skipped = [], [], []
+    stopped = False
+    reopens = 0
+    for k in anchors:
+        if running is not None and not running.is_set():
+            stopped = True
+            break
+        rows = None
+        for attempt in range(2):
+            if not getattr(sdr, 'device_opened', True):
+                # closed by the last error: never call the old handle again
+                if reopens >= MAX_REOPENS:
+                    stopped = True
+                    break
+                reopens += 1
+                sdr = _reopen(scanner)
+                if sdr is None:
+                    stopped = True
+                    break
+            try:
+                rows = sweep(sdr, k, gains, fs, budget_s=60.)
+                break
+            except SdrTimeout as exc:
+                logger.error('gain steps at %.3f MHz: %s', k / 1e6, exc)
+                stopped = True
+                break
+            except Exception as exc:
+                logger.error('gain steps at %.3f MHz failed (attempt %d): %s', k / 1e6, attempt + 1, exc)
+        if rows is not None:
+            sweeps.append(rows)
             used.append(k)
-    finally:
-        try:
-            if getattr(sdr, 'device_opened', True):
-                run_with_timeout(setattr, TUNE_TIMEOUT, sdr, 'gain', g0)
-        except Exception:
-            logger.exception('could not set the gain back to %s dB', g0)
+        else:
+            skipped.append(k)
+        if stopped:
+            break
+    try:
+        if sdr is not None and getattr(sdr, 'device_opened', True) and g0 is not None:
+            run_with_timeout(setattr, TUNE_TIMEOUT, sdr, 'gain', g0)
+    except Exception:
+        logger.exception('could not set the gain back to %s dB', g0)
+    note = ''
+    if skipped or stopped:
+        note = ' (%d of %d tile(s) not measured: dongle error%s)' % (
+            len(anchors) - len(used), len(anchors), ', stopped' if stopped else '')
+    if not used:
+        return False, 'Gain step calibration not saved: no tile could be measured' + note
     meta = {'sample_rate': fs}
     try:
         meta['serial'] = scanner.device_config.serial_number
@@ -369,7 +436,7 @@ def calibrate(scanner, running=None):
     table = build_table(used, sweeps, gains, meta)
     if not table['groups']:
         return False, ('Gain step calibration not saved: the signals were too weak to measure '
-                       'the steps (move the antenna to a window / outside)')
+                       'the steps (move the antenna to a window / outside)' + note)
     path = save_table(table, fs)
     logger.info('gain step table written to %s', path)
-    return True, status_text(fs)
+    return True, status_text(fs) + note

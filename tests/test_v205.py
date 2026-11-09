@@ -137,3 +137,64 @@ def test_remeasured_tile_has_the_right_level(monkeypatch, tmpdir, caldir, calibr
         assert abs(err) < 1.5
     else:
         assert err > 4.            # the old way: off by the nominal - real step
+
+
+# --- V20.5.1: USB error during the calibration (user's PC 09.11.2026 19:32) ---
+
+def _cal_with_faults(monkeypatch, tmpdir, faults):
+    from sim import Fault  # noqa
+    made = []
+
+    class Counting(sim.FakeRtlSdr):
+        def __init__(self, *a, **kw):
+            super(Counting, self).__init__(*a, **kw)
+            made.append(self)
+    monkeypatch.setattr(sim, 'FakeRtlSdr', Counting)
+    sk = {'air': _air(), 'gain_affects': True, 'gain_error': sim.vhf_gain_error, 'faults': faults}
+    sc, sdr, dt = sim.run_scan(monkeypatch, tmpdir, 30, 1200, gain=33.8, sdr_kwargs=sk,
+                               ranges=gain_cal.survey_ranges(), gain_calibration=True)
+    return sc, made
+
+
+def test_usb_error_on_the_first_sweep_is_survived(monkeypatch, tmpdir, caldir):
+    # like the PC: the first tune after the survey fails and closes the dongle
+    from sim import Fault
+    state = {'survey_done': False}
+    fault = Fault('set_center_freq', 'close', None)
+    fault.when = lambda n, f: fault.hits == 0 and len(state.get('opened', [])) >= 2 and f < 150e6
+    monkeypatch.setattr(gain_cal, 'REOPEN_WAIT_S', 3.)
+    orig = gain_cal._reopen
+
+    def spy(scanner):
+        state.setdefault('opened', []).append(1)
+        r = orig(scanner)
+        state['opened'].append(2)
+        return r
+    monkeypatch.setattr(gain_cal, '_reopen', spy)
+    sc, made = _cal_with_faults(monkeypatch, tmpdir, [fault])
+    ok, text = sc.gain_cal_result
+    assert fault.hits == 1, text
+    assert ok and sc.error is None, text
+    assert 'not measured' not in text                 # the tile was measured after re-opening
+    assert sum(s.closed_calls for s in made) == 0
+
+
+def test_tile_that_keeps_failing_is_skipped_and_the_rest_saved(monkeypatch, tmpdir, caldir):
+    from sim import Fault
+    monkeypatch.setattr(gain_cal, 'REOPEN_WAIT_S', 3.)
+    phase = {'cal': False}
+    orig = gain_cal._reopen
+
+    def spy(scanner):
+        phase['cal'] = True
+        return orig(scanner)
+    monkeypatch.setattr(gain_cal, '_reopen', spy)
+    fault = Fault('set_center_freq', 'close', None)
+    # every tune of one anchor (97.425 MHz) in the calibration fails
+    fault.when = lambda n, f: phase['cal'] and 97.3e6 < f < 97.5e6
+    sc, made = _cal_with_faults(monkeypatch, tmpdir, [fault])
+    ok, text = sc.gain_cal_result
+    assert sc.error is None, sc.error                  # no "Scan failed"
+    assert 'not measured' in text, text
+    assert ok and gain_cal.load_table(2.4e6) is not None
+    assert sum(s.closed_calls for s in made) == 0
