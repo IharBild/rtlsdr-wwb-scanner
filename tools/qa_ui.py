@@ -286,6 +286,7 @@ def main():
     v17_checks(app, win, controls, si)
     v18_checks(app, win, controls, si)
     v181_checks(app, win, controls, si)
+    v203_checks(app, win)
     win.close()
     pump(app, 0.3)
     return 0 if all(RESULTS) else 1
@@ -548,6 +549,54 @@ def v181_checks(app, win, controls, si):
           'scan 863-865 MHz with smoothing 1 %%: window running=%s after %.0f s; messages %s'
           % (si.running, time.time() - t0, skipped[:1] or msgs[-3:]))
     cfg.smoothingEnabled, cfg.smoothingFactor, cfg.startFreq, cfg.endFreq, cfg.scanRanges = old
+
+
+def v203_checks(app, win):
+    """U23: View > Lost sensitivity bands / Removed image marks hide and show the V20.2 marks."""
+    acts = {}
+    for o in win.findChildren(QtCore.QObject):
+        t = str(o.property('text') or '')
+        if t in ('&Lost sensitivity bands', 'Removed &image marks') \
+                and 'Action' in o.metaObject().className():
+            acts[t] = o
+    graphs = [o for o in win.findChildren(QtCore.QObject) if o.metaObject().indexOfProperty('showLossBands') >= 0
+              and o.metaObject().indexOfProperty('activeSpectrum') >= 0]
+    reps = {n: win.findChild(QtCore.QObject, n) for n in ('lossBandRepeater', 'imageMarkRepeater')}
+    if len(acts) != 2 or not graphs or None in reps.values():
+        check('U23', False, 'View actions %s, graphs %d, repeaters %s' % (sorted(acts), len(graphs), reps))
+        return
+    from wwb_scanner.ui.pyside.graph import SpectrumGraphData
+    marked = 0
+    for sg in win.findChildren(SpectrumGraphData):
+        if sg.spectrum is not None:
+            sg.spectrum.loss_bands = [{'lo': 600., 'hi': 610., 'db': 20., 'signal': 605.}]
+            sg.spectrum.image_marks = [{'f': 607.4, 'of': 605.}]
+            sg._update_marks()
+            marked += 1
+    pump(app, 0.3)
+
+    def counts():
+        return tuple(int(reps[n].property('count')) for n in ('lossBandRepeater', 'imageMarkRepeater'))
+    shown = counts()
+    seq = []
+    for t in ('&Lost sensitivity bands', 'Removed &image marks'):
+        QtCore.QMetaObject.invokeMethod(acts[t], 'trigger')
+        pump(app, 0.2)
+        seq.append((bool(acts[t].property('checked')), counts()))
+    for t in ('&Lost sensitivity bands', 'Removed &image marks'):
+        QtCore.QMetaObject.invokeMethod(acts[t], 'trigger')
+        pump(app, 0.2)
+    back = counts()
+    pump(app, 1.0)    # Qt.labs.settings writes after a short delay
+    s = QtCore.QSettings()
+    s.beginGroup('User Interface')
+    stored = (s.value('showLossBands'), s.value('showImageMarks'))
+    s.endGroup()
+    ok = (marked > 0 and shown[0] >= 1 and shown[1] >= 1 and seq[0] == (False, (0, shown[1]))
+          and seq[1] == (False, (0, 0)) and back == shown
+          and [str(v).lower() for v in stored] == ['true', 'true'])
+    check('U23', ok, 'marks on %d spectra; shown %s, bands off %s, images off %s, both on %s; saved %s'
+          % (marked, shown, seq[0], seq[1], back, stored))
 
 
 def _save_coverage():

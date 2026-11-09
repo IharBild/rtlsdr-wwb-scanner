@@ -25,6 +25,8 @@ Item {
     // V18: what the regulator allows (strip at the bottom of the plot)
     property var regRegions: []
     property bool showRegulation: true
+    property bool showLossBands: true     // V20.3: View > Lost sensitivity bands
+    property bool showImageMarks: true    // V20.3: View > Removed image marks
     property alias theme: chart.theme
     property var spectrumGraphs: []
     property var activeSpectrum
@@ -315,9 +317,10 @@ Item {
                 width: chart.plotArea.width
                 height: chart.plotArea.height
                 clip: true
-                property var bands: root.activeSpectrum && root.activeSpectrum.lossBands ? root.activeSpectrum.lossBands : []
-                property var images: root.activeSpectrum && root.activeSpectrum.imageMarks ? root.activeSpectrum.imageMarks : []
+                property var bands: root.showLossBands && root.activeSpectrum && root.activeSpectrum.lossBands ? root.activeSpectrum.lossBands : []
+                property var images: root.showImageMarks && root.activeSpectrum && root.activeSpectrum.imageMarks ? root.activeSpectrum.imageMarks : []
                 Repeater {
+                    objectName: 'lossBandRepeater'
                     model: lossMarks.bands
                     Item {
                         property real span: axisX.max - axisX.min
@@ -352,6 +355,7 @@ Item {
                     }
                 }
                 Repeater {
+                    objectName: 'imageMarkRepeater'
                     model: lossMarks.images
                     Item {
                         property real span: axisX.max - axisX.min

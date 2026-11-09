@@ -27,6 +27,9 @@ ApplicationWindow {
         id: uiSettings
         category: 'User Interface'
         property bool darkWindow: true
+        // V20.3: marks of V20.2 on the graph (View menu)
+        property bool showLossBands: true
+        property bool showImageMarks: true
     }
     property bool darkUi: uiSettings.darkWindow
     property color accent: "#3aa0ff"
@@ -102,6 +105,19 @@ ApplicationWindow {
                 checkable: true
                 checked: bandSettings.showRegulation
                 onTriggered: bandSettings.showRegulation = checked
+            }
+            MenuSeparator {}
+            Action {
+                text: qsTr("&Lost sensitivity bands")
+                checkable: true
+                checked: uiSettings.showLossBands
+                onTriggered: uiSettings.showLossBands = checked
+            }
+            Action {
+                text: qsTr("Removed &image marks")
+                checkable: true
+                checked: uiSettings.showImageMarks
+                onTriggered: uiSettings.showImageMarks = checked
             }
         }
     }
@@ -209,6 +225,8 @@ ApplicationWindow {
             tvPlan: themeSelect.tvPlan
             showSpurs: themeSelect.showSpurs
             showRegulation: bandSettings.showRegulation
+            showLossBands: uiSettings.showLossBands
+            showImageMarks: uiSettings.showImageMarks
             regRegions: bandsData.regions(bandSettings.country)
         }
     }

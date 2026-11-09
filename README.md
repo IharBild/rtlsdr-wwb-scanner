@@ -37,7 +37,8 @@ Current release: **[v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releas
   floor of the zone instead of false spikes; the graph shades the bands that lost
   sensitivity ("-NN dB sens.") and marks the removed images. Images of a strong carrier
   are removed even when it does not clip (dips between TV channels are not counted as
-  lost sensitivity).
+  lost sensitivity). Both kinds of marks can be turned off in the View menu ("Lost
+  sensitivity bands", "Removed image marks"); the choice is kept between runs.
 - **Bands.** Band presets of Shure systems (PSM 200/300/900/1000, QLX-D, ULX-D, SLX-D,
   Axient Digital, UHF-R, BLX, SLX, PGX, GLX-D) and Sennheiser systems (ew 100 G3/G4,
   ew 300 G4). Scans only the bands of the chosen systems in one run. Each band is marked

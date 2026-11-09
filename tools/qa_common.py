@@ -46,6 +46,7 @@ MARKERS = [
     ('V20', 'scanner/sample_processing.py', 'def remeasure_neighbours'),
     ('V20.1', 'scanner/sample_processing.py', 'def carrier_zones'),
     ('V20.2', 'scanner/sample_processing.py', 'def remove_images'),
+    ('V20.3', 'ui/pyside/qml/main.qml', 'showLossBands'),
 ]
 
 
