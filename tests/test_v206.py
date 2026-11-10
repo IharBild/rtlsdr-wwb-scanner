@@ -221,7 +221,8 @@ def test_profile_from_simulated_surveys(tmpdir):
     with open(os.path.join(os.path.dirname(HERE), 'tools', 'gain_survey.py')) as src, open(script, 'w') as dst:
         dst.write(src.read())
     os.symlink(HERE, str(kit.join('tests')))
-    env = dict(os.environ, PYTHONPATH=os.path.dirname(HERE))
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join(
+        [os.path.dirname(HERE)] + [p for p in [os.environ.get('PYTHONPATH')] if p]))
     for mode in ('--antenna', '--no-antenna'):
         r = subprocess.run([sys.executable, script, mode, '--simulate', '--step', '50', '--lo', '470', '--hi', '700',
                             '--passes', '1'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, timeout=600)

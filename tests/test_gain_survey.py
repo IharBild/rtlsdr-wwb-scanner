@@ -19,7 +19,8 @@ def test_survey_runs_and_saves_everything(tmpdir):
     with open(SCRIPT) as src, open(script, 'w') as dst:
         dst.write(src.read())
     os.symlink(HERE, str(tools.join('tests')))
-    env = dict(os.environ, PYTHONPATH=os.path.dirname(HERE))
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join(
+        [os.path.dirname(HERE)] + [p for p in [os.environ.get('PYTHONPATH')] if p]))
     r = subprocess.run([sys.executable, script, '--antenna', '--simulate', '--step', '150', '--hi', '650'],
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, timeout=600)
     out = r.stdout.decode('utf-8', 'replace')
