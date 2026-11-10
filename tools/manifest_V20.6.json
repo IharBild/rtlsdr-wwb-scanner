@@ -15,7 +15,7 @@
   "scanner/__init__.py": "a208cd85010a48201132860b098e007072677e411623eadd8b44baa1adf449ea",
   "scanner/cleanup.py": "a54d6ec12822bfa32fef7303fc8a9d82552a8060ff221c20214e629554d474a9",
   "scanner/config.py": "68adce3d7e18dba636acd9f3b06812d616a45108bf747a0868415b1a03bf6101",
-  "scanner/default_gain_profile.json": "1b5aa5ded93a05d86cdb38e78829ab670de8ed574f26cd2c292410f2935c03b4",
+  "scanner/default_gain_profile.json": "4122c26592b36dc2824612f1a0ac9cd49e194ad6316ea5132393bda9c811ebc2",
   "scanner/gain_cal.py": "786b77b2296cad8e23e2d8363ad2eec9f49253c97a531832ff82891854fd25b9",
   "scanner/gain_profile.py": "47b8b77692c63e7ef9e625860066d8939ce79bcc0e3a7a1e370549cc9c315c79",
   "scanner/main.py": "0d090db59747d68489115050f9a07438fbe56b8263d923a3725690ec8b000f20",
