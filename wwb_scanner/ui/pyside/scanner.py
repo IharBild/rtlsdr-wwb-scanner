@@ -262,6 +262,20 @@ class ScannerInterface(GenericQObject):
             text += '\ngain steps: %s' % exc
         return text
 
+    @Slot(bool, result='QVariantList')
+    def suggestGain(self, auto_gain):
+        """V20.6: [gain or -1, text] for the next scan from the gain profile."""
+        from wwb_scanner.scanner import gain_profile
+        try:
+            ranges = self.scan_segments() or [(self.startFreq, self.endFreq)]
+            ranges = [(float(lo), float(hi)) for lo, hi in ranges]
+            gains = list(getattr(self.deviceInfo, 'gains', None) or []) or None
+            g, text = gain_profile.suggest(ranges, bool(auto_gain), gains)
+        except Exception as exc:
+            logger.exception('suggestGain')
+            return [-1., 'Suggest gain: %s' % exc]
+        return [-1. if g is None else float(g), text]
+
     @Slot()
     def calibrateGains(self):
         """V20.5: measure the real gain steps on signals of the air (antenna on)."""

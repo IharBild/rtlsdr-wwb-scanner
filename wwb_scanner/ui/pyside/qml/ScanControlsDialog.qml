@@ -38,6 +38,7 @@ Dialog {
         onScannerRunState: {
             calibrateBtn.enabled = !root.scanner.running;
             calibrateGainsBtn.enabled = !root.scanner.running;
+            suggestGainBtn.enabled = !root.scanner.running;
         }
     }
 
@@ -240,6 +241,23 @@ Dialog {
                     text: 'Calibrate gain steps...'
                     onClicked: calibrateGainsConfirm.open()
                 }
+                Button {
+                    // V20.6
+                    id: suggestGainBtn
+                    objectName: 'suggestGainButton'
+                    text: 'Suggest gain'
+                    onClicked: root.suggestGain()
+                }
+                Label {
+                    id: suggestGainLbl
+                    objectName: 'suggestGainLabel'
+                    Layout.fillWidth: true
+                    Layout.maximumWidth: 400
+                    wrapMode: Text.Wrap
+                    font.pointSize: 9
+                    opacity: 0.85
+                    text: 'Gain step for the scan range and the overload switch above'
+                }
             }
         }
     }
@@ -301,6 +319,22 @@ Dialog {
     }
 
     standardButtons: Dialog.Ok | Dialog.Cancel
+
+    // V20.6: gain step from the gain survey profile for the scan range and
+    // the auto gain switch; main.qml puts it into Device Settings
+    signal gainSuggested(real gain)
+    function suggestGain(){
+        if (!root.scanner)
+            return;
+        var r = root.scanner.suggestGain(root.autoGain);
+        if (r[0] >= 0) {
+            root.gainSuggested(r[0]);
+            suggestGainLbl.text = 'Gain set to ' + r[1];
+            root.updateCalibrationText();       // its calibration (per gain)
+        } else {
+            suggestGainLbl.text = r[1];
+        }
+    }
 
     function commitSettings(){
         config.samplesPerSweep = root.samplesPerSweep;

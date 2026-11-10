@@ -34,6 +34,11 @@ def _lib():
                 g = librtlsdr.rtlsdr_get_build_info
                 g.restype = ctypes.c_char_p
                 g.argtypes = []
+            if hasattr(librtlsdr, 'rtlsdr_get_i2c_stats'):      # scanner-v5
+                h = librtlsdr.rtlsdr_get_i2c_stats
+                h.restype = ctypes.c_int
+                h.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32),
+                              ctypes.POINTER(ctypes.c_uint32)]
             lib = librtlsdr
     except Exception:
         lib = None
@@ -88,6 +93,21 @@ def tuner_locked(sdr):
     if res is None or res[0] < 0:
         return None
     return bool(res[0])
+
+
+def i2c_stats(sdr):
+    """scanner-v5: (retried, failed) tuner I2C transfers since the device
+    was opened, or None with an older library."""
+    lib = _lib()
+    dev = _dev(sdr)
+    if lib is None or dev is None or not getattr(sdr, 'device_opened', True) \
+            or not hasattr(lib, 'rtlsdr_get_i2c_stats'):
+        return None
+    retries = ctypes.c_uint32(0)
+    failures = ctypes.c_uint32(0)
+    if lib.rtlsdr_get_i2c_stats(dev, ctypes.byref(retries), ctypes.byref(failures)) < 0:
+        return None
+    return retries.value, failures.value
 
 
 def pll_stats(sdr):

@@ -55,12 +55,13 @@ STRONG_DB = 20.          # survey: a bin this much over the floor counts for the
 MIN_SNR_DB = 15.         # a bin must stand this much over the noise at both gains
 MIN_BINS = 5             # bins needed for one step
 CLIP_LIMIT = 1e-2        # a reading with more clipped samples is not used (1 %: level off < 0.2 dB)
-# V20.5.3: on the user's V4 the real steps differ from nominal by up to
-# ~2.7 dB; LTE anchors (load-dependent power) gave a "5.1 dB" step for 0.8
+# V20.5.3: LTE anchors (load-dependent power) gave a "5.1 dB" step for 0.8
+# nominal. V20.6: the gain survey of 10.11 found real steps up to 3.9 dB off
+# nominal (240-400 MHz 43.4 -> 43.9 dB: +3.6), so the limit is 4 dB
 # nominal. Every tile is read with the gain going up and then down; a step
 # counts only when both passes agree, and not further than STEP_MAX_DEV_DB
 # from nominal.
-STEP_MAX_DEV_DB = 3.
+STEP_MAX_DEV_DB = 4.
 PASS_AGREE_DB = 1.
 GROUP_MIN_SHARE = 0.3    # a group whose measured steps add up to under 30 % of nominal is dropped
 READ_SAMPLES = 65536

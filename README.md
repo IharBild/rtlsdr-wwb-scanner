@@ -51,6 +51,17 @@ Current release: **[v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releas
 - **Gain survey** (qa-kit `gain_survey.py --antenna` / `--no-antenna`, ~25 min each): every
   4 MHz the tile is read at all 29 gains, up and down; the data shows per band where the
   air noise rises over the dongle's own noise, where it overloads and where VHF compresses.
+- **Suggest gain** (Scan settings, V20.6): sets the gain of Device Settings for the scan
+  range and the overload switch from a gain profile - per band the sensitivity lost against
+  the best step and the share of tiles that clip. With auto gain on it takes the most
+  sensitive step (clipped tiles are re-measured); with it off, the most sensitive step where
+  at most 5 % of the tiles clip. `gain_survey.py --analyze` makes the profile of your own site
+  from the two surveys; without it a built-in one is used (one survey in Warsaw, 10.11.2026).
+- **Tuner I2C errors** (`i2c wr failed`, LIBUSB_ERROR_PIPE): the driver build scanner-v5
+  (`drivers/rtlsdr-scanner-v5`, `python install_dll.py`) repeats a failed tuner transfer up
+  to 3 times with the I2C repeater switched on again; the console prints how many were
+  retried. The gain step calibration accepts steps up to 4 dB off nominal (real V4 steps
+  measured 3.1-3.9 dB off).
 - **USB errors**: after a USB error the dongle is opened again and the scan goes on
   (once per scan); a new scan waits up to 10 s for a dongle that is "not found or
   busy"; a tile that takes over 15 s (normally 0.1 s) stops the scan with a message.

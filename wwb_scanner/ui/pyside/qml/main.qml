@@ -255,6 +255,7 @@ ApplicationWindow {
         id: scanControlsDialog
         scanner: scanner
         config: scanConfig
+        onGainSuggested: device_config.setGain(gain)     // V20.6
     }
 
     ThemeSelectPopup {

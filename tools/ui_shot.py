@@ -32,6 +32,15 @@ def main():
         d = [o for o in win.findChildren(QtCore.QObject) if o.property('title') == 'Scan settings']
         if d:
             QtCore.QMetaObject.invokeMethod(d[0], 'open')
+    if os.environ.get('SHOT_SUGGEST_GAIN'):       # V20.6: press Suggest gain in Scan settings
+        qa_ui.pump(app, 0.5)
+        b = win.findChild(QtCore.QObject, 'suggestGainButton')
+        if b is not None:
+            QtCore.QMetaObject.invokeMethod(b, 'clicked')
+            qa_ui.pump(app, 0.5)
+            si = [o for o in win.findChildren(QtCore.QObject) if o.metaObject().indexOfMethod('suggestGain(bool)') >= 0]
+            print('suggest gain: scanner gain', si[0].property('gain') if si else None,
+                  win.findChild(QtCore.QObject, 'calibrationLabel').property('text')[:40])
     if os.environ.get('SHOT_THEME_DIALOG'):
         d = [o for o in win.findChildren(QtCore.QObject) if o.property('title') == 'Theme']
         if d:

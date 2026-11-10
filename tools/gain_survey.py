@@ -13,6 +13,14 @@
     python gain_survey.py --simulate      без донгла, на имитаторе (проверка скрипта)
 Ключи: --step 4 (МГц), --lo 30 --hi 1766, --passes 2.
 
+После обоих замеров (V20.6):
+    python gain_survey.py --analyze       берёт последние gain_survey_ant_* и
+                                          gain_survey_noant_* рядом со скриптом
+    python gain_survey.py --analyze ANT.zip NOANT.zip
+строит профиль усиления (потери чувствительности и клиппинг по полосам) и
+сохраняет его в wwb_scanner_data/calibration/gain_profile.json: кнопка
+"Suggest gain" в программе берёт его вместо встроенного (Варшава, 10.11.2026).
+
 Результат: папка gain_survey_<режим>_<дата-время> и такой же .zip рядом со
 скриптом. Пришлите оба архива (с антенной и без).
 Внутри: levels.csv (на каждую плитку, ступень и проход: уровни, клиппинг),
@@ -225,6 +233,16 @@ def survey(args, outdir):
         meta['finished'] = str(datetime.datetime.now())
         meta['tiles_done'] = done
         meta['errors'] = errors
+        try:
+            from wwb_scanner import scan_dll
+            meta['dll'] = scan_dll.build_info()
+            i2c = scan_dll.i2c_stats(sdr) if sdr is not None else None
+            if i2c is not None:
+                # DLL scanner-v5: tuner I2C transfers it tried again by itself
+                meta['i2c_retried'], meta['i2c_failed'] = i2c
+                print('tuner I2C: %d transfer(s) retried, %d failed after retries' % i2c, flush=True)
+        except Exception:
+            pass
         _save(outdir, spectra, meta, gains, freqs, skipped, done, len(centers))
         dongle.close()
     print('measured %d of %d tiles in %.1f min, %d error(s)' % (done, len(centers), (time.time() - t0) / 60., errors),
@@ -309,11 +327,64 @@ def parent(args, outdir):
     return p.returncode
 
 
+def _latest(kind):
+    found = []
+    for n in os.listdir(HERE):
+        if n.startswith('gain_survey_%s_' % kind) and '_SIM' not in n:
+            full = os.path.join(HERE, n)
+            if os.path.isdir(full) or n.endswith('.zip'):
+                found.append(n[:-4] if n.endswith('.zip') else n)
+    if not found:
+        return None
+    n = sorted(found)[-1]
+    full = os.path.join(HERE, n)
+    return full if os.path.isdir(full) else full + '.zip'
+
+
+def analyze(paths, out=None):
+    """Gain profile from an antenna and a no-antenna survey -> gain_profile.json."""
+    if paths:
+        if len(paths) != 2:
+            print('--analyze takes two surveys: ANTENNA NO-ANTENNA')
+            return 2
+        ant, noant = paths
+    else:
+        ant, noant = _latest('ant'), _latest('noant')
+        if not ant or not noant:
+            print('No gain_survey_ant_* and gain_survey_noant_* next to this script')
+            return 2
+    print('antenna:    %s\nno antenna: %s' % (ant, noant))
+    try:
+        import rtlsdr  # noqa: F401
+    except Exception:           # the analysis needs no dongle and no DLL
+        import types
+        stub = types.ModuleType('rtlsdr')
+        stub.RtlSdr = object
+        sys.modules['rtlsdr'] = stub
+    from wwb_scanner.scanner import gain_profile
+    prof = gain_profile.build_profile(ant, noant)
+    if not prof['bands']:
+        print('Nothing to analyze: no band has two tiles in both surveys')
+        return 1
+    gains = prof['gains']
+    print('\n%-10s %5s  %-6s %s' % ('band, MHz', 'tiles', 'best', 'loss vs best, dB / tiles clipping, % at 22.9 29.7 36.4 43.4 49.6'))
+    for b in prof['bands']:
+        best = gains[min(range(len(gains)), key=lambda k: b['loss'][k])]
+        cols = ['%4.1f/%3d' % (b['loss'][gains.index(g)], round(100 * b['clip'][gains.index(g)]))
+                for g in (22.9, 29.7, 36.4, 43.4, 49.6) if g in gains]
+        print('%4d-%-5d %5d  %-6.1f %s' % (b['lo'], b['hi'], b['tiles'], best, '  '.join(cols)))
+    path = gain_profile.save_profile(prof, out)
+    print('\nSaved: %s\n"Suggest gain" in the scanner now uses this profile.' % path)
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description='Gain steps x frequency survey of the RTL-SDR V4')
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument('--antenna', action='store_true', help='antenna connected, own transmitters OFF')
     mode.add_argument('--no-antenna', action='store_true', help='antenna disconnected')
+    mode.add_argument('--analyze', nargs='*', metavar='SURVEY',
+                      help='gain profile from ANTENNA and NO-ANTENNA surveys (default: the latest ones here)')
     ap.add_argument('--simulate', action='store_true')
     ap.add_argument('--step', type=float, default=4.0, help='MHz between tiles (default 4)')
     ap.add_argument('--lo', type=float, default=30.0)
@@ -322,6 +393,8 @@ def main():
     ap.add_argument('--out', default=None)
     ap.add_argument('--child', action='store_true', help=argparse.SUPPRESS)
     args = ap.parse_args()
+    if args.analyze is not None:
+        return analyze(args.analyze, args.out)
     if not (args.antenna or args.no_antenna):
         ap.error('say --antenna or --no-antenna')
     if args.child:

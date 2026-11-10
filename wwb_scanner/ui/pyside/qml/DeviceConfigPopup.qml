@@ -36,6 +36,17 @@ Dialog {
         }
     }
 
+    // V20.6: "Suggest gain" in Scan settings
+    function setGain(g){
+        root.gain = g;
+        var items = gainSelect.items;
+        for (var i=0;i<items.length;i++){
+            if (Math.abs(items[i] - g) < 0.05){
+                gainSelect.value = i;
+            }
+        }
+    }
+
     function updateDeviceList(){
         var devices = device_list.devices,
             device,

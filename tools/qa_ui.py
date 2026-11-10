@@ -292,6 +292,7 @@ def main():
     v203_checks(app, win)
     v204_checks(app, win, controls, si)
     v205_checks(app, win, si)
+    v206_checks(app, win, si)
     win.close()
     pump(app, 0.3)
     return 0 if all(RESULTS) else 1
@@ -695,6 +696,35 @@ def v205_checks(app, win, si):
             os.remove(gain_cal.table_path(si.sampleRate * 1e3))     # later checks: nominal steps
         except OSError:
             pass
+
+
+def v206_checks(app, win, si):
+    """U26: Scan settings > Suggest gain sets the gain of Device Settings from
+    the gain profile, with and without auto gain, and says why."""
+    btn = win.findChild(QtCore.QObject, 'suggestGainButton')
+    lbl = win.findChild(QtCore.QObject, 'suggestGainLabel')
+    sw = win.findChild(QtCore.QObject, 'autoGainSwitch')
+    if btn is None or lbl is None or sw is None:
+        check('U26', False, 'button %s, label %s, switch %s' % (btn is not None, lbl is not None, sw is not None))
+        return
+    old_gain, old_auto = si.gain, sw.property('checked')
+    got = []
+    try:
+        for auto in (True, False):
+            sw.setProperty('checked', auto)
+            want = si.suggestGain(auto)
+            QtCore.QMetaObject.invokeMethod(btn, 'clicked')
+            pump(app, 0.3)
+            got.append((auto, want[0], si.gain, str(lbl.property('text'))))
+        ok = all(w >= 0 and abs(g - w) < 0.05 and t.startswith('Gain set to') for _, w, g, t in got)
+        check('U26', ok, '; '.join('auto %s: suggested %.1f, set %.1f, %r' % (a, w, g, t[:70])
+                                   for a, w, g, t in got))
+    finally:
+        sw.setProperty('checked', old_auto)
+        dc = [o for o in win.findChildren(QtCore.QObject) if o.metaObject().indexOfProperty('deviceSerial') >= 0]
+        if dc and old_gain is not None:
+            dc[0].setProperty('gain', old_gain)
+        pump(app, 0.2)
 
 
 def _save_coverage():

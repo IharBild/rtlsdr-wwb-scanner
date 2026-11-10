@@ -1603,6 +1603,13 @@ class SampleCollection(JSONMixin):
             stats = None
         if stats is not None:
             print('tuner PLL: locked late %d times, not locked %d times' % stats, flush=True)
+        try:
+            i2c = scan_dll.i2c_stats(sdr) if sdr is not None else None
+        except Exception:
+            i2c = None
+        if i2c is not None:
+            # V20.6 / DLL scanner-v5: tuner I2C transfers tried again (and lost)
+            print('tuner I2C: %d transfer(s) retried, %d failed after retries' % i2c, flush=True)
     def stop(self):
         if self.scanning.is_set():
             self.scanning.clear()
