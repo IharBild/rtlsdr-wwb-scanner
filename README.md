@@ -48,6 +48,9 @@ Current release: **[v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releas
   differ by frequency (on one V4: 49.6 -> 33.8 dB gave ~8 dB at 200 MHz, ~18 dB at
   900 MHz). The calibration measures them on FM / DAB / TV / mobile signals; auto gain
   then scales re-measured tiles by the real step. Without it the nominal steps are used.
+- **Gain survey** (qa-kit `gain_survey.py --antenna` / `--no-antenna`, ~25 min each): every
+  4 MHz the tile is read at all 29 gains, up and down; the data shows per band where the
+  air noise rises over the dongle's own noise, where it overloads and where VHF compresses.
 - **USB errors**: after a USB error the dongle is opened again and the scan goes on
   (once per scan); a new scan waits up to 10 s for a dongle that is "not found or
   busy"; a tile that takes over 15 s (normally 0.1 s) stops the scan with a message.
