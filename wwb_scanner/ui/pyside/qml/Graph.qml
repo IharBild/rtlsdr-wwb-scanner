@@ -49,14 +49,40 @@ Item {
 
     onSeriesClicked: {
         var spectrumGraph = root.spectrumGraphs[index];
-        setActiveSpectrum(spectrumGraph);
+        if (spectrumGraph)
+            setActiveSpectrum(spectrumGraph);
+    }
+
+    // V20.7: delete a scan from the graph (not a running one). Its slot in
+    // spectrumGraphs stays (null): the other graphs keep their index.
+    function removeSpectrum(spectrum){
+        if (!spectrum || (spectrum.scanner && spectrum.scanner.running))
+            return false;
+        var index = spectrum.index;
+        if (root.spectrumGraphs[index] !== spectrum)
+            return false;
+        root.spectrumGraphs[index] = null;
+        chartSelect.removeItem(index);
+        if (spectrum.series)
+            chart.removeSeries(spectrum.series);
+        if (root.activeSpectrum === spectrum) {
+            var next = null;
+            for (var i = root.spectrumGraphs.length - 1; i >= 0; i--) {
+                if (root.spectrumGraphs[i]) { next = root.spectrumGraphs[i]; break; }
+            }
+            root.activeSpectrum = next;
+            root.activeSeries = next ? next.series : null;
+        }
+        spectrum.destroy();
+        updateAxisExtents();
+        return true;
     }
 
     onUpdateAxisExtents: {
         var spectrum, minValue = null, maxValue = null;
         for (var i=0;i<root.spectrumGraphs.length;i++){
             spectrum = root.spectrumGraphs[i];
-            if (spectrum.minValue.x == 0 && spectrum.minValue.y == 0){
+            if (!spectrum || (spectrum.minValue.x == 0 && spectrum.minValue.y == 0)){
                 continue;
             }
             if (minValue == null){
@@ -531,7 +557,7 @@ Item {
 
         ChartSelect {
             id: chartSelect
-            Layout.minimumWidth: 200
+            Layout.minimumWidth: 240
             Layout.fillHeight: true
             Layout.leftMargin: 0
             Layout.rightMargin: 5
@@ -541,6 +567,7 @@ Item {
             onSelected: {
                 setActiveSpectrum(spectrum);
             }
+            onRemoveRequested: root.removeSpectrum(spectrum)
         }
     }
 }

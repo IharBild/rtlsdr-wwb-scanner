@@ -199,22 +199,19 @@ def suggest(ranges, auto_gain, gains=None, profile=None):
     near = [i for i in cand if L[i] <= best + TIE_DB]
     i = min(near, key=lambda k: pg[k])            # within TIE_DB: more headroom
     g = pg[i]
-    covered = [b for b, wj in zip(profile['bands'], w) if wj > 0]
-    where = ', '.join('%d-%d' % (b['lo'], b['hi']) for b in covered[:4]) + (' ...' if len(covered) > 4 else '')
-    lo_all, hi_all = min(r[0] for r in ranges), max(r[1] for r in ranges)
-    if lo_all < profile['bands'][0]['lo'] or hi_all > profile['bands'][-1]['hi']:
-        where += ' (the profile ends at %d-%d MHz, the rest is taken from the nearest band)' % (
-            profile['bands'][0]['lo'], profile['bands'][-1]['hi'])
-    text = '%.1f dB for %s MHz: sensitivity %.1f dB under the best, %d %% of tiles clip%s' % (
-        g, where, L[i], round(100. * C[i]),
-        ' (auto gain re-measures them)' if auto_gain and C[i] > 0 else '')
+    text = '%.1f dB: %.1f dB under the best sensitivity, %d %% of tiles clip%s' % (
+        g, L[i], round(100. * C[i]), ' (Overload re-measures them)' if auto_gain and C[i] > 0 else '')
     if not auto_gain and C[i] > MAX_CLIP_NO_AUTO:
-        text += ' - even the lowest step clips: turn auto gain on or move the antenna'
+        text += ' - even the lowest step clips: turn Overload on or move the antenna'
     if not auto_gain and L[i] > 3.:
         ga, _ = suggest(ranges, True, gains, profile)
         if ga is not None and ga != g:
             ia = pg.index(ga)
-            text += '; with auto gain on: %.1f dB, %.1f dB more sensitive' % (ga, L[i] - L[ia])
-    text += '. Profile: %s.' % ('your gain survey ' + profile.get('date', '?')[:10] if profile.get('_own')
-                                else 'built-in (Warsaw, 10.11.2026) - run gain_survey.py for your site')
+            text += '; with Overload on: %.1f dB, %.1f dB more sensitive' % (ga, L[i] - L[ia])
+    lo_all, hi_all = min(r[0] for r in ranges), max(r[1] for r in ranges)
+    if lo_all < profile['bands'][0]['lo'] or hi_all > profile['bands'][-1]['hi']:
+        text += '; the profile covers %d-%d MHz, beyond it the nearest band is used' % (
+            profile['bands'][0]['lo'], profile['bands'][-1]['hi'])
+    text += ' \u00b7 %s' % ('your gain survey ' + profile.get('date', '?')[:10] if profile.get('_own')
+                       else 'built-in profile, Warsaw')
     return g, text

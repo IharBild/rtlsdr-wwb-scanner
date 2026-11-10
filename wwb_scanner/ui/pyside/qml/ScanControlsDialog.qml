@@ -24,8 +24,28 @@ Dialog {
     property alias autoGain: autoGainSwitch.checked
     title: 'Scan settings'
 
+    function stateColor(st){
+        return st === 'ok' ? '#3fb950' : (st === 'warn' ? '#d29922' : root.palette.mid);
+    }
+    readonly property string floorCalHelp: 'Scan without antenna (about 3 minutes) that records the ' +
+        "floor shape and the dongle's own tones. Valid only for the gain and sample rate it was made " +
+        'at: repeat it after changing the gain, the dongle or the driver.'
+    readonly property string stepsCalHelp: 'With the antenna connected (about 2 minutes): strong ' +
+        'broadcast signals are read at every gain step, up and down. The real steps of a dongle differ ' +
+        'from the nominal ones by up to 3-4 dB; Overload re-measuring uses the real ones.'
     function updateCalibrationText(){
-        calibrationLbl.text = root.scanner ? root.scanner.calibrationStatus() : '';
+        if (!root.scanner) {
+            calibrationLbl.text = '';
+            stepsLbl.text = '';
+            return;
+        }
+        var c = root.scanner.calibrationInfo();
+        calibrationLbl.text = c.floorText;
+        floorDot.state_ = c.floorState;
+        floorTip.text = root.floorCalHelp + (c.floorTip ? '\n\nNow: ' + c.floorTip : '');
+        stepsLbl.text = c.stepsText;
+        stepsDot.state_ = c.stepsState;
+        stepsTip.text = root.stepsCalHelp + (c.stepsTip ? '\n\nNow: ' + c.stepsTip : '');
     }
 
     Connections {
@@ -191,72 +211,164 @@ Dialog {
         GroupBox {
             id: cleanBox
             objectName: 'cleanScanBox'
-            title: 'Clean scan (V17)'
+            title: 'Clean scan'
             Layout.fillWidth: true
 
-            GridLayout {
+            ColumnLayout {
                 anchors.fill: parent
-                columns: 2
-                columnSpacing: 16
-                Switch {
-                    id: cleanSpursSwitch
-                    objectName: 'cleanSpursSwitch'
-                    text: "Remove dongle's own spurs (k x 28.8 MHz)"
+                spacing: 6
+
+                GridLayout {
+                    columns: 4
+                    columnSpacing: 6
+                    rowSpacing: 0
+                    Switch {
+                        id: cleanSpursSwitch
+                        objectName: 'cleanSpursSwitch'
+                        text: "Remove dongle's own spurs"
+                    }
+                    InfoTip {
+                        Layout.rightMargin: 18
+                        text: "The dongle makes its own weak tones at multiples of 28.8 MHz (and at " +
+                              "480 MHz). A tone exactly there and only 75 kHz wide is replaced by the " +
+                              "level around it. A real transmitter on that frequency is wider and stays."
+                    }
+                    Switch {
+                        id: cleanRippleSwitch
+                        objectName: 'cleanRippleSwitch'
+                        text: 'Remove tile ripple'
+                    }
+                    InfoTip {
+                        text: 'Every 2.4 MHz tile has a slightly uneven floor (about \u00b10.2 dB) that ' +
+                              'repeats every 0.775 MHz. It is measured from the scan itself and removed. ' +
+                              'No calibration needed.'
+                    }
+                    Switch {
+                        id: cleanFloorSwitch
+                        objectName: 'cleanFloorSwitch'
+                        text: 'Level the floor'
+                    }
+                    InfoTip {
+                        Layout.rightMargin: 18
+                        text: "Without antenna the dongle's floor is not flat (a hump below 300 MHz, about " +
+                              "2 dB lower above 1 GHz). With a floor calibration made at the same gain the " +
+                              "scan is levelled, so '3 dB over the floor' means the same in every band."
+                    }
+                    Switch {
+                        id: autoGainSwitch
+                        objectName: 'autoGainSwitch'
+                        text: 'Overload: re-measure with less gain'
+                    }
+                    InfoTip {
+                        text: 'Tiles where a strong signal hits the limit of the 8-bit converter are read ' +
+                              'again at lower gain and scaled back by the real gain difference (Gain steps ' +
+                              'below). Levels near strong transmitters stay right instead of compressed; ' +
+                              'the scan takes a little longer.'
+                    }
                 }
-                Switch {
-                    id: cleanRippleSwitch
-                    objectName: 'cleanRippleSwitch'
-                    text: 'Remove tile ripple'
+
+                Rectangle { Layout.fillWidth: true; height: 1; color: root.palette.mid; opacity: 0.5 }
+
+                GridLayout {
+                    columns: 4
+                    columnSpacing: 8
+                    rowSpacing: 4
+                    Label { text: 'Floor calibration'; font.pointSize: 9 }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 6
+                        Rectangle {
+                            id: floorDot
+                            objectName: 'floorCalDot'
+                            property string state_: 'none'
+                            width: 8; height: 8; radius: 4
+                            color: root.stateColor(state_)
+                        }
+                        Label {
+                            id: calibrationLbl
+                            objectName: 'calibrationLabel'
+                            property string tip
+                            Layout.fillWidth: true
+                            Layout.maximumWidth: 330
+                            elide: Text.ElideRight
+                            font.pointSize: 9
+                        }
+                    }
+                    InfoTip {
+                        id: floorTip
+                        text: ''
+                    }
+                    Button {
+                        id: calibrateBtn
+                        objectName: 'calibrateButton'
+                        text: 'Calibrate...'
+                        onClicked: calibrateConfirm.open()
+                    }
+
+                    Label { text: 'Gain steps'; font.pointSize: 9 }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 6
+                        Rectangle {
+                            id: stepsDot
+                            objectName: 'gainStepsDot'
+                            property string state_: 'none'
+                            width: 8; height: 8; radius: 4
+                            color: root.stateColor(state_)
+                        }
+                        Label {
+                            id: stepsLbl
+                            objectName: 'gainStepsLabel'
+                            Layout.fillWidth: true
+                            Layout.maximumWidth: 330
+                            elide: Text.ElideRight
+                            font.pointSize: 9
+                        }
+                    }
+                    InfoTip {
+                        id: stepsTip
+                        text: ''
+                    }
+                    Button {
+                        // V20.5
+                        id: calibrateGainsBtn
+                        objectName: 'calibrateGainsButton'
+                        text: 'Calibrate...'
+                        onClicked: calibrateGainsConfirm.open()
+                    }
                 }
-                Switch {
-                    id: cleanFloorSwitch
-                    objectName: 'cleanFloorSwitch'
-                    text: 'Level the floor (calibration)'
-                }
-                Switch {
-                    id: autoGainSwitch
-                    objectName: 'autoGainSwitch'
-                    text: 'Overload: re-measure with less gain'
-                }
-                Label {
-                    id: calibrationLbl
-                    objectName: 'calibrationLabel'
-                    Layout.columnSpan: 2
-                    Layout.fillWidth: true
-                    Layout.maximumWidth: 560
-                    wrapMode: Text.Wrap
-                    font.pointSize: 9
-                    opacity: 0.85
-                }
-                Button {
-                    id: calibrateBtn
-                    objectName: 'calibrateButton'
-                    text: 'Calibrate dongle...'
-                    onClicked: calibrateConfirm.open()
-                }
-                Button {
-                    // V20.5
-                    id: calibrateGainsBtn
-                    objectName: 'calibrateGainsButton'
-                    text: 'Calibrate gain steps...'
-                    onClicked: calibrateGainsConfirm.open()
-                }
-                Button {
-                    // V20.6
-                    id: suggestGainBtn
-                    objectName: 'suggestGainButton'
-                    text: 'Suggest gain'
-                    onClicked: root.suggestGain()
-                }
-                Label {
-                    id: suggestGainLbl
-                    objectName: 'suggestGainLabel'
-                    Layout.fillWidth: true
-                    Layout.maximumWidth: 400
-                    wrapMode: Text.Wrap
-                    font.pointSize: 9
-                    opacity: 0.85
-                    text: 'Gain step for the scan range and the overload switch above'
+
+                Rectangle { Layout.fillWidth: true; height: 1; color: root.palette.mid; opacity: 0.5 }
+
+                RowLayout {
+                    spacing: 8
+                    Button {
+                        // V20.6
+                        id: suggestGainBtn
+                        objectName: 'suggestGainButton'
+                        text: 'Suggest gain'
+                        onClicked: root.suggestGain()
+                    }
+                    InfoTip {
+                        text: 'Sets the gain in Device Settings for the scan range and the Overload switch, ' +
+                              'from a gain profile: for every band and gain step, how much sensitivity is ' +
+                              'lost and how many tiles clip. Overload on: the most sensitive step. Overload ' +
+                              'off: the most sensitive step at which at most 5 % of the tiles clip. The ' +
+                              'built-in profile was measured at one site (Warsaw); gain_survey.py --analyze ' +
+                              'makes one for yours.'
+                    }
+                    Label {
+                        id: suggestGainLbl
+                        objectName: 'suggestGainLabel'
+                        Layout.fillWidth: true
+                        Layout.maximumWidth: 420
+                        wrapMode: Text.Wrap
+                        maximumLineCount: 2
+                        elide: Text.ElideRight
+                        font.pointSize: 9
+                        opacity: 0.85
+                        text: 'Gain now: ' + (root.scanner ? root.scanner.gain.toFixed(1) + ' dB' : '?')
+                    }
                 }
             }
         }
@@ -329,7 +441,7 @@ Dialog {
         var r = root.scanner.suggestGain(root.autoGain);
         if (r[0] >= 0) {
             root.gainSuggested(r[0]);
-            suggestGainLbl.text = 'Gain set to ' + r[1];
+            suggestGainLbl.text = 'Set to ' + r[1];
             root.updateCalibrationText();       // its calibration (per gain)
         } else {
             suggestGainLbl.text = r[1];

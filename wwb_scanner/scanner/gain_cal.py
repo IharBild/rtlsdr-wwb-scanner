@@ -55,6 +55,10 @@ STRONG_DB = 20.          # survey: a bin this much over the floor counts for the
 MIN_SNR_DB = 15.         # a bin must stand this much over the noise at both gains
 MIN_BINS = 5             # bins needed for one step
 CLIP_LIMIT = 1e-2        # a reading with more clipped samples is not used (1 %: level off < 0.2 dB)
+COMPRESS_MARGIN_STEPS = 2   # V20.6.1: an anchor's readings from this many steps below the first
+                             # gain where it clipped at all are not used either: a strong signal
+                             # compresses before it clips (10.11: 534 MHz grew 1.4 dB per 2.6 dB
+                             # step at 0.2 % clipping, the 400-550 MHz table came out 13.6 dB short)
 # V20.5.3: LTE anchors (load-dependent power) gave a "5.1 dB" step for 0.8
 # nominal. V20.6: the gain survey of 10.11 found real steps up to 3.9 dB off
 # nominal (240-400 MHz 43.4 -> 43.9 dB: +3.6), so the limit is 4 dB
@@ -215,7 +219,9 @@ def pick_anchors(collection):
             continue
         cand.sort(reverse=True)
         pick = [cand[0][3]]
-        calm = [c for c in cand if c[2] < CLIP_LIMIT and c[3] not in pick]
+        # V20.6.1: a tile that did not clip at all first (no compression at the top gains)
+        calm = [c for c in cand if c[2] <= 0. and c[3] not in pick] or \
+            [c for c in cand if c[2] < CLIP_LIMIT and c[3] not in pick]
         if calm:
             pick.append(calm[0][3])
         for c in cand:
@@ -301,9 +307,13 @@ def anchor_steps(rows, floors):
     too few bins were usable at both gains."""
     n = len(rows)
     steps = np.full(n - 1, np.nan)
+    # rows go up in gain: readings from COMPRESS_MARGIN_STEPS below the
+    # first clipped one on are in compression
+    first = next((i for i, r in enumerate(rows) if r[2] > 0.), n)
+    usable = first - COMPRESS_MARGIN_STEPS if first < n else n
     for i in range(n - 1):
         (_, pa, ca), (_, pb, cb) = rows[i], rows[i + 1]
-        if ca >= CLIP_LIMIT or cb >= CLIP_LIMIT:
+        if ca >= CLIP_LIMIT or cb >= CLIP_LIMIT or i + 1 >= usable:
             continue
         da, db_ = to_db(pa), to_db(pb)
         v = (da >= floors[i] + MIN_SNR_DB) & (db_ >= floors[i + 1] + MIN_SNR_DB)

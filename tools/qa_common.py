@@ -53,6 +53,7 @@ MARKERS = [
     ('V20.5.2', 'scanner/main.py', 'def keep_awake'),
     ('V20.5.3', 'scanner/gain_cal.py', 'def pass_steps'),
     ('V20.6', 'scanner/gain_profile.py', 'def suggest'),
+    ('V20.7', 'ui/pyside/qml/InfoTip.qml', 'V20.7'),
 ]
 
 

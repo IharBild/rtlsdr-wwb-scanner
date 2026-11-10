@@ -57,6 +57,12 @@ Current release: **[v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releas
   sensitive step (clipped tiles are re-measured); with it off, the most sensitive step where
   at most 5 % of the tiles clip. `gain_survey.py --analyze` makes the profile of your own site
   from the two surveys; without it a built-in one is used (one survey in Warsaw, 10.11.2026).
+- **V20.7**: Scan settings > Clean scan shows each calibration on one line with a state dot
+  (green / amber / grey) and an (i) with the details; (i) help next to the main switches and
+  buttons. Scans in the list on the right can be renamed (double-click or the ⋮ menu) and
+  deleted; a new scan is named with its range and start time. Gain step calibration no longer
+  uses readings of a strong signal from two steps below the gain where it first clipped
+  (compression made the 400-550 MHz steps 13.6 dB short on 10.11).
 - **Tuner I2C errors** (`i2c wr failed`, LIBUSB_ERROR_PIPE): the driver build scanner-v5
   (`drivers/rtlsdr-scanner-v5`, `python install_dll.py`) repeats a failed tuner transfer up
   to 3 times with the I2C repeater switched on again; the console prints how many were

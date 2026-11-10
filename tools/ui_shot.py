@@ -77,6 +77,9 @@ def main():
         logging.getLogger('wwb_scanner.status').info(os.environ['SHOT_STATUS'])
         qa_ui.pump(app, 0.5)
     img = win.grabWindow()
+    if img.width() == 0:            # software backend under xvfb: grab the screen instead
+        qa_ui.pump(app, 1.0)
+        img = app.primaryScreen().grabWindow(0, int(win.x()), int(win.y()), int(win.width()), int(win.height()))
     print('saved', out, img.save(out), img.width(), img.height())
 
 

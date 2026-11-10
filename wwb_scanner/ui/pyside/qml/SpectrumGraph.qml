@@ -43,7 +43,7 @@ Item {
     Connections {
         target: root.graphParent
         function onActiveSpectrumChanged() {
-            root.selected = root.graphParent.activeSpectrum.index == root.index;
+            root.selected = !!root.graphParent.activeSpectrum && root.graphParent.activeSpectrum.index == root.index;
         }
     }
 

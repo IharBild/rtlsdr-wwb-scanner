@@ -327,7 +327,7 @@ def run_pytest(out, args, cov_src):
 
 def run_ui(out, cov_src):
     if not have_pyside():
-        R.add('U', 'FUNCTIONAL', 'SKIP', 'окно программы (U1-U26)', 'PySide2 нет')
+        R.add('U', 'FUNCTIONAL', 'SKIP', 'окно программы (U1-U28)', 'PySide2 нет')
         return None
     env = sub_env()
     env.setdefault('QT_QPA_PLATFORM', 'offscreen')
@@ -346,7 +346,7 @@ def run_ui(out, cov_src):
         fh.write(txt)
     checks = re.findall(r'^(U\d+b?) +(OK|FAIL) +(.*)$', txt, re.M)
     if not checks:
-        R.add('U', 'FUNCTIONAL', 'FAIL', 'окно программы (U1-U26)', 'окно не запустилось, см. ui.txt')
+        R.add('U', 'FUNCTIONAL', 'FAIL', 'окно программы (U1-U28)', 'окно не запустилось, см. ui.txt')
         return None
     perf = {'U3'}
     for uid, ok, det in checks:
@@ -368,7 +368,7 @@ UI_TITLES = {
     'U21': 'повреждённый файл: сообщение в окне, окно работает', 'U22': 'сглаживание короткого скана не вешает окно',
     'U23': 'View: полосы потери и метки образов выключаются и сохраняются',
     'U24': 'экспорт во время скана сначала спрашивает',
-    'U25': 'калибровка шагов усиления из окна', 'U26': 'кнопка Suggest gain'}
+    'U25': 'калибровка шагов усиления из окна', 'U26': 'кнопка Suggest gain', 'U27': 'блок Clean scan и подсказки (i)', 'U28': 'переименование и удаление скана'}
 
 
 # ======================================================================= SYSTEM

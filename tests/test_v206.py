@@ -82,6 +82,41 @@ def _rows(level_of_gain):
     return rows
 
 
+def _rows_clip(level_of_gain, clip_of_gain):
+    return [(g, p, clip_of_gain(g)) for g, p, _ in _rows(level_of_gain)]
+
+
+def test_compressed_anchor_does_not_shorten_the_table():
+    """V20.6.1, calibration of 10.11 17:21: the 534 MHz anchor grew 1.4 dB per
+    2.6 dB step from 33.8 dB (0.2 % clipping, under the 1 % limit) - every
+    step above came out short and 49.6 -> 29.7 gave 6.3 dB instead of 19.9."""
+    def lvl(g):                     # linear up to 32.8, then half the growth
+        return 30 + (g if g <= 32.8 else 32.8 + (g - 32.8) / 2.)
+    clip = lambda g: 0. if g < 33.8 else 0.002 if g < 36.4 else 0.009
+    rows = _rows_clip(lvl, clip)
+    st = gain_cal.anchor_steps(rows, gain_cal.noise_floors([[rows]], GAINS))
+    first_clip = GAINS.index(33.8)
+    assert np.all(np.isnan(st[first_clip - 3:]))                  # 28.0 -> 29.7 and up: not used
+    assert np.isfinite(st[first_clip - 4])                         # 25.4 -> 28.0 is
+    t = gain_cal.build_table([480e6], [[rows, rows]], GAINS)
+    assert abs(t['worst']['err']) < 0.1
+    gain_cal._prepare(t)
+    drop = gain_cal.real_drop(49.6, 29.7, 480e6, table=t)
+    assert drop == pytest.approx(19.9, abs=0.01)                  # nominal where not measured, not 6.3
+
+
+def test_calm_anchor_is_one_that_never_clipped():
+    class S(object):
+        def __init__(self, db, cr):
+            self.powers = 10 ** (np.full(300, -100.) / 10.)
+            self.powers[100:120] = 10 ** (db / 10.)
+            self.clip_ratio = cr
+
+    class C(object):
+        sample_sets = {480e6: S(-40., 0.5), 484e6: S(-50., 0.002), 488e6: S(-60., 0.), 492e6: S(-100., 0.)}
+    assert gain_cal.pick_anchors(C()) == [480e6, 488e6]
+
+
 def test_real_step_3_6_db_off_nominal_is_kept():
     # survey 10.11: 240-400 MHz, 43.4 -> 43.9 dB gave +3.6 dB for 0.5 nominal
     lvl = lambda g: 30 + g + (3.1 if g >= 43.9 else 0.)
@@ -185,7 +220,7 @@ def test_auto_gain_off_avoids_clipping_and_says_what_auto_gain_gives():
     g_on, _ = gain_profile.suggest([(470., 700.)], True, GAINS, p)
     g_off, text = gain_profile.suggest([(470., 700.)], False, GAINS, p)
     assert g_on == 49.6 and g_off == 29.7
-    assert 'with auto gain on: 49.6 dB' in text
+    assert 'with Overload on: 49.6 dB' in text
 
 
 def test_everything_clips_without_auto_gain():

@@ -1,4 +1,5 @@
 import threading
+import time
 
 import numpy as np
 
@@ -124,6 +125,70 @@ class ScanConfigData(GenericQObject):
     def _g_scanRanges(self): return self._scanRanges
     def _s_scanRanges(self, value): self._generic_setter('_scanRanges', value or '')
     scanRanges = Property(str, _g_scanRanges, _s_scanRanges, notify=_n_scanRanges)
+
+CAL_OLD_DAYS = 30
+STEPS_WARN_DB = 6.     # a table this far off nominal: an anchor was probably compressed
+
+
+def _short_date(text):
+    return str(text or '?')[:16]
+
+
+def _age_days(text):
+    import datetime
+    try:
+        t = datetime.datetime.strptime(str(text)[:19], '%Y-%m-%d %H:%M:%S')
+    except (TypeError, ValueError):
+        return None
+    return (datetime.datetime.now() - t).days
+
+
+def _floor_info(cleanup, gain, sample_rate):
+    if gain is None:
+        return {'floorState': 'none', 'floorText': 'gain unknown', 'floorTip': ''}
+    prof, why = cleanup.find_profile(gain, sample_rate)
+    if prof is None:
+        return {'floorState': 'none', 'floorText': 'none for %.1f dB - the floor is not levelled' % float(gain),
+                'floorTip': 'No calibration for this gain (%s). Spurs and ripple are still removed; '
+                            'the floor is levelled only with a calibration made at the same gain.' % why}
+    m = prof.get('meta', {})
+    created = m.get('created')
+    ext = prof.get('external') or []
+    parts = [_short_date(created), '%.1f dB' % float(m.get('gain', gain)), '%d own spurs' % len(prof.get('spurs', []))]
+    state = 'ok'
+    age = _age_days(created)
+    if ext:
+        parts.append('%d outside signal(s)' % len(ext))
+        state = 'warn'
+    if age is not None and age > CAL_OLD_DAYS:
+        parts.append('%d days old' % age)
+        state = 'warn'
+    tip = cleanup.status_text(gain, sample_rate)
+    if ext:
+        tip += ' Outside signals mean the antenna was not fully off: calibrate again without antenna.'
+    return {'floorState': state, 'floorText': ' \u00b7 '.join(parts), 'floorTip': tip}
+
+
+def _steps_info(gain_cal, sample_rate):
+    table = gain_cal.load_table(sample_rate)
+    if table is None:
+        return {'stepsState': 'none', 'stepsText': 'none - Overload uses the nominal steps',
+                'stepsTip': gain_cal.status_text(sample_rate)}
+    worst = table.get('worst') or {}
+    err = float(worst.get('err', 0.) or 0.)
+    parts = [_short_date(table.get('date')), '%d of %d steps' % (table.get('measured', 0), table.get('total', 0))]
+    state = 'ok'
+    if abs(err) > STEPS_WARN_DB:
+        parts.append('%+.1f dB off nominal at %.0f MHz - calibrate again' % (err, worst.get('f_mhz', 0.)))
+        state = 'warn'
+    else:
+        parts.append('within %.1f dB of nominal' % abs(err))
+    tip = gain_cal.status_text(sample_rate)
+    if state == 'warn':
+        tip += (' So large a difference usually means a strong signal was compressed during the '
+                'calibration; since V20.6.1 such readings are not used - run the calibration again.')
+    return {'stepsState': state, 'stepsText': ' \u00b7 '.join(parts), 'stepsTip': tip}
+
 
 class ScannerInterface(GenericQObject):
     _n_running = Signal()
@@ -262,6 +327,23 @@ class ScannerInterface(GenericQObject):
             text += '\ngain steps: %s' % exc
         return text
 
+    @Slot(result='QVariantMap')
+    def calibrationInfo(self):
+        """V20.7: the two calibrations for the Scan settings, short:
+        {floor,steps}{State: ok|warn|none, Text, Tip}."""
+        from wwb_scanner.scanner import cleanup, gain_cal
+        sr = (self.sampleRate or 0) * 1e3
+        out = {}
+        try:
+            out.update(_floor_info(cleanup, self.gain, sr))
+        except Exception as exc:
+            out.update(floorState='warn', floorText='can not be read: %s' % exc, floorTip='')
+        try:
+            out.update(_steps_info(gain_cal, sr))
+        except Exception as exc:
+            out.update(stepsState='warn', stepsText='can not be read: %s' % exc, stepsTip='')
+        return out
+
     @Slot(bool, result='QVariantList')
     def suggestGain(self, auto_gain):
         """V20.6: [gain or -1, text] for the next scan from the gain profile."""
@@ -319,11 +401,13 @@ class ScannerInterface(GenericQObject):
             from wwb_scanner.scanner import gain_cal
             self.spectrum.name = 'Gain step calibration (survey, gain %s dB)' % gain_cal.SURVEY_GAIN_DB
         else:
+            # V20.7: the start time in the name (rename in the scan list)
             segs = self.scan_segments()
+            when = time.strftime('%d.%m %H:%M')
             if segs:
-                self.spectrum.name = 'Bands %s (live)' % ', '.join('%g-%g' % s for s in segs)
+                self.spectrum.name = 'Bands %s MHz, %s' % (', '.join('%g-%g' % s for s in segs), when)
             else:
-                self.spectrum.name = f'{self.startFreq} - {self.endFreq} (live)'
+                self.spectrum.name = '%g-%g MHz, %s' % (float(self.startFreq), float(self.endFreq), when)
         self.progress = 0.
         self.running = True
         self.scan_thread = ScanThread(target=self.scanner.run_scan)

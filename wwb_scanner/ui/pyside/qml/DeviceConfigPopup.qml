@@ -126,6 +126,7 @@ Dialog {
 
         GroupBox {
             title: "Gain"
+            RowLayout {
             SpinBox {
                 id: gainSelect
                 property var items: [0]
@@ -159,6 +160,13 @@ Dialog {
                 onValueModified: {
                     root.gain = gainSelect.items[gainSelect.value];
                 }
+            }
+            InfoTip {
+                // V20.7
+                text: 'Tuner gain (dB). Higher is more sensitive, but strong signals hit the limit ' +
+                      'of the 8-bit converter sooner. Scan settings > Suggest gain picks a step for ' +
+                      'the scan range; the floor calibration is valid only for the gain it was made at.'
+            }
             }
         }
     }

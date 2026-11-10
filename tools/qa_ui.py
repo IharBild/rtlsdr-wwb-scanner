@@ -293,6 +293,7 @@ def main():
     v204_checks(app, win, controls, si)
     v205_checks(app, win, si)
     v206_checks(app, win, si)
+    v207_checks(app, win, si)
     win.close()
     pump(app, 0.3)
     return 0 if all(RESULTS) else 1
@@ -698,6 +699,71 @@ def v205_checks(app, win, si):
             pass
 
 
+def _qml_eval(obj, js):
+    from PySide2 import QtQml
+    ctx = QtQml.QQmlEngine.contextForObject(obj)
+    expr = QtQml.QQmlExpression(ctx, obj, js)
+    val = expr.evaluate()
+    if isinstance(val, tuple):          # PySide2: (value, valueIsUndefined)
+        val = val[0]
+    if expr.hasError():
+        raise RuntimeError(expr.error().toString())
+    return val
+
+
+def v207_checks(app, win, si):
+    """U27: Clean scan block - short calibration lines with a state dot and
+    (i) help; U28: a scan in the list is renamed and deleted."""
+    box = win.findChild(QtCore.QObject, 'cleanScanBox')
+    names = ['calibrationLabel', 'gainStepsLabel', 'floorCalDot', 'gainStepsDot', 'suggestGainButton']
+    objs = {n: win.findChild(QtCore.QObject, n) for n in names}
+    tips = [o for o in win.findChildren(QtCore.QObject) if o.metaObject().className().startswith('InfoTip')]
+    info = {}
+    try:
+        info = dict(si.calibrationInfo())
+    except Exception as exc:
+        info = {'error': str(exc)}
+    texts = [str(objs[n].property('text')) for n in ('calibrationLabel', 'gainStepsLabel') if objs[n] is not None]
+    ok = (box is not None and str(box.property('title')) == 'Clean scan' and all(objs.values())
+          and len(tips) >= 8 and info.get('floorState') in ('ok', 'warn', 'none')
+          and info.get('stepsState') in ('ok', 'warn', 'none')
+          and all(t and len(t) <= 120 and '\n' not in t for t in texts))
+    check('U27', ok, 'title %r; %d info tips; states %s/%s; lines %r'
+          % (box.property('title') if box is not None else None, len(tips), info.get('floorState'),
+             info.get('stepsState'), texts))
+    # U28
+    cs = [o for o in win.findChildren(QtCore.QObject) if o.metaObject().indexOfMethod('renameItem(QVariant,QVariant)') >= 0]
+    gr = [o for o in win.findChildren(QtCore.QObject) if o.metaObject().indexOfMethod('removeSpectrum(QVariant)') >= 0]
+    if not cs or not gr:
+        check('U28', False, 'scan list %s, graph %s' % (bool(cs), bool(gr)))
+        return
+    cs, gr = cs[0], gr[0]
+    try:
+        n0 = int(_qml_eval(gr, 'spectrumGraphs.filter(function(s){ return !!s; }).length'))
+        if n0 < 2:      # one more graph to delete
+            _qml_eval(gr, "addModel({})")
+            pump(app, 0.5)
+            n0 = int(_qml_eval(gr, 'spectrumGraphs.filter(function(s){ return !!s; }).length'))
+        idx = int(_qml_eval(gr, 'spectrumGraphs.filter(function(s){ return !!s && !(s.scanner && s.scanner.running); })[0].index'))
+        renamed = bool(_qml_eval(cs, "renameItem(%d, '  mics off, 17:20  ')" % idx))
+        pump(app, 0.2)
+        name = str(_qml_eval(gr, 'spectrumGraphs[%d].name' % idx))
+        row_name = str(_qml_eval(cs, 'itemName(%d)' % idx))
+        empty_refused = not bool(_qml_eval(cs, "renameItem(%d, '   ')" % idx))
+        removed = bool(_qml_eval(gr, 'removeSpectrum(spectrumGraphs[%d])' % idx))
+        pump(app, 0.3)
+        n1 = int(_qml_eval(gr, 'spectrumGraphs.filter(function(s){ return !!s; }).length'))
+        rows = int(_qml_eval(cs, 'itemCount()'))
+        active_ok = bool(_qml_eval(gr, '!!activeSpectrum && activeSpectrum.index != %d' % idx))
+        ok = (renamed and name == 'mics off, 17:20' and row_name == name and empty_refused and removed
+              and n1 == n0 - 1 and rows == n1 and active_ok)
+        check('U28', ok, 'renamed %s -> %r (list %r), empty name refused %s; deleted %s: graphs %d -> %d, '
+              'list rows %d, another graph active %s' % (renamed, name, row_name, empty_refused, removed,
+                                                        n0, n1, rows, active_ok))
+    except Exception as exc:
+        check('U28', False, 'error: %s' % exc)
+
+
 def v206_checks(app, win, si):
     """U26: Scan settings > Suggest gain sets the gain of Device Settings from
     the gain profile, with and without auto gain, and says why."""
@@ -716,7 +782,7 @@ def v206_checks(app, win, si):
             QtCore.QMetaObject.invokeMethod(btn, 'clicked')
             pump(app, 0.3)
             got.append((auto, want[0], si.gain, str(lbl.property('text'))))
-        ok = all(w >= 0 and abs(g - w) < 0.05 and t.startswith('Gain set to') for _, w, g, t in got)
+        ok = all(w >= 0 and abs(g - w) < 0.05 and t.startswith('Set to') for _, w, g, t in got)
         check('U26', ok, '; '.join('auto %s: suggested %.1f, set %.1f, %r' % (a, w, g, t[:70])
                                    for a, w, g, t in got))
     finally:

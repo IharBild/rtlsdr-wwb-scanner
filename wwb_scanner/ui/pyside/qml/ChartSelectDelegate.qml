@@ -15,9 +15,15 @@ RadioDelegate {
 
     signal colorButtonPressed(int itemIndex)
     signal visibleCheckBoxPressed(int itemIndex, bool state)
+    // V20.7
+    signal renameRequested(int itemIndex)
+    signal deleteRequested(int itemIndex)
+    property bool canDelete: true
+
+    onDoubleClicked: control.renameRequested(control.itemIndex)
 
     contentItem: Label {
-        rightPadding: colorBtn.width + control.spacing
+        rightPadding: colorBtn.width + menuBtn.width + 2 * control.spacing
         leftPadding: control.indicator.width + visibleCheckBox.width + control.spacing
         text: control.itemName
         font: control.font
@@ -35,6 +41,34 @@ RadioDelegate {
         y: control.topPadding + (control.availableHeight - height) / 2
         onToggled: {
             control.visibleCheckBoxPressed(control.itemIndex, visibleCheckBox.checked);
+        }
+    }
+    ToolButton {
+        // V20.7: rename / delete
+        id: menuBtn
+        objectName: 'scanMenuButton'
+        text: '\u22ee'
+        font.pointSize: 11
+        width: 20
+        height: 26
+        x: colorBtn.x - width - control.spacing
+        y: control.topPadding + (control.availableHeight - height) / 2
+        onClicked: itemMenu.popup(menuBtn, 0, menuBtn.height)
+        ToolTip.visible: hovered
+        ToolTip.delay: 600
+        ToolTip.text: 'Rename or delete this scan'
+    }
+    Menu {
+        id: itemMenu
+        objectName: 'scanItemMenu'
+        MenuItem {
+            text: 'Rename...'
+            onTriggered: control.renameRequested(control.itemIndex)
+        }
+        MenuItem {
+            text: 'Delete...'
+            enabled: control.canDelete
+            onTriggered: control.deleteRequested(control.itemIndex)
         }
     }
     RoundButton {
