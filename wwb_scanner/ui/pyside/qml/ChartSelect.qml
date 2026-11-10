@@ -110,8 +110,6 @@ Item {
             onVisibleCheckBoxPressed: {
                 root.spectrumGraphs[itemIndex].graphVisible = state;
             }
-            canDelete: !(root.spectrumGraphs[itemIndex] && root.spectrumGraphs[itemIndex].scanner &&
-                         root.spectrumGraphs[itemIndex].scanner.running)
             onRenameRequested: renameDialog.ask(itemIndex)
             onDeleteRequested: deleteDialog.ask(itemIndex)
         }
@@ -172,8 +170,11 @@ Item {
             if (!spectrum)
                 return;
             deleteDialog.itemIndex = index;
-            deleteLbl.text = 'Remove "' + spectrum.name + '" from the graph? A scan that was not ' +
-                             'exported to a file is lost.';
+            var running = !!(spectrum.scanner && spectrum.scanner.running);
+            deleteDialog.standardButtons = running ? Dialog.Cancel : (Dialog.Yes | Dialog.Cancel);
+            deleteLbl.text = running ? 'This scan is running: stop it first.' :
+                ('Remove "' + spectrum.name + '" from the graph? A scan that was not ' +
+                 'exported to a file is lost.');
             deleteDialog.open();
         }
         Label {

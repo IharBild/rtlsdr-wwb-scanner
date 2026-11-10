@@ -27,6 +27,7 @@ from __future__ import division
 import json
 import logging
 import os
+import shutil
 import time
 
 import numpy as np
@@ -337,6 +338,10 @@ def find_profile(gain, sample_rate, period_bins=None):
         logger.warning('calibration file %s can not be read: %s', path, exc)
         return None, 'calibration file damaged, calibrate again'
     why = profile_matches(prof, gain, sample_rate, period_bins)
+    if not why and prof.get('floor_ref_db', -200.) > CAL_FLOOR_MAX_DB:
+        # V20.7.3: saved before the check existed (10.11 20:44: floor -65 dB)
+        why = ('the calibration of %s is broken (floor %.1f dB, the dongle alone gives about -96 dB): '
+               'calibrate again without antenna' % (prof.get('meta', {}).get('created', '?'), prof['floor_ref_db']))
     return (None, why) if why else (prof, '')
 
 
@@ -357,8 +362,19 @@ def status_text(gain, sample_rate):
     return text
 
 
-def check_calibration_scan(f, y, prof):
+CAL_FLOOR_MAX_DB = -80.     # V20.7.3: the dongle's own floor is about -96 dB at 49.6 dB gain
+CAL_CLIP_MAX_SHARE = 0.1    # V20.7.3: share of tiles clipping in a calibration scan
+
+
+def check_calibration_scan(f, y, prof, clipped_share=None):
     """'' if the scan looks like a scan without antenna, else the reason."""
+    if clipped_share is not None and clipped_share > CAL_CLIP_MAX_SHARE:
+        return ('%.0f %% of the tiles clipped - the dongle input is overloaded (antenna connected, or a '
+                'dongle fault: unplug it and plug it in again)' % (100. * clipped_share))
+    if prof.get('floor_ref_db', -200.) > CAL_FLOOR_MAX_DB:
+        return ('the floor is %.1f dB, the dongle alone gives about -96 dB - something strong reaches '
+                'the input (antenna connected, or a dongle fault: unplug it and plug it in again)'
+                % prof['floor_ref_db'])
     f = np.asarray(f)
     fm = (f >= 88.0) & (f <= 108.0)
     if fm.sum() > 100:
@@ -373,18 +389,25 @@ def check_calibration_scan(f, y, prof):
     return ''
 
 
-def calibrate(f_mhz, y_db, start_mhz, step_mhz, meta):
+def calibrate(f_mhz, y_db, start_mhz, step_mhz, meta, clipped_share=None):
     """Build and save the profile from a scan without antenna.
-    Returns (saved, text for the status line)."""
+    Returns (saved, text for the status line). The previous profile of that
+    gain is kept as <name>.prev.npz (V20.7.3)."""
     f = np.asarray(f_mhz, dtype=np.float64)
     y = np.asarray(y_db, dtype=np.float64)
     bin_mhz = float(np.median(np.diff(f)))
     period = int(round(step_mhz / bin_mhz))
     prof = build_profile(f, y, start_mhz, period, meta=meta)
-    why = check_calibration_scan(f, y, prof)
+    why = check_calibration_scan(f, y, prof, clipped_share)
     if why:
-        return False, 'Calibration NOT saved: %s. Unscrew the antenna and calibrate again.' % why
-    path = save_profile(prof, profile_path(meta['gain'], meta['sample_rate']))
+        return False, 'Calibration NOT saved (the previous one is kept): %s. Unscrew the antenna and calibrate again.' % why
+    path = profile_path(meta['gain'], meta['sample_rate'])
+    if os.path.exists(path):
+        try:
+            shutil.copyfile(path, path[:-4] + '.prev.npz')
+        except (IOError, OSError):
+            logger.exception('backup of %s', path)
+    path = save_profile(prof, path)
     text = 'Calibration saved (gain %.1f dB): floor %.1f dB, %d own spurs' % (
         meta['gain'], prof['floor_ref_db'], len(prof['spurs']))
     ext = sorted(prof.get('external') or [], key=lambda e: -e[1])

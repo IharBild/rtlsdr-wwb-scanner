@@ -206,6 +206,13 @@ PLATEAU_MARGIN_DB = 6.
 # V20.4: a wide signal (DVB-T, DAB) is where the measured points, median
 # over WIDE_SIGNAL_MHZ, stand WIDE_SIGNAL_DB above the floor; its dips are not
 # lost sensitivity. Tiles clipped even at the lowest gain are "not measurable".
+# V20.7.3: when (almost) every tile clips even at the lowest gain it is not an
+# antenna signal but the dongle or what is plugged into it (10.11: 2241 of
+# 2241 tiles 30-1766 MHz at 0 dB, 20 % of samples clipped)
+EVERYWHERE_SHARE = 0.8
+EVERYWHERE_TEXT = ('THE RESULT IS NOT VALID: %d of %d tiles clip even at the lowest gain - the dongle input '
+                   'is overloaded everywhere. Unplug the dongle and plug it in again (no hub), check what '
+                   'is connected to the antenna input, then scan again')
 WIDE_SIGNAL_MHZ = 1.0
 WIDE_SIGNAL_DB = 10.
 KNOWN_AT_FLOOR_DB = 3.
@@ -1475,7 +1482,11 @@ class SampleCollection(JSONMixin):
         note = ''
         if parts:
             note = 'overload next to a strong signal: ' + ', '.join(parts)
-        if still:
+        n_tiles = len([1 for s in self.sample_sets.values() if not s.neighbour])
+        if still and n_tiles and len(still) >= EVERYWHERE_SHARE * n_tiles:
+            # V20.7.3: no antenna signal clips everywhere at 0 dB gain
+            note = (EVERYWHERE_TEXT % (len(still), n_tiles)) + ('; ' + note if note else '')
+        elif still:
             note = (note + '; ' if note else '') + \
                 '%d tile(s) clipped even at the lowest gain - move the antenna away' % len(still)
         images = getattr(self, 'images', None) or []

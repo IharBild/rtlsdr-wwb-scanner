@@ -151,6 +151,8 @@ def _floor_info(cleanup, gain, sample_rate):
     if gain is None:
         return {'floorState': 'none', 'floorText': 'gain unknown', 'floorTip': ''}
     prof, why = cleanup.find_profile(gain, sample_rate)
+    if prof is None and 'broken' in why:
+        return {'floorState': 'warn', 'floorText': 'broken - calibrate again without antenna', 'floorTip': why}
     if prof is None:
         return {'floorState': 'none', 'floorText': 'none for %.1f dB - the floor is not levelled' % float(gain),
                 'floorTip': 'No calibration for this gain (%s). Spurs and ripple are still removed; '
@@ -474,9 +476,16 @@ class ScannerInterface(GenericQObject):
                 meta['serial'] = self.deviceInfo.device_serial
             except Exception:
                 pass
+            try:
+                sets = [x for x in scanner.sample_collection.sample_sets.values()
+                        if not getattr(x, 'neighbour', False)]
+                clipped = (sum(1 for x in sets if getattr(x, 'clip_ratio', 0.) >= 1e-3) / float(len(sets))
+                           if sets else None)
+            except Exception:
+                clipped = None
             ok, text = cleanup.calibrate(
                 np.asarray(sd['frequency'], dtype=float), np.asarray(sd['dbFS'], dtype=float),
-                float(scanner.config.scan_range[0]), scanner.step_size, meta)
+                float(scanner.config.scan_range[0]), scanner.step_size, meta, clipped_share=clipped)
             (status.info if ok else status.warning)(text)
         except Exception as exc:
             logging.getLogger('wwb_scanner').error('Calibration failed: %s', exc, exc_info=True)

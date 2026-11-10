@@ -63,6 +63,10 @@ Current release: **[v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releas
   deleted; a new scan is named with its range and start time. Gain step calibration no longer
   uses readings of a strong signal from two steps below the gain where it first clipped
   (compression made the 400-550 MHz steps 13.6 dB short on 10.11).
+- **V20.7.3**: a calibration made while the dongle input is overloaded (floor far above
+  the dongle's own -96 dB, or more than 10 % of the tiles clipping) is not saved and the
+  previous one stays; every saved floor calibration keeps the previous one as `.prev.npz`.
+  A scan where 80 % of the tiles clip even at the lowest gain says THE RESULT IS NOT VALID.
 - **Tuner I2C errors** (`i2c wr failed`, LIBUSB_ERROR_PIPE): the driver build scanner-v5
   (`drivers/rtlsdr-scanner-v5`, `python install_dll.py`) repeats a failed tuner transfer up
   to 3 times with the I2C repeater switched on again; the console prints how many were

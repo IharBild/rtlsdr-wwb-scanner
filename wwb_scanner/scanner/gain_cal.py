@@ -414,6 +414,15 @@ def calibrate(scanner, running=None):
     if getattr(coll, 'aborted', False):
         return False, 'Gain step calibration not saved: the survey did not finish'
     anchors = sorted(pick_anchors(coll))
+    try:
+        sets = list(coll.sample_sets.values())
+        clipped = sum(1 for x in sets if getattr(x, 'clip_ratio', 0.) >= 1e-3) / float(len(sets)) if sets else 0.
+    except Exception:
+        clipped = 0.
+    if clipped >= 0.8:      # V20.7.3
+        return False, ('Gain step calibration not saved: %.0f %% of the tiles clip - the dongle input is '
+                       'overloaded everywhere. Unplug the dongle and plug it in again (no hub), check what is '
+                       'connected to the antenna input' % (100. * clipped))
     if not anchors:
         return False, ('Gain step calibration not saved: no strong signals found. Connect the antenna '
                        '(it needs FM, DAB, TV or mobile signals on the air)')
