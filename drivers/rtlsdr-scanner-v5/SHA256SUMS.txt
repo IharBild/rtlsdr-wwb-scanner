@@ -1,5 +1,5 @@
 7d99632edd8b45d237fc3dffefb73903384b3766f2b8d4facf587c49a037c7c7  ./README_RU.txt
-e854159edf74de440ce70c2fcc969c7a954f5f92e7f2d3c4c1cf83df6beb219b  ./install_dll.py
+03e18049dfd0a0ba75025da5c79a95431c1237cab638b57d78cda6c2644030eb  ./install_dll.py
 5df07007198989c622f5d41de8d703e7bef3d0e79d62e24332ee739a452af62a  ./source/COPYING.libusb.LGPL-2.1
 ab15fd526bd8dd18a9e77ebc139656bf4d33e97fc7238cd11bf60e2b9b8666c6  ./source/COPYING.rtl-sdr.GPL-2.0
 b9bd7b27e3bde2c40dfb35c5d5e2a5b2355d87d43dd2846d0b27228621bc098c  ./source/build_win.sh

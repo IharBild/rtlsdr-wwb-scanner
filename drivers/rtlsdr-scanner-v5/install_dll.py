@@ -23,8 +23,7 @@ TAG = 'scanner-v5'
 
 PROBE = r'''
 import ctypes, sys
-from rtlsdr import librtlsdr as L
-lib = L.librtlsdr
+from rtlsdr.librtlsdr import librtlsdr as lib   # rtlsdr.librtlsdr in the package is the DLL itself
 path = ''
 if sys.platform == 'win32':
     buf = ctypes.create_unicode_buffer(32768)

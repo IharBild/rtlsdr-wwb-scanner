@@ -116,7 +116,7 @@ librtlsdr.rtlsdr_get_build_info = f
 @pytest.mark.skipif(sys.platform == 'win32', reason='uses a fake pyrtlsdr (Linux path lookup)')
 def test_install_and_rollback(tmpdir):
     pkg = tmpdir.mkdir('fake').mkdir('rtlsdr')
-    pkg.join('__init__.py').write('')
+    pkg.join('__init__.py').write('from .librtlsdr import librtlsdr\n')   # as in pyrtlsdr
     pkg.join('librtlsdr.py').write(FAKE_RTLSDR)
     dll = tmpdir.join('librtlsdr.dll')
     dll.write_binary(b'old dll scanner-v4')
