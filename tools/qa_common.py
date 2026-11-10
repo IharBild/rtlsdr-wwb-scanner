@@ -55,6 +55,7 @@ MARKERS = [
     ('V20.6', 'scanner/gain_profile.py', 'def suggest'),
     ('V20.7', 'ui/pyside/qml/InfoTip.qml', 'V20.7'),
     ('V20.7.1', 'ui/pyside/scanner.py', "-> '10.11 18:18'"),
+    ('V20.7.2', 'ui/pyside/qml/InfoTip.qml', 'V20.7.2'),
 ]
 
 

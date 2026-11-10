@@ -49,6 +49,12 @@ Control {
         text: root.text
         delay: 0
         timeout: 20000
+        // V20.7.2: right above the "i", centred on it; near a window edge the
+        // popup is pushed inside (margins)
+        parent: root
+        margins: 6
+        x: Math.round((root.width - width) / 2)
+        y: -height - 6
         contentItem: Label {
             text: tip.text
             wrapMode: Text.Wrap

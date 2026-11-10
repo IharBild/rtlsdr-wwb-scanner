@@ -41,6 +41,13 @@ def main():
             si = [o for o in win.findChildren(QtCore.QObject) if o.metaObject().indexOfMethod('suggestGain(bool)') >= 0]
             print('suggest gain: scanner gain', si[0].property('gain') if si else None,
                   win.findChild(QtCore.QObject, 'calibrationLabel').property('text')[:40])
+    tipn = os.environ.get('SHOT_INFOTIP')        # V20.7.2: show the n-th (i) tip
+    if tipn:
+        qa_ui.pump(app, 0.5)
+        tips = [o for o in win.findChildren(QtCore.QObject) if o.objectName() == 'infoTip']
+        if tips:
+            tips[int(tipn) % len(tips)].setProperty('visible', True)
+        qa_ui.pump(app, 0.5)
     if os.environ.get('SHOT_THEME_DIALOG'):
         d = [o for o in win.findChildren(QtCore.QObject) if o.property('title') == 'Theme']
         if d:
