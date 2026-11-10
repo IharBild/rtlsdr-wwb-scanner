@@ -2,6 +2,7 @@
 import csv
 import glob
 import json
+import io
 import os
 import subprocess
 import sys
@@ -16,7 +17,7 @@ SCRIPT = os.path.join(os.path.dirname(HERE), 'tools', 'gain_survey.py')
 def test_survey_runs_and_saves_everything(tmpdir):
     tools = tmpdir.mkdir('kit')
     script = str(tools.join('gain_survey.py'))
-    with open(SCRIPT) as src, open(script, 'w') as dst:
+    with io.open(SCRIPT, encoding='utf-8') as src, io.open(script, 'w', encoding='utf-8') as dst:
         dst.write(src.read())
     os.symlink(HERE, str(tools.join('tests')))
     env = dict(os.environ, PYTHONPATH=os.pathsep.join(
@@ -31,10 +32,10 @@ def test_survey_runs_and_saves_everything(tmpdir):
     for want in ('levels.csv', 'psd.npz', 'meta.json', 'console.txt', 'summary.txt'):
         assert any(n.endswith(want) for n in names), names
     d = zips[0][:-4]
-    meta = json.load(open(os.path.join(d, 'meta.json')))
+    meta = json.load(io.open(os.path.join(d, 'meta.json'), encoding='utf-8'))
     tiles = [30.0 + 150 * k for k in range(5)]            # 30 ... 630
     assert meta['tiles_done'] == len(tiles) and meta['errors'] == 0
-    rows = list(csv.DictReader(open(os.path.join(d, 'levels.csv'))))
+    rows = list(csv.DictReader(io.open(os.path.join(d, 'levels.csv'), encoding='utf-8', newline='')))
     assert len(rows) == len(tiles) * len(meta['gains']) * 2
     z = np.load(os.path.join(d, 'psd.npz'))
     assert z['db'].shape[:3] == (len(tiles), 2, len(meta['gains']))

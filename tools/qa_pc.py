@@ -40,6 +40,7 @@ PY = sys.executable
 KNOWN_DLL = {
     '2ade1fa9a41e7dbc737ff865b9389e205c85abaa8e94ca96ba48698dcabeba89': 'scanner-v4 x64 (cda6b29)',
     '31bdf1a8fcd969c1aa14854f6fdecc56ad9ea693aace8aca5d14f4738f23429f': 'scanner-v4 x86 (cda6b29)',
+    'a6616ed2829e1569e197f2039a1fc0aa296c0b5dae160f5951d45ee0e920bf73': 'scanner-v5 x64 (fa7729d, I2C retry)',
 }
 
 # qa_hw check -> category of the methodology

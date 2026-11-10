@@ -1,6 +1,7 @@
 """V20.6: DLL scanner-v5 (tuner I2C retries) - the scanner side; calibration
 tolerance 4 dB (gain survey 10.11.2026: real steps 3.1-3.9 dB off nominal)."""
 import ctypes
+import io
 import os
 import subprocess
 import sys
@@ -253,7 +254,8 @@ def test_profile_from_simulated_surveys(tmpdir):
     """gain_survey --analyze on two simulated surveys: one band per 150 MHz."""
     kit = tmpdir.mkdir('kit')
     script = str(kit.join('gain_survey.py'))
-    with open(os.path.join(os.path.dirname(HERE), 'tools', 'gain_survey.py')) as src, open(script, 'w') as dst:
+    with io.open(os.path.join(os.path.dirname(HERE), 'tools', 'gain_survey.py'), encoding='utf-8') as src, \
+            io.open(script, 'w', encoding='utf-8') as dst:
         dst.write(src.read())
     os.symlink(HERE, str(kit.join('tests')))
     env = dict(os.environ, PYTHONPATH=os.pathsep.join(
@@ -271,7 +273,7 @@ def test_profile_from_simulated_surveys(tmpdir):
     text = r.stdout.decode('utf-8', 'replace')
     assert r.returncode == 0, text[-2000:]
     import json
-    p = json.load(open(out))
+    p = json.load(io.open(out, encoding='utf-8'))
     assert [(b['lo'], b['hi']) for b in p['bands']] == [(470, 560), (560, 700)]
     for b in p['bands']:
         assert len(b['loss']) == len(p['gains']) == len(b['clip'])
