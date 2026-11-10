@@ -224,3 +224,38 @@ def test_keep_awake_does_nothing_elsewhere(monkeypatch):
 
 def test_survey_runs_at_the_top_gain():
     assert gain_cal.SURVEY_GAIN_DB == GAINS[-1]
+
+
+# --- V20.5.3: LTE anchors (user's table 10.11: "+5.1 dB" for a 0.8 dB step) ---
+
+def _rows(level_of_gain, clip=0.0):
+    rows = []
+    for g in GAINS:
+        p = np.full(400, 1e-9)
+        p[100:140] = 1e-9 * 10 ** (level_of_gain(g) / 10.)
+        rows.append((g, p, clip))
+    return rows
+
+
+def test_a_step_the_two_passes_disagree_on_is_not_used():
+    up = _rows(lambda g: 30 + g)
+    down = _rows(lambda g: 30 + g + (4.3 if g >= 37.2 else 0.))    # power jumped during the sweep
+    t = gain_cal.build_table([600e6], [[up, down]], GAINS)
+    steps = t['groups'][0]['steps']
+    i = GAINS.index(37.2) - 1
+    assert steps[i] is None
+    assert steps[i - 1] == pytest.approx(GAINS[i] - GAINS[i - 1], abs=0.01)
+
+
+def test_a_step_far_from_nominal_is_not_used():
+    lvl = lambda g: 30 + g + (4.3 if g >= 37.2 else 0.)          # the same in both passes
+    t = gain_cal.build_table([600e6], [[_rows(lvl), _rows(lvl)]], GAINS)
+    assert t['groups'][0]['steps'][GAINS.index(37.2) - 1] is None
+
+
+def test_real_steps_within_3_db_are_kept():
+    # safety: the user's V4 really differs by up to ~2.7 dB per step
+    lvl = lambda g: 30 + g + (2.5 if g >= 43.9 else 0.)
+    t = gain_cal.build_table([600e6], [[_rows(lvl), _rows(lvl)]], GAINS)
+    i = GAINS.index(43.9) - 1
+    assert t['groups'][0]['steps'][i] == pytest.approx(GAINS[i + 1] - GAINS[i] + 2.5, abs=0.01)

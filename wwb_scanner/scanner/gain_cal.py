@@ -55,8 +55,13 @@ STRONG_DB = 20.          # survey: a bin this much over the floor counts for the
 MIN_SNR_DB = 15.         # a bin must stand this much over the noise at both gains
 MIN_BINS = 5             # bins needed for one step
 CLIP_LIMIT = 1e-2        # a reading with more clipped samples is not used (1 %: level off < 0.2 dB)
-STEP_TOLERANCE_DB = 6.   # a step further than this above nominal is ignored
-STEP_MIN_SHARE = 0.2     # ... and one under 20 % of nominal (minus 0.5 dB)
+# V20.5.3: on the user's V4 the real steps differ from nominal by up to
+# ~2.7 dB; LTE anchors (load-dependent power) gave a "5.1 dB" step for 0.8
+# nominal. Every tile is read with the gain going up and then down; a step
+# counts only when both passes agree, and not further than STEP_MAX_DEV_DB
+# from nominal.
+STEP_MAX_DEV_DB = 3.
+PASS_AGREE_DB = 1.
 GROUP_MIN_SHARE = 0.3    # a group whose measured steps add up to under 30 % of nominal is dropped
 READ_SAMPLES = 65536
 DISCARD_SAMPLES = 16384
@@ -229,14 +234,26 @@ def tile_psd(x, fs):
     return p[keep][o]
 
 
-def sweep(sdr, fc, gains, fs, run=None, budget_s=None):
-    """Read one tile at every gain. Returns [(gain_set, psd, clip_ratio)]."""
+def sweep(sdr, fc, gains, fs, run=None, budget_s=None, passes=2):
+    """Read one tile at every gain: up, then (V20.5.3) down again.
+    Returns one list of rows [(gain_set, psd, clip_ratio)] per pass, each in
+    the order of ``gains``."""
+    out = []
+    t0 = time.monotonic()
+    for n in range(passes):
+        order = list(gains) if n % 2 == 0 else list(gains)[::-1]
+        rows = _sweep_once(sdr, fc, order, fs, run, budget_s, t0, tune=(n == 0))
+        out.append(rows if n % 2 == 0 else rows[::-1])
+    return out
+
+
+def _sweep_once(sdr, fc, gains, fs, run, budget_s, t0, tune=True):
     from wwb_scanner.scanner.sample_processing import clip_ratio, run_with_timeout, \
         TUNE_TIMEOUT, READ_TIMEOUT
     call = run or (lambda f, *a: run_with_timeout(f, READ_TIMEOUT, *a))
-    run_with_timeout(sdr.set_center_freq, TUNE_TIMEOUT, fc)
+    if tune:
+        run_with_timeout(sdr.set_center_freq, TUNE_TIMEOUT, fc)
     rows = []
-    t0 = time.monotonic()
     for g in gains:
         run_with_timeout(setattr, TUNE_TIMEOUT, sdr, 'gain', g)
         try:
@@ -251,13 +268,31 @@ def sweep(sdr, fc, gains, fs, run=None, budget_s=None):
     return rows
 
 
+def _passes(s):
+    """An anchor's sweep: a list of passes (V20.5.3) or one list of rows."""
+    return s if s and isinstance(s[0], list) else [s]
+
+
 def noise_floors(sweeps, gains):
     """Per gain: the 10th percentile of all bins of all anchors (dB)."""
     out = []
     for i in range(len(gains)):
-        vals = [to_db(rows[i][1]) for rows in sweeps if len(rows) > i]
+        vals = [to_db(rows[i][1]) for s in sweeps for rows in _passes(s) if len(rows) > i]
         out.append(float(np.percentile(np.concatenate(vals), 10)) if vals else np.nan)
     return np.array(out)
+
+
+def pass_steps(passes, floors):
+    """V20.5.3: steps of one tile from both passes; a step stays only where
+    the passes agree within PASS_AGREE_DB (a signal whose power changed
+    during the sweep - LTE, GSM traffic - gives different steps)."""
+    st = [anchor_steps(rows, floors) for rows in passes]
+    if len(st) == 1:
+        return st[0]
+    a, b = st[0], st[1]
+    with np.errstate(invalid='ignore'):
+        agree = np.isfinite(a) & np.isfinite(b) & (np.abs(a - b) <= PASS_AGREE_DB)
+    return np.where(agree, (a + b) / 2., np.nan)
 
 
 def anchor_steps(rows, floors):
@@ -282,7 +317,7 @@ def build_table(anchors, sweeps, gains, meta=None):
     gains = [float(g) for g in gains]
     nominal = np.diff(gains)
     floors = noise_floors(sweeps, gains)
-    per_anchor = [anchor_steps(rows, floors) for rows in sweeps]
+    per_anchor = [pass_steps(_passes(s), floors) for s in sweeps]
     groups = []
     measured = 0
     worst = None
@@ -295,8 +330,7 @@ def build_table(anchors, sweeps, gains, meta=None):
         with np.errstate(all='ignore'), warnings.catch_warnings():
             warnings.simplefilter('ignore', RuntimeWarning)     # all-NaN columns (unmeasured steps)
             med = np.nanmedian(st, axis=0) if st.size else np.full(len(nominal), np.nan)
-        ok = np.isfinite(med) & (med >= STEP_MIN_SHARE * nominal - 0.5) & \
-            (med <= nominal + STEP_TOLERANCE_DB)
+        ok = np.isfinite(med) & (np.abs(med - nominal) <= STEP_MAX_DEV_DB)
         steps = [float(round(m, 2)) if o else None for m, o in zip(med, ok)]
         if not any(s is not None for s in steps):
             continue

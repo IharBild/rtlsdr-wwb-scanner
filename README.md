@@ -43,7 +43,7 @@ Current release: **[v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releas
   measurable" (red; the data stays in the file, so WWB keeps away from it). Dips
   inside a TV multiplex or DAB block are not counted as lost sensitivity.
 - **Real gain steps** (Scan settings > *Calibrate gain steps...*, antenna connected,
-  about 1 minute; survey 30-1200 MHz at the top gain, a USB error re-opens the dongle and
+  about 2 minutes; survey 30-1200 MHz at the top gain, every tile read up and down, a USB error re-opens the dongle and
   skips a tile): the steps of the tuner's gain table are not the nominal ones and
   differ by frequency (on one V4: 49.6 -> 33.8 dB gave ~8 dB at 200 MHz, ~18 dB at
   900 MHz). The calibration measures them on FM / DAB / TV / mobile signals; auto gain

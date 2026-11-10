@@ -51,6 +51,7 @@ MARKERS = [
     ('V20.5', 'scanner/gain_cal.py', 'def real_drop'),
     ('V20.5.1', 'scanner/gain_cal.py', 'def _reopen'),
     ('V20.5.2', 'scanner/main.py', 'def keep_awake'),
+    ('V20.5.3', 'scanner/gain_cal.py', 'def pass_steps'),
 ]
 
 
