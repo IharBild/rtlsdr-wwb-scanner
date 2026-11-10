@@ -50,12 +50,12 @@ Dialog {
 
     Connections {
         target: root.scanner
-        onCalibrationChanged: root.updateCalibrationText()
+        function onCalibrationChanged() { root.updateCalibrationText(); }
     }
     Connections {
         target: root.scanner
         // 'running' has no change signal for bindings: follow the run state
-        onScannerRunState: {
+        function onScannerRunState() {
             calibrateBtn.enabled = !root.scanner.running;
             calibrateGainsBtn.enabled = !root.scanner.running;
             suggestGainBtn.enabled = !root.scanner.running;
@@ -286,6 +286,9 @@ Dialog {
                         }
                         Label {
                             id: calibrationLbl
+                            ToolTip.visible: truncated && hoverArea_calibrationLbl.containsMouse
+                            ToolTip.text: text
+                            MouseArea { id: hoverArea_calibrationLbl; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
                             objectName: 'calibrationLabel'
                             property string tip
                             Layout.fillWidth: true
@@ -318,6 +321,9 @@ Dialog {
                         }
                         Label {
                             id: stepsLbl
+                            ToolTip.visible: truncated && hoverArea_stepsLbl.containsMouse
+                            ToolTip.text: text
+                            MouseArea { id: hoverArea_stepsLbl; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
                             objectName: 'gainStepsLabel'
                             Layout.fillWidth: true
                             Layout.maximumWidth: 330

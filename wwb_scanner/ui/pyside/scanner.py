@@ -131,7 +131,11 @@ STEPS_WARN_DB = 6.     # a table this far off nominal: an anchor was probably co
 
 
 def _short_date(text):
-    return str(text or '?')[:16]
+    """'2026-11-10 18:18:05' -> '10.11 18:18'"""
+    t = str(text or '')
+    if len(t) >= 16 and t[4] == '-' and t[7] == '-':
+        return '%s.%s %s' % (t[8:10], t[5:7], t[11:16])
+    return t[:16] or '?'
 
 
 def _age_days(text):
@@ -154,11 +158,11 @@ def _floor_info(cleanup, gain, sample_rate):
     m = prof.get('meta', {})
     created = m.get('created')
     ext = prof.get('external') or []
-    parts = [_short_date(created), '%.1f dB' % float(m.get('gain', gain)), '%d own spurs' % len(prof.get('spurs', []))]
+    parts = [_short_date(created), '%.1f dB' % float(m.get('gain', gain)), '%d spurs' % len(prof.get('spurs', []))]
     state = 'ok'
     age = _age_days(created)
     if ext:
-        parts.append('%d outside signal(s)' % len(ext))
+        parts.append('%d outside' % len(ext))
         state = 'warn'
     if age is not None and age > CAL_OLD_DAYS:
         parts.append('%d days old' % age)
@@ -176,13 +180,13 @@ def _steps_info(gain_cal, sample_rate):
                 'stepsTip': gain_cal.status_text(sample_rate)}
     worst = table.get('worst') or {}
     err = float(worst.get('err', 0.) or 0.)
-    parts = [_short_date(table.get('date')), '%d of %d steps' % (table.get('measured', 0), table.get('total', 0))]
+    parts = [_short_date(table.get('date')), '%d/%d steps' % (table.get('measured', 0), table.get('total', 0))]
     state = 'ok'
     if abs(err) > STEPS_WARN_DB:
-        parts.append('%+.1f dB off nominal at %.0f MHz - calibrate again' % (err, worst.get('f_mhz', 0.)))
+        parts.append('%+.1f dB at %.0f MHz - calibrate again' % (err, worst.get('f_mhz', 0.)))
         state = 'warn'
     else:
-        parts.append('within %.1f dB of nominal' % abs(err))
+        parts.append('\u00b1%.1f dB of nominal' % abs(err))
     tip = gain_cal.status_text(sample_rate)
     if state == 'warn':
         tip += (' So large a difference usually means a strong signal was compressed during the '
