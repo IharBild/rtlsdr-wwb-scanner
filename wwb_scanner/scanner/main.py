@@ -1,4 +1,5 @@
 import threading
+import sys
 import time
 
 import numpy as np
@@ -304,6 +305,25 @@ class ScannerBase(JSONMixin):
         data = kwargs.get('sample_collection')
         self.sample_collection = SampleCollection.from_json(data, scanner=self)
 
+def keep_awake(on):
+    """V20.5.2: Windows must not go to sleep during a scan. On the user's
+    laptop two unattended QA runs had one tile "waiting" 458 s and 212 s
+    with no USB timeout firing - what a sleeping computer looks like (the
+    process is frozen, the clock goes on); after waking the USB failed.
+    SetThreadExecutionState works per thread: call it in the scan thread.
+    Does nothing on other systems."""
+    if sys.platform != 'win32':
+        return False
+    try:
+        import ctypes
+        ES_CONTINUOUS, ES_SYSTEM_REQUIRED = 0x80000000, 0x00000001
+        flags = ES_CONTINUOUS | (ES_SYSTEM_REQUIRED if on else 0)
+        return bool(ctypes.windll.kernel32.SetThreadExecutionState(flags))
+    except Exception:
+        logger.exception('keep_awake')
+        return False
+
+
 class Scanner(ScannerBase):
     '''
         params:
@@ -457,10 +477,14 @@ class Scanner(ScannerBase):
         if stuck_usb_calls():
             self._refused = True
             return super(Scanner, self).run_scan()
-        with self.sdr_wrapper:
-            if self.sdr is None:
-                self._wait_for_dongle()
-            super(Scanner, self).run_scan()
+        keep_awake(True)
+        try:
+            with self.sdr_wrapper:
+                if self.sdr is None:
+                    self._wait_for_dongle()
+                super(Scanner, self).run_scan()
+        finally:
+            keep_awake(False)
     def _wait_for_dongle(self):
         """V20.4: just after a USB error the dongle is "not found or busy"
         for a few seconds. Try again for up to REOPEN_WAIT_S before failing."""

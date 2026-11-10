@@ -409,7 +409,8 @@ class SampleSet(JSONMixin):
             return
         el = time.monotonic() - t0
         if el > TILE_BUDGET_S:
-            raise SdrTimeout('the dongle needed %.0f s for one tile (normally 0.1 s): USB problem' % el)
+            raise SdrTimeout('the dongle needed %.0f s for one tile (normally 0.1 s): USB problem '
+                             'or the computer went to sleep' % el)
 
     def abort_scan(self):
         coll = self.collection

@@ -470,6 +470,8 @@ def fm_raster(f, y):
 def tv_edges(f, y, lo=470., hi=790.):
     import numpy as np
     m = (f >= lo) & (f <= hi)
+    if np.count_nonzero(m) < 20:
+        return None                      # V20.5.2: the scan stopped early (PC 10.11 H3)
     ff = f[m]
     sm = np.convolve(y[m], np.ones(5) / 5., 'same')
     rise, fall = [], []
@@ -913,8 +915,11 @@ def h10_gain_steps(lab, s):
     for j in np.argsort(e)[::-1][:400]:
         if e[j] < 20:
             break
-        side = (np.abs(f - f[j]) > 0.35) & (np.abs(f - f[j]) < 0.8)
-        if np.count_nonzero(side) >= 4 and np.median(y[side]) <= y[j] - 20:
+        lo_s = (f < f[j] - 0.35) & (f > f[j] - 0.8)
+        hi_s = (f > f[j] + 0.35) & (f < f[j] + 0.8)
+        # V20.5.2: quiet on BOTH sides (574.275 MHz sat at the edge of a TV multiplex)
+        if np.count_nonzero(lo_s) >= 4 and np.count_nonzero(hi_s) >= 4 and \
+                max(np.median(y[lo_s]), np.median(y[hi_s])) <= y[j] - 20:
             i = int(j)
             break
     if i is None:
@@ -948,7 +953,7 @@ def h10_gain_steps(lab, s):
             lvl = 10 * np.log10(p[k - 2:k + 3].mean()) + (g0 - g)
             # V20.4: signal over the floor of this reading - a signal sunk
             # in the noise at a low gain says nothing about the gain step
-            snr = 10 * np.log10(p[k - 2:k + 3].mean() / np.median(p))
+            snr = 10 * np.log10(p[k - 2:k + 3].mean() / np.percentile(p, 10))   # V20.5.2: TV next to it
             if ref is None:
                 ref = lvl
             rows.append((g, lvl - ref, clip_ratio(x), snr))

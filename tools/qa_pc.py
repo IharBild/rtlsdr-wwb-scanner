@@ -402,7 +402,22 @@ def pc_acceptance(args, out):
 
 # ========================================================================== MAIN
 
+def _keep_awake():
+    """V20.5.2: the PC must not sleep during the ~30 min run (two runs had a
+    tile frozen 458 s / 212 s). The child processes ask for it themselves
+    while they scan; this covers the pauses between them."""
+    if sys.platform != 'win32':
+        return
+    try:
+        import ctypes
+        ctypes.windll.kernel32.SetThreadExecutionState(0x80000000 | 0x00000001)
+        print('Windows: sleep is held off while the checks run', flush=True)
+    except Exception:
+        pass
+
+
 def main():
+    _keep_awake()
     ap = argparse.ArgumentParser(description='Полная проверка программы и донгла на ПК')
     ap.add_argument('--smoke', action='store_true')
     ap.add_argument('--no-antenna', action='store_true')

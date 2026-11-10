@@ -43,14 +43,16 @@ Current release: **[v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releas
   measurable" (red; the data stays in the file, so WWB keeps away from it). Dips
   inside a TV multiplex or DAB block are not counted as lost sensitivity.
 - **Real gain steps** (Scan settings > *Calibrate gain steps...*, antenna connected,
-  about 1 minute; survey 30-1200 MHz, a USB error re-opens the dongle and skips a tile): the steps of the tuner's gain table are not the nominal ones and
+  about 1 minute; survey 30-1200 MHz at the top gain, a USB error re-opens the dongle and
+  skips a tile): the steps of the tuner's gain table are not the nominal ones and
   differ by frequency (on one V4: 49.6 -> 33.8 dB gave ~8 dB at 200 MHz, ~18 dB at
   900 MHz). The calibration measures them on FM / DAB / TV / mobile signals; auto gain
   then scales re-measured tiles by the real step. Without it the nominal steps are used.
 - **USB errors**: after a USB error the dongle is opened again and the scan goes on
   (once per scan); a new scan waits up to 10 s for a dongle that is "not found or
   busy"; a tile that takes over 15 s (normally 0.1 s) stops the scan with a message.
-  File > Export asks first while the scan in the graph is still running.
+  File > Export asks first while the scan in the graph is still running. On Windows the
+  computer is kept from going to sleep while a scan runs.
 - **Bands.** Band presets of Shure systems (PSM 200/300/900/1000, QLX-D, ULX-D, SLX-D,
   Axient Digital, UHF-R, BLX, SLX, PGX, GLX-D) and Sennheiser systems (ew 100 G3/G4,
   ew 300 G4). Scans only the bands of the chosen systems in one run. Each band is marked

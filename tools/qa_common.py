@@ -50,6 +50,7 @@ MARKERS = [
     ('V20.4', 'scanner/sample_processing.py', 'def reopen_dongle'),
     ('V20.5', 'scanner/gain_cal.py', 'def real_drop'),
     ('V20.5.1', 'scanner/gain_cal.py', 'def _reopen'),
+    ('V20.5.2', 'scanner/main.py', 'def keep_awake'),
 ]
 
 

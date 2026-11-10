@@ -198,3 +198,29 @@ def test_tile_that_keeps_failing_is_skipped_and_the_rest_saved(monkeypatch, tmpd
     assert 'not measured' in text, text
     assert ok and gain_cal.load_table(2.4e6) is not None
     assert sum(s.closed_calls for s in made) == 0
+
+
+# --- V20.5.2 ---------------------------------------------------------------
+
+def test_scan_holds_off_windows_sleep(monkeypatch):
+    import ctypes
+    import types
+    from wwb_scanner.scanner import main as m
+    calls = []
+    fake = types.SimpleNamespace(kernel32=types.SimpleNamespace(
+        SetThreadExecutionState=lambda f: calls.append(f) or 1))
+    monkeypatch.setattr(m.sys, 'platform', 'win32')
+    monkeypatch.setattr(ctypes, 'windll', fake, raising=False)
+    assert m.keep_awake(True) and m.keep_awake(False)
+    assert calls == [0x80000001, 0x80000000]
+
+
+def test_keep_awake_does_nothing_elsewhere(monkeypatch):
+    # safety: Linux / macOS untouched
+    from wwb_scanner.scanner import main as m
+    monkeypatch.setattr(m.sys, 'platform', 'linux')
+    assert m.keep_awake(True) is False
+
+
+def test_survey_runs_at_the_top_gain():
+    assert gain_cal.SURVEY_GAIN_DB == GAINS[-1]

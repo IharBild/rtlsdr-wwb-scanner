@@ -41,7 +41,11 @@ logger = logging.getLogger(__name__)
 GAIN_CAL_RANGE_MHZ = (30., 1200.)
 SURVEY_STEP_MHZ = 4.
 SURVEY_WIDTH_MHZ = 0.3
-SURVEY_GAIN_DB = 33.8    # the survey finds the signals; the window's gain may be 0 dB
+# V20.5.2: the survey runs at the TOP gain (the table's last one). A tile
+# that does not clip there can be read at every gain, so the top steps get
+# measured too; at 33.8 dB the "not clipped" tiles clipped at 43.9-49.6 and
+# those steps stayed nominal on the user's V4 (8 of 8 groups).
+SURVEY_GAIN_DB = 49.6
 GROUPS_MHZ = ((30., 100.), (100., 170.), (170., 250.), (250., 400.), (400., 550.),
               (550., 700.), (700., 900.), (900., 1200.))     # above: the 900-1200 group
 REOPEN_WAIT_S = 10.
@@ -287,7 +291,9 @@ def build_table(anchors, sweeps, gains, meta=None):
         if not idx:
             continue
         st = np.array([per_anchor[i] for i in idx])
-        with np.errstate(all='ignore'):
+        import warnings
+        with np.errstate(all='ignore'), warnings.catch_warnings():
+            warnings.simplefilter('ignore', RuntimeWarning)     # all-NaN columns (unmeasured steps)
             med = np.nanmedian(st, axis=0) if st.size else np.full(len(nominal), np.nan)
         ok = np.isfinite(med) & (med >= STEP_MIN_SHARE * nominal - 0.5) & \
             (med <= nominal + STEP_TOLERANCE_DB)
