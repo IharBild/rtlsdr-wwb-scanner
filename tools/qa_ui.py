@@ -773,6 +773,7 @@ def v207_checks(app, win, si):
 def v208_checks(app, win, controls, si, fresh, first_start):
     """V20.8 (audit of 11.11.2026). U29: a first start has the tested settings;
     U30: untouched old factory settings are replaced once, touched ones never;
+    U31: Scan settings fits the window and scrolls to "Suggest gain";
     U32: Start and Calibrate without a dongle say so and leave nothing behind."""
     factory = getattr(ui_scanner, 'FACTORY', None)
     if factory is None:
@@ -819,6 +820,34 @@ def v208_checks(app, win, controls, si, fresh, first_start):
               'replaced %s, stays %s' % (after_old, replaced, again, touched, after_touched))
     except Exception as exc:
         check('U30', False, 'error: %s' % exc)
+    # U31
+    scroller = win.findChild(QtCore.QObject, 'scanSettingsScroller')
+    if scroller is None:
+        check('U31', False, 'no scroll area in Scan settings')
+    else:
+        try:
+            sizes = []
+            for h in (768, 600):
+                win.setHeight(h)
+                pump(app, 0.3)
+                _qml_eval(scroller, 'root.open()')
+                pump(app, 0.5)
+                dlg_h = float(_qml_eval(scroller, 'root.height'))
+                over_h = float(_qml_eval(win, 'window.height'))
+                _qml_eval(scroller, 'scroller.contentY = Math.max(0, scroller.contentHeight - scroller.height)')
+                pump(app, 0.2)
+                y = float(_qml_eval(scroller, 'suggestGainBtn.mapToItem(scroller, 0, 0).y'))
+                view_h = float(_qml_eval(scroller, 'scroller.height'))
+                btn_h = float(_qml_eval(scroller, 'suggestGainBtn.height'))
+                top = float(_qml_eval(scroller, 'root.y'))
+                sizes.append((h, dlg_h, over_h, top, 0 <= y and y + btn_h <= view_h + 1))
+                _qml_eval(scroller, 'root.close()')
+                pump(app, 0.3)
+            ok = all(d <= o and t >= 0 and vis for _h, d, o, t, vis in sizes)
+            check('U31', ok, '; '.join('window %d: dialog %.0f of %.0f px, top %.0f, "Suggest gain" reachable %s'
+                                       % x for x in sizes))
+        except Exception as exc:
+            check('U31', False, 'error: %s' % exc)
     # U32 (last: it takes the dongle away from the window)
     try:
         from wwb_scanner.ui.pyside import status as ui_status

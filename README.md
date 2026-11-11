@@ -84,6 +84,8 @@ Current release: **[v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releas
     470-700 MHz), window 128, 8192 x 20, overlap 0.5. Settings that are still exactly the
     old six values are replaced once, with a line in the status bar; anything you changed
     stays. All of them remain adjustable in Device Settings and Scan settings.
+  - Scan settings is never taller than the window, scrolls, and opens in the middle: on a
+    1366x768 laptop the calibration buttons and "Suggest gain" were cut off.
 - **Tuner I2C errors** (`i2c wr failed`, LIBUSB_ERROR_PIPE): the driver build scanner-v5
   (`drivers/rtlsdr-scanner-v5`, `python install_dll.py`) repeats a failed tuner transfer up
   to 3 times with the I2C repeater switched on again; the console prints how many were

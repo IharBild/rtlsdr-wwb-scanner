@@ -90,8 +90,32 @@ Dialog {
     onSampleRateChanged: { getFreqResolution() }
     onWindowSizeChanged: { getFreqResolution() }
 
-    ColumnLayout {
+    // V20.8: the dialog is about 890 px tall and had no scrolling: on a
+    // 1366x768 laptop (or 1080p with 125 % Windows scaling) the calibration
+    // block and "Suggest gain" were cut off and could not be reached. Now it
+    // is never taller than the window, the content scrolls, and it opens in
+    // the middle of the window (it used to open in the top left corner).
+    anchors.centerIn: Overlay.overlay
+    height: Math.min(implicitHeight, Overlay.overlay ? Overlay.overlay.height - 16 : implicitHeight)
+
+    Flickable {
+        id: scroller
+        objectName: 'scanSettingsScroller'
         anchors.fill: parent
+        clip: true
+        implicitWidth: settingsColumn.implicitWidth + 16
+        implicitHeight: settingsColumn.implicitHeight
+        contentWidth: width
+        contentHeight: settingsColumn.implicitHeight
+        boundsBehavior: Flickable.StopAtBounds
+        ScrollBar.vertical: ScrollBar {
+            policy: scroller.contentHeight > scroller.height + 1 ? ScrollBar.AlwaysOn : ScrollBar.AlwaysOff
+        }
+
+    // (the lines of the column keep their old indentation)
+    ColumnLayout {
+        id: settingsColumn
+        width: scroller.width - 16
 
         GroupBox {
             title: 'Sweep Parameters'
@@ -379,6 +403,7 @@ Dialog {
             }
         }
     }
+    }   // Flickable (V20.8)
 
     Dialog {
         id: calibrateGainsConfirm
