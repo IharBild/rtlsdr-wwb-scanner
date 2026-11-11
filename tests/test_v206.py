@@ -257,7 +257,9 @@ def test_profile_from_simulated_surveys(tmpdir):
     with io.open(os.path.join(os.path.dirname(HERE), 'tools', 'gain_survey.py'), encoding='utf-8') as src, \
             io.open(script, 'w', encoding='utf-8') as dst:
         dst.write(src.read())
-    os.symlink(HERE, str(kit.join('tests')))
+    # a copy: os.symlink needs a privilege an ordinary Windows user does not have
+    import sim
+    sim.copy_tests(str(kit.join('tests')))
     env = dict(os.environ, PYTHONPATH=os.pathsep.join(
         [os.path.dirname(HERE)] + [p for p in [os.environ.get('PYTHONPATH')] if p]))
     for mode in ('--antenna', '--no-antenna'):

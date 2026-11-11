@@ -4,6 +4,8 @@ import glob
 import json
 import io
 import os
+
+import sim
 import subprocess
 import sys
 import zipfile
@@ -19,7 +21,8 @@ def test_survey_runs_and_saves_everything(tmpdir):
     script = str(tools.join('gain_survey.py'))
     with io.open(SCRIPT, encoding='utf-8') as src, io.open(script, 'w', encoding='utf-8') as dst:
         dst.write(src.read())
-    os.symlink(HERE, str(tools.join('tests')))
+    # a copy: os.symlink needs a privilege an ordinary Windows user does not have
+    sim.copy_tests(str(tools.join('tests')))
     env = dict(os.environ, PYTHONPATH=os.pathsep.join(
         [os.path.dirname(HERE)] + [p for p in [os.environ.get('PYTHONPATH')] if p]))
     r = subprocess.run([sys.executable, script, '--antenna', '--simulate', '--step', '150', '--hi', '650'],

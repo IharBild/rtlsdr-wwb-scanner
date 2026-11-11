@@ -374,3 +374,12 @@ def run_scan(monkeypatch, tmpdir, start, end, sdr_kwargs=None, lock_lib=False,
 def spectrum_arrays(scanner):
     sd = scanner.spectrum.sample_data
     return np.asarray(sd.frequency, float), np.asarray(sd['dbFS'], float)
+
+
+def copy_tests(dst):
+    """A copy of this tests folder (for a kit laid out in a temporary folder).
+    os.symlink fails on Windows without the symbolic link privilege."""
+    import shutil
+    here = os.path.dirname(os.path.abspath(__file__))
+    shutil.copytree(here, dst, ignore=shutil.ignore_patterns('__pycache__', '*.pyc', 'reference', 'data'))
+    return dst

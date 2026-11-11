@@ -266,7 +266,11 @@ WINDOW = """
     from PySide2.QtWidgets import QApplication
     import sim
     from wwb_scanner.scanner import sdrwrapper, sample_processing
+    from wwb_scanner import scan_dll
     from wwb_scanner.utils import dbstore
+    # the simulator is not a device of the real DLL: on a PC with the scanner
+    # DLL its extra calls got the simulator as a device (access violation)
+    scan_dll._cache['lib'] = None
     from wwb_scanner.ui.pyside import scanner as S, graph as G
     home = os.environ['HOME']
     dbstore.DBStore.DB_PATH = os.path.join(home, 'db.json')
@@ -322,11 +326,17 @@ def test_start_without_a_dongle_says_so_and_leaves_nothing_behind():
         return made[-1]
     sdrwrapper.RtlSdr = factory
     si.deviceInfo = Dev()
-    si.start(); pump(0.05)
-    conf = si.scanner.config
+    confs = []
+    build = si.build_scan_config
+    def recorded():
+        confs.append(build())
+        return confs[-1]
+    si.build_scan_config = recorded     # a fast PC ends this scan before the next line runs
+    si.start()
+    wait_done(si)
+    conf = confs[-1]
     assert list(conf.scan_range) == [470., 474.] and not conf.get('gain_calibration'), conf.scan_range
     assert si.spectrum.name.startswith('470-474 MHz')
-    wait_done(si)
     assert si.spectrum.sample_data.size == 161
     print('ALL_OK')
     """)
@@ -364,7 +374,7 @@ def test_busy_dongle_keeps_its_message_leaves_no_thread_and_no_stale_graph():
     graphs = []
     for n in range(3):
         del said[:]
-        si.start(); pump(0.02)
+        si.start()
         assert si.running
         g = G.LiveSpectrumGraphData()           # what main.qml creates for the scan
         g.scanner = si
@@ -381,7 +391,7 @@ def test_busy_dongle_keeps_its_message_leaves_no_thread_and_no_stale_graph():
     sdrwrapper.RtlSdr = lambda serial_number=None: sim.FakeRtlSdr(serial_number=serial_number,
                                                                   air=sim.Air(noise=0.02))
     del said[:]
-    si.start(); pump(0.02)
+    si.start()
     g = G.LiveSpectrumGraphData(); g.scanner = si
     wait_done(si)
     assert not said, said
