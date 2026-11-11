@@ -27,8 +27,11 @@ import sim
 from wwb_scanner.file_handlers import BaseImporter
 from wwb_scanner.file_handlers import exporters, importers
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-QML = os.path.join(os.path.dirname(HERE), 'wwb_scanner', 'ui', 'pyside', 'qml')
+import wwb_scanner
+
+# the QML of the package under test (the repository, or the installed copy
+# when the tests run from the qa-kit folder)
+QML = os.path.join(os.path.dirname(os.path.abspath(wwb_scanner.__file__)), 'ui', 'pyside', 'qml')
 
 
 # ----------------------------------------------------------------- B3 (core)
