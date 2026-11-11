@@ -158,7 +158,8 @@ class BaseExporter(object):
         raise NotImplementedError('Method must be implemented by subclasses')
     def write_file(self):
         s = self.build_data()
-        with open(self.filename, 'w') as f:
+        # V20.8: always UTF-8, not the code page of this Windows
+        with open(self.filename, 'w', encoding='utf-8') as f:
             f.write(s)
 
 class NumpyExporter(BaseExporter):
@@ -192,7 +193,11 @@ class CSVExporter(BaseExporter):
         s = self.build_data()
         # newline='' stops Python from translating '\r\n' again on Windows
         # (which produced '\r\r\n')
-        with open(self.filename, 'w', newline='') as f:
+        # V20.8: UTF-8. The scan name goes into the "Receiver;" line of a WSM
+        # file; with the code page of Windows (cp1251, cp1250...) a name with
+        # other letters stopped the export ('charmap' codec can't encode).
+        # A file with a plain Latin name is byte for byte as before.
+        with open(self.filename, 'w', encoding='utf-8', newline='') as f:
             f.write(s)
     @property
     def is_khz(self):
@@ -355,7 +360,11 @@ class BaseWWBExporter(BaseExporter):
         s = doc.toprettyxml(encoding='UTF-8')
         if isinstance(s, bytes):
             s = s.decode('UTF-8')
-        with open(self.filename, 'w') as f:
+        # V20.8: the header says UTF-8, so write UTF-8. The file was written in
+        # the code page of Windows: a folder with Cyrillic or Polish letters
+        # (the path is in the name attribute) gave a file that is not XML, or
+        # no file at all. Line ends stay as before (text mode).
+        with open(self.filename, 'w', encoding='utf-8') as f:
             f.write(s)
 
 

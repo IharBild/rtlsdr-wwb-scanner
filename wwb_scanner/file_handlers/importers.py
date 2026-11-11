@@ -12,6 +12,27 @@ from wwb_scanner.scan_objects import Spectrum
 
 logger = logging.getLogger(__name__)
 
+
+def decode_text(raw):
+    """V20.8: the text of a scan file whatever program wrote it. UTF-8 first
+    (with or without the byte order mark), then the code page of this
+    computer (files of older versions of this program, WSM files with
+    umlauts), then Latin-1, which reads any byte. Before this a file was read
+    in the code page of Windows only: a UTF-8 file failed or was not
+    recognised. Line ends become '\n' as in text mode."""
+    import locale
+    text = None
+    for enc in ('utf-8-sig', locale.getpreferredencoding(False) or 'latin-1'):
+        try:
+            text = raw.decode(enc)
+            break
+        except (UnicodeDecodeError, LookupError):
+            continue
+    if text is None:
+        text = raw.decode('latin-1')
+    return text.replace('\r\n', '\n').replace('\r', '\n')
+
+
 class BaseImporter(object):
     def __init__(self, **kwargs):
         self.spectrum = Spectrum()
@@ -45,9 +66,9 @@ class BaseImporter(object):
                              % (os.path.basename(str(self.filename)), type(exc).__name__, exc))
         return self.spectrum
     def load_file(self):
-        with open(self.filename, 'r') as f:
-            s = f.read()
-        return s
+        with open(self.filename, 'rb') as f:
+            raw = f.read()
+        return decode_text(raw)
     def parse_file_data(self):
         raise NotImplementedError('Method must be implemented by subclasses')
 

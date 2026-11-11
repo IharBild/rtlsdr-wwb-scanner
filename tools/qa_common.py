@@ -57,6 +57,7 @@ MARKERS = [
     ('V20.7.1', 'ui/pyside/scanner.py', "-> '10.11 18:18'"),
     ('V20.7.2', 'ui/pyside/qml/InfoTip.qml', 'V20.7.2'),
     ('V20.7.3', 'scanner/cleanup.py', 'CAL_FLOOR_MAX_DB'),
+    ('V20.8', 'ui/pyside/scanner.py', 'def start_problem'),
 ]
 
 

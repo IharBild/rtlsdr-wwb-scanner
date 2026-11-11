@@ -136,8 +136,13 @@ ApplicationWindow {
             onOpenBands: bandsDialog.open()
             onScannerState: {
                 if (state) {
+                    // V20.8: a dongle plugged in after the program started
+                    if (!device_config.device)
+                        device_config.refreshDevices();
                     scanner.start();
-                    chartWrapper.newLiveScan(scanner);
+                    // V20.8: no graph for a scan that did not start
+                    if (scanner.running)
+                        chartWrapper.newLiveScan(scanner);
                 } else {
                     scanner.stop();
                 }
@@ -337,6 +342,43 @@ ApplicationWindow {
             wrapMode: Text.Wrap
         }
     }
+
+    // V20.8: a fresh installation up to V20.7.3 started with 2048 kHz, gain
+    // 0 dB, window 128, 8192 x 20 samples and overlap 0.5 - not what the fork
+    // is tested with, and 30-37 dB less sensitive in UHF. Settings that are
+    // still exactly those six values are replaced once by the tested ones;
+    // anything the user has changed is left alone.
+    Settings {
+        id: defaultsSettings
+        category: 'Defaults'
+        property int version: 0
+    }
+    function replaceOldFactorySettings() {
+        if (defaultsSettings.version >= 208)
+            return false;
+        defaultsSettings.version = 208;
+        var f = scanner.factorySettings(), o = f.old, n = f.now;
+        function same(a, b) { return Math.abs(a - b) < 1e-6; }
+        if (!(same(device_config.sampleRate, o.sampleRate)
+              && same(device_config.gain, o.gain)
+              && scanConfig.windowSize == o.windowSize
+              && scanConfig.samplesPerSweep == o.samplesPerSweep
+              && scanConfig.sweepsPerScan == o.sweepsPerScan
+              && same(scanConfig.sweepOverlapRatio, o.sweepOverlapRatio)))
+            return false;
+        device_config.sampleRate = n.sampleRate;
+        device_config.setGain(n.gain);
+        scanConfig.windowSize = n.windowSize;
+        scanConfig.samplesPerSweep = n.samplesPerSweep;
+        scanConfig.sweepsPerScan = n.sweepsPerScan;
+        scanConfig.sweepOverlapRatio = n.sweepOverlapRatio;
+        scanner.statusNote('Settings of the first installation replaced by the tested ones: '
+                           + n.sampleRate + ' kHz, gain ' + n.gain + ' dB, window ' + n.windowSize
+                           + ', ' + n.samplesPerSweep + ' x ' + n.sweepsPerScan + ' samples, overlap '
+                           + n.sweepOverlapRatio + ' (Device Settings and Scan settings)');
+        return true;
+    }
+    Component.onCompleted: replaceOldFactorySettings()
 
     ScannerInterface {
         id: scanner

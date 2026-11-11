@@ -15,6 +15,23 @@ from wwb_scanner.scan_objects import Spectrum
 
 from wwb_scanner.ui.pyside.utils import GenericQObject, QObjectThread
 
+# V20.8: settings of a fresh installation = the configuration the fork is
+# tested with. Why these numbers:
+#   2400 kHz / window 96 = one point per 25 kHz, the frequency grid of WWB;
+#   overlap 0.65 -> tile step 1200 kHz x 0.65 = 780, rounded down to the grid
+#     = 775 kHz (neighbouring tiles overlap, the filter edges are dropped);
+#   2048 x 40 samples per tile (34 ms of signal);
+#   gain 33.8 dB: at 0 dB the dongle is 30-37 dB less sensitive in 470-700 MHz
+#     (default_gain_profile.json). "Suggest gain" picks the step for a range.
+# The same values stand in qml/ScanConfig.qml and qml/DeviceConfigPopup.qml.
+FACTORY = dict(sampleRate=2400., gain=33.8, windowSize=96, samplesPerSweep=2048,
+               sweepsPerScan=40, sweepOverlapRatio=0.65)
+# what a fresh installation had up to V20.7.3 (replaced once, only when all six
+# values are still exactly these - see main.qml)
+FACTORY_OLD = dict(sampleRate=2048., gain=0., windowSize=128, samplesPerSweep=8192,
+                   sweepsPerScan=20, sweepOverlapRatio=0.5)
+
+
 class ScanConfigData(GenericQObject):
     _n_startFreq = Signal()
     _n_endFreq = Signal()
@@ -37,11 +54,13 @@ class ScanConfigData(GenericQObject):
     def __init__(self, *args):
         self._startFreq = 470.
         self._endFreq = 536.
-        self._samplesPerSweep = 8192
-        self._sweepsPerScan = 20
-        self._sweepOverlapRatio = .5
+        # V20.8: the settings every test and every measurement of this fork
+        # was made with (see FACTORY above); before: 8192 x 20, 0.5, 128
+        self._samplesPerSweep = FACTORY['samplesPerSweep']
+        self._sweepsPerScan = FACTORY['sweepsPerScan']
+        self._sweepOverlapRatio = FACTORY['sweepOverlapRatio']
         self._windowType = 'hann'
-        self._windowSize = 128
+        self._windowSize = FACTORY['windowSize']
         self._smoothingEnabled = False
         self._smoothingFactor = 1.
         self._scalingEnabled = False
@@ -127,6 +146,17 @@ class ScanConfigData(GenericQObject):
     scanRanges = Property(str, _g_scanRanges, _s_scanRanges, notify=_n_scanRanges)
 
 CAL_OLD_DAYS = 30
+READY_POLL_S = 0.1
+
+
+def _wait_scanner_ready(scanner):
+    """V20.8: wait until the scan runs OR has ended. A scan that fails before
+    it starts (dongle missing or busy) never sets _running; waiting for that
+    alone left a thread behind for ever and the program crashed on exit."""
+    while not scanner._running.wait(READY_POLL_S):
+        if scanner._stopped.is_set():
+            return False
+    return True
 STEPS_WARN_DB = 6.     # a table this far off nominal: an anchor was probably compressed
 
 
@@ -222,6 +252,7 @@ class ScannerInterface(GenericQObject):
         super().__init__(*args)
         self.scanner = None
         self.scan_thread = None
+        self.scan_init_thread = None
 
     @property
     def startFreq(self): return self.scanConfig.startFreq
@@ -269,6 +300,67 @@ class ScannerInterface(GenericQObject):
     def _g_calibrating(self): return self._calibrating
     def _s_calibrating(self, value): self._generic_setter('_calibrating', value)
     calibrating = Property(bool, _g_calibrating, _s_calibrating, notify=_n_calibrating)
+
+    def start_problem(self):
+        """V20.8: why the scan can not start, as a text for the window, or ''.
+        Before this the window showed a Python error (no dongle: 'NoneType'
+        object has no attribute 'device_serial'; Start above End: a numpy
+        'zero-size array' message)."""
+        if self.deviceInfo is None:
+            return ('No RTL-SDR dongle found. Plug the dongle in (close other SDR programs) '
+                    'and press Start again.')
+        if self.scanConfig is None:
+            return 'The scan settings are not ready yet.'
+        try:
+            rate = float(self.sampleRate)
+        except (TypeError, ValueError):
+            rate = float('nan')
+        if not (rate == rate and rate > 0):
+            return 'The sample rate is not set: enter it in Device Settings (for example 2400).'
+        try:
+            float(self.gain)
+        except (TypeError, ValueError):
+            return 'The gain is not set: choose it in Device Settings.'
+        if self.calibrating or self._gain_calibrating or self.scan_segments():
+            return ''       # these scans bring their own ranges
+        try:
+            lo, hi = float(self.startFreq), float(self.endFreq)
+        except (TypeError, ValueError):
+            lo = hi = float('nan')
+        if not (lo == lo and hi == hi) or abs(lo) == float('inf') or abs(hi) == float('inf'):
+            return 'Start Freq and End Freq must be numbers (MHz).'
+        if hi <= lo:
+            return 'End Freq (%g MHz) must be above Start Freq (%g MHz).' % (hi, lo)
+        return ''
+
+    def _begin(self, calibrating=False, gain_calibrating=False):
+        """V20.8: every scan starts here. If it can not start, the reason is
+        shown and nothing is left behind - above all not the calibration flags:
+        'Calibrate' pressed without a dongle used to turn the NEXT ordinary
+        Start into a calibration scan."""
+        if self.running:
+            return False
+        self.calibrating = bool(calibrating)
+        self._gain_calibrating = bool(gain_calibrating)
+        started = False
+        try:
+            why = self.start_problem()
+            if why:
+                logging.getLogger('wwb_scanner.ui').error(why)
+            else:
+                self._start()
+                started = True
+        except Exception as exc:
+            logging.getLogger('wwb_scanner.ui').error('The scan did not start: %s', exc, exc_info=True)
+        finally:
+            if not started:
+                self.calibrating = False
+                self._gain_calibrating = False
+                self.scan_thread = None
+                self.scanner = None
+                self.progress = -1
+                self.running = False
+        return started
 
     def build_scan_config(self):
         conf = config.ScanConfig()
@@ -367,18 +459,23 @@ class ScannerInterface(GenericQObject):
     @Slot()
     def calibrateGains(self):
         """V20.5: measure the real gain steps on signals of the air (antenna on)."""
-        if self.running:
-            return
-        self._gain_calibrating = True
-        self._start()
+        self._begin(gain_calibrating=True)
 
     @Slot()
     def calibrate(self):
         """Scan 31-1766 MHz WITHOUT antenna and save the dongle profile."""
-        if self.running:
-            return
-        self.calibrating = True
-        self._start()
+        self._begin(calibrating=True)
+
+    @Slot(result='QVariantMap')
+    def factorySettings(self):
+        """V20.8: {'now': FACTORY, 'old': FACTORY_OLD} for the one-time
+        replacement of untouched old settings (main.qml)."""
+        return {'now': dict(FACTORY), 'old': dict(FACTORY_OLD)}
+
+    @Slot(str)
+    def statusNote(self, text):
+        """V20.8: a line for the status bar and the log from QML."""
+        logging.getLogger('wwb_scanner.status').info('%s', text)
 
     @Slot(int, float, result=float)
     def getFreqResolution(self, nfft, fs):
@@ -386,9 +483,7 @@ class ScannerInterface(GenericQObject):
 
     @Slot()
     def start(self):
-        if self.running:
-            return
-        self._start()
+        self._begin()
 
     @Slot()
     def stop(self):
@@ -420,7 +515,9 @@ class ScannerInterface(GenericQObject):
         self.scanner.on_progress = self.scan_thread._on_scanner_progress
         self.scan_thread.complete.connect(self.on_scanner_finished)
         self.scan_thread.scannerProgress.connect(self.on_scanner_progress)
-        self.scan_init_thread = QObjectThread(target=self.scanner._running.wait)
+        # V20.8: also ends when the scan never starts (see _wait_scanner_ready)
+        scanner = self.scanner
+        self.scan_init_thread = QObjectThread(target=lambda: _wait_scanner_ready(scanner))
         self.scan_init_thread.complete.connect(self.on_scanner_ready)
         self.scan_thread.start()
         self.scan_init_thread.start()
@@ -457,6 +554,23 @@ class ScannerInterface(GenericQObject):
             self.scan_thread = None
             self.scanner = None
             self.running = False
+            # V20.8: last, and never in the way of leaving the "scanning" state
+            try:
+                ScannerInterface._stop_init_thread(self)
+            except Exception:
+                logger.exception('scan_init_thread')
+
+    def _stop_init_thread(self):
+        """V20.8: the scan is over, so the waiting thread ends within
+        READY_POLL_S; no thread may outlive its scan."""
+        t = getattr(self, 'scan_init_thread', None)
+        self.scan_init_thread = None
+        if t is None:
+            return
+        try:
+            t.stop()
+        except Exception:
+            logger.exception('scan_init_thread.stop')
 
     def _finish_calibration(self):
         from wwb_scanner.scanner import cleanup
@@ -514,8 +628,7 @@ class ScannerInterface(GenericQObject):
     @Slot()
     def on_scanner_ready(self):
         self.scannerInitialized = True
-        self.scan_init_thread.stop()
-        self.scan_init_thread = None
+        self._stop_init_thread()        # V20.8: may already be stopped by the end of the scan
 
 
 class ScanThread(QObjectThread):

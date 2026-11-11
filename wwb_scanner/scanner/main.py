@@ -129,6 +129,16 @@ class ScannerBase(JSONMixin):
         if len(segs) > 1:
             return self._build_multi_range(segs)
         freq,  end_freq = self.config.scan_range
+        # V20.8: say what is wrong with the range instead of an empty scan
+        # (End below Start) or 'cannot convert float NaN to integer'
+        try:
+            lo_ok, hi_ok = float(freq), float(end_freq)
+        except (TypeError, ValueError):
+            lo_ok = hi_ok = float('nan')
+        if not (np.isfinite(lo_ok) and np.isfinite(hi_ok)):
+            raise ValueError('the scan range must be two numbers in MHz (got %r - %r)' % (freq, end_freq))
+        if hi_ok <= lo_ok:
+            raise ValueError('End frequency %g MHz must be above Start frequency %g MHz' % (hi_ok, lo_ok))
         sample_collection = self.sample_collection
         # Centre frequencies are counted in whole Hz. Adding a float step
         # again and again (in MHz) piles up rounding errors, and then the

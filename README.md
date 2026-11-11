@@ -67,6 +67,23 @@ Current release: **[v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releas
   the dongle's own -96 dB, or more than 10 % of the tiles clipping) is not saved and the
   previous one stays; every saved floor calibration keeps the previous one as `.prev.npz`.
   A scan where 80 % of the tiles clip even at the lowest gain says THE RESULT IS NOT VALID.
+- **V20.8** (first fixes after the code audit of 11.11.2026):
+  - Start or Calibrate without a dongle, or with the dongle busy in another program, says so
+    ("No RTL-SDR dongle found", "dongle not found or busy") instead of a Python error; the
+    error no longer comes back after every later scan, "Calibrate" pressed without a dongle
+    no longer turns the next Start into a calibration scan, and the program closes cleanly.
+    A dongle plugged in after the program started is found by the next Start (it needed a
+    restart).
+  - Start Freq at or above End Freq, or an empty field: a clear message, no scan.
+  - sdb2 files are written as UTF-8 (their header always said so): exporting into a folder
+    with Cyrillic, Polish or German letters gave a broken file or none. WSM CSV: a scan name
+    with such letters no longer stops the export; UTF-8 files (with or without BOM) open.
+  - A first start now has the settings the fork is tested with: 2400 kHz, gain 33.8 dB,
+    window 96 (one point per 25 kHz, the grid of WWB), 2048 x 40 samples, overlap 0.65
+    (tile step 0.775 MHz). Before: 2048 kHz, gain 0 dB (30-37 dB less sensitive in
+    470-700 MHz), window 128, 8192 x 20, overlap 0.5. Settings that are still exactly the
+    old six values are replaced once, with a line in the status bar; anything you changed
+    stays. All of them remain adjustable in Device Settings and Scan settings.
 - **Tuner I2C errors** (`i2c wr failed`, LIBUSB_ERROR_PIPE): the driver build scanner-v5
   (`drivers/rtlsdr-scanner-v5`, `python install_dll.py`) repeats a failed tuner transfer up
   to 3 times with the I2C repeater switched on again; the console prints how many were

@@ -9,8 +9,10 @@ Dialog {
     property var device
     property real deviceIndex
     property string deviceSerial
-    property real sampleRate: 2048
-    property real gain
+    // V20.8: the tested configuration (see FACTORY in scanner.py);
+    // before: 2048 and 0 dB (30-37 dB less sensitive in 470-700 MHz)
+    property real sampleRate: 2400
+    property real gain: 33.8
 
     onDeviceChanged:{
         var device = device_list.device;
@@ -34,6 +36,13 @@ Dialog {
         onDevicesChanged: {
             updateDeviceList();
         }
+    }
+
+    // V20.8: the dongles were listed only once, when the program started: a
+    // dongle plugged in later was not found until a restart. Start looks
+    // again when it has no dongle (main.qml).
+    function refreshDevices(){
+        device_list.update_devices();
     }
 
     // V20.6: "Suggest gain" in Scan settings
@@ -137,10 +146,22 @@ Dialog {
                 onUpdateChoices:{
                     if (root.device){
                         gainSelect.items = root.device.gains;
+                        // V20.8: the step of this tuner nearest to the wanted
+                        // gain. An exact match was needed before: without it
+                        // the box showed the first step and the scan used
+                        // another value.
+                        var best = -1, bestDiff = 1e9;
                         for (var i=0;i<gainSelect.items.length;i++){
-                            if (gainSelect.items[i] == root.gain){
-                                gainSelect.value = i;
+                            var d = Math.abs(gainSelect.items[i] - root.gain);
+                            if (d < bestDiff){
+                                bestDiff = d;
+                                best = i;
                             }
+                        }
+                        if (best >= 0){
+                            gainSelect.value = best;
+                            if (bestDiff > 0.05)
+                                root.gain = gainSelect.items[best];
                         }
                     }
                 }

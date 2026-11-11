@@ -359,8 +359,6 @@ class SpectrumGraphData(QtQuick.QQuickItem):
             xy_data = np.zeros(spectrum.sample_data.size, dtype=GRAPH_DTYPE)
             data = spectrum.sample_data.data
             xy_data['x'] = data['frequency']
-            freqmin = xy_data['x'].min()
-            freqmax = xy_data['x'].max()
             xy_data['y'] = spectrum.sample_data.data['dbFS']
             nan_ix = np.flatnonzero(np.isnan(xy_data['y']))
             xy_data['y'][nan_ix] = -110
@@ -373,6 +371,10 @@ class SpectrumGraphData(QtQuick.QQuickItem):
             pass
 
     def _update_extents(self):
+        if not self.xy_data.size:
+            # V20.8: a scan without points (it did not start, dongle busy) used
+            # to raise 'zero-size array to reduction operation minimum' here
+            return
         self.minValue = QtCore.QPointF(self.xy_data['x'].min(), self.xy_data['y'].min())
         self.maxValue = QtCore.QPointF(self.xy_data['x'].max(), self.xy_data['y'].max())
 
@@ -498,12 +500,16 @@ class LiveSpectrumGraphData(SpectrumGraphData):
         if self.scanner is None:
             return
         if not self.scanner.running:
-            self.update_interval = -1
-            if self.spectrum is not None:
-                with self.spectrum.data_update_lock:
-                    self.spectrum.set_data_updated()
-                    self.update_spectrum_data()
-            self.scanner = None
+            # V20.8: whatever the last update does, this graph lets the scanner
+            # go; a graph left connected repeated its error after every later scan
+            try:
+                self.update_interval = -1
+                if self.spectrum is not None:
+                    with self.spectrum.data_update_lock:
+                        self.spectrum.set_data_updated()
+                        self.update_spectrum_data()
+            finally:
+                self.scanner = None
 
     def _g_update_interval(self): return self._update_interval
     def _s_update_interval(self, value):
@@ -533,16 +539,18 @@ class LiveSpectrumGraphData(SpectrumGraphData):
         self.updateSpectrumData.emit()
 
     def _update_extents(self):
+        if not self.xy_data.size:
+            return      # V20.8: nothing measured (yet): keep the axes as they are
         if self.scanner is not None:
             min_x = self.scanner.startFreq
-            if self.xy_data.size and self.xy_data['x'].min() < min_x:
+            if self.xy_data['x'].min() < min_x:
                 min_x = self.xy_data['x'].min()
             max_x = self.scanner.endFreq
-            if self.xy_data.size and self.xy_data['x'].max() > max_x:
+            if self.xy_data['x'].max() > max_x:
                 max_x = self.xy_data['x'].max()
         else:
             min_x = self.xy_data['x'].min()
-            max_x = self.xy_data['y'].max()
+            max_x = self.xy_data['x'].max()     # V20.8: was the level axis ('y')
         self.minValue = QtCore.QPointF(min_x, self.xy_data['y'].min())
         self.maxValue = QtCore.QPointF(max_x, self.xy_data['y'].max())
 

@@ -139,6 +139,8 @@ def main():
     app.setOrganizationName('rtlsdr-wwb-scanner-qa')
     app.setApplicationName('wwb_scanner')
     QtCore.qInstallMessageHandler(handler)
+    # V20.8 (U29): are these the settings of a first start?
+    fresh = not QtCore.QSettings('rtlsdr-wwb-scanner-qa', 'wwb_scanner').contains('Scan Config/windowSize')
     qml_dir = portable_qml_copy()
     engine = QtQml.QQmlApplicationEngine()
     engine.setBaseUrl(str(qml_dir))
@@ -164,6 +166,9 @@ def main():
           % (len(scanners), len(controls), len(configs)))
     si = scanners[0]
     cfg = si.scanConfig
+    first_start = dict(sampleRate=si.sampleRate, gain=si.gain, windowSize=cfg.windowSize,
+                       samplesPerSweep=cfg.samplesPerSweep, sweepsPerScan=cfg.sweepsPerScan,
+                       sweepOverlapRatio=cfg.sweepOverlapRatio)
     if REAL:
         si.gain = float(os.environ.get('QA_UI_GAIN', '33.8'))
         print('real dongle, gain %.1f dB' % si.gain, flush=True)
@@ -294,6 +299,7 @@ def main():
     v205_checks(app, win, si)
     v206_checks(app, win, si)
     v207_checks(app, win, si)
+    v208_checks(app, win, controls, si, fresh, first_start)
     win.close()
     pump(app, 0.3)
     return 0 if all(RESULTS) else 1
@@ -762,6 +768,86 @@ def v207_checks(app, win, si):
                                                         n0, n1, rows, active_ok))
     except Exception as exc:
         check('U28', False, 'error: %s' % exc)
+
+
+def v208_checks(app, win, controls, si, fresh, first_start):
+    """V20.8 (audit of 11.11.2026). U29: a first start has the tested settings;
+    U30: untouched old factory settings are replaced once, touched ones never;
+    U32: Start and Calibrate without a dongle say so and leave nothing behind."""
+    factory = getattr(ui_scanner, 'FACTORY', None)
+    if factory is None:
+        check('U29', False, 'no FACTORY in ui/pyside/scanner.py (V20.8 not installed)')
+        return
+    # U29
+    if fresh:
+        same = all(abs(float(first_start[k]) - float(v)) < 1e-6 for k, v in factory.items())
+        check('U29', same, 'settings of a first start: %s' % first_start)
+    else:
+        check('U29', True, 'INFO: settings of earlier QA runs are stored on this PC, first start not checked')
+    # U30
+    try:
+        def state():
+            return [float(_qml_eval(win, e)) for e in (
+                'device_config.sampleRate', 'device_config.gain', 'scanConfig.windowSize',
+                'scanConfig.samplesPerSweep', 'scanConfig.sweepsPerScan', 'scanConfig.sweepOverlapRatio')]
+        def put(rate, gain, win_size, per_sweep, sweeps, overlap):
+            _qml_eval(win, 'device_config.sampleRate = %r' % rate)
+            _qml_eval(win, 'device_config.setGain(%r)' % gain)
+            _qml_eval(win, 'scanConfig.windowSize = %r' % win_size)
+            _qml_eval(win, 'scanConfig.samplesPerSweep = %r' % per_sweep)
+            _qml_eval(win, 'scanConfig.sweepsPerScan = %r' % sweeps)
+            _qml_eval(win, 'scanConfig.sweepOverlapRatio = %r' % overlap)
+            _qml_eval(win, 'defaultsSettings.version = 0')
+            pump(app, 0.1)
+        before = state()
+        new = [2400., 33.8, 96., 2048., 40., 0.65]
+        put(2048, 0.0, 128, 8192, 20, 0.5)
+        replaced = bool(_qml_eval(win, 'replaceOldFactorySettings()'))
+        pump(app, 0.2)
+        after_old = state()
+        again = bool(_qml_eval(win, 'replaceOldFactorySettings()'))
+        put(2048, 20.7, 128, 8192, 20, 0.5)         # the user chose another gain: hands off
+        touched = bool(_qml_eval(win, 'replaceOldFactorySettings()'))
+        after_touched = state()
+        put(*before)
+        _qml_eval(win, 'defaultsSettings.version = 208')
+        pump(app, 0.2)
+        ok = (replaced and all(abs(a - b) < 1e-6 for a, b in zip(after_old, new)) and not again
+              and not touched and after_touched == [2048., 20.7, 128., 8192., 20., 0.5]
+              and abs(float(si.gain) - before[1]) < 1e-6)
+        check('U30', ok, 'old factory settings -> %s (replaced %s, second call %s); gain changed by the user: '
+              'replaced %s, stays %s' % (after_old, replaced, again, touched, after_touched))
+    except Exception as exc:
+        check('U30', False, 'error: %s' % exc)
+    # U32 (last: it takes the dongle away from the window)
+    try:
+        from wwb_scanner.ui.pyside import status as ui_status
+        hub = (find(win, lambda o: isinstance(o, ui_status.StatusHub)) or [None])[0]
+        gr = [o for o in win.findChildren(QtCore.QObject) if o.metaObject().indexOfMethod('removeSpectrum(QVariant)') >= 0][0]
+        n0 = int(_qml_eval(gr, 'spectrumGraphs.filter(function(s){ return !!s; }).length'))
+        dev = si.deviceInfo
+        si.deviceInfo = None
+        pump(app, 0.2)
+        controls[0].scannerState.emit(True)
+        pump(app, 0.6)
+        text = str(hub.text) if hub is not None else ''
+        n1 = int(_qml_eval(gr, 'spectrumGraphs.filter(function(s){ return !!s; }).length'))
+        started = bool(si.running)
+        si.calibrate()
+        pump(app, 0.2)
+        cal = bool(si.calibrating)
+        si.calibrateGains()
+        pump(app, 0.2)
+        gcal = bool(si._gain_calibrating)
+        si.deviceInfo = dev
+        # Start looks for a dongle plugged in after the program started
+        looks = bool(_qml_eval(win, "typeof device_config.refreshDevices === 'function'"))
+        ok = ('No RTL-SDR dongle found' in text and not started and n1 == n0 and not cal and not gcal
+              and getattr(si, 'scan_init_thread', None) is None and looks)
+        check('U32', ok, 'Start without a dongle: %r; running %s; graphs %d -> %d; calibration flags left %s/%s; '
+              'Start looks for a new dongle %s' % (text[:60], started, n0, n1, cal, gcal, looks))
+    except Exception as exc:
+        check('U32', False, 'error: %s' % exc)
 
 
 def v206_checks(app, win, si):

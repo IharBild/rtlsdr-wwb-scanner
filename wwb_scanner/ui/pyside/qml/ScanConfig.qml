@@ -30,11 +30,13 @@ Item {
         id: model
         startFreq: 470.
         endFreq: 536.
-        samplesPerSweep: 8192
-        sweepsPerScan: 20
-        sweepOverlapRatio: 0.5
+        // V20.8: the tested configuration (see FACTORY in scanner.py);
+        // before: 8192 x 20, overlap 0.5, window 128
+        samplesPerSweep: 2048
+        sweepsPerScan: 40
+        sweepOverlapRatio: 0.65
         windowType: 'hann'
-        windowSize: 128
+        windowSize: 96
         smoothingEnabled: false
         smoothingFactor: 1.0
         scalingEnabled: false
