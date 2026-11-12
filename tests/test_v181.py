@@ -124,11 +124,12 @@ def test_A1_4_window_leaves_scanning_state_even_after_an_error():
         except ImportError:
             print('NO_PYSIDE2'); raise SystemExit(0)
         from wwb_scanner.ui.pyside.scanner import ScannerInterface
+        # V21.0: smoothing is gone; the step after a scan that can still fail
+        # is the end of a calibration
         def boom():
-            raise RuntimeError('smoothing exploded')
-        fake = types.SimpleNamespace(scan_thread=None, calibrating=False, scanner=object(), running=True,
-                                     scanConfig=types.SimpleNamespace(smoothingEnabled=True, scalingEnabled=False),
-                                     smooth_scan=boom)
+            raise RuntimeError('calibration exploded')
+        fake = types.SimpleNamespace(scan_thread=None, calibrating=True, scanner=object(), running=True,
+                                     _finish_calibration=boom)
         ScannerInterface.on_scanner_finished(fake)
         assert fake.running is False and fake.scanner is None, vars(fake)
         print('ALL_OK')

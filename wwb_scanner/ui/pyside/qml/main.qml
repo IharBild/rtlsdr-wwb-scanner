@@ -168,14 +168,27 @@ ApplicationWindow {
 
             Label {
                 text: chartWrapper.mouseDataPoint.x > 0
-                      ? chartWrapper.mouseDataPoint.y.toFixed(1) + ' dB'
-                      : '--- dB'
+                      ? chartWrapper.mouseDataPoint.y.toFixed(1) + ' dBFS/Hz'
+                      : '--- dBFS/Hz'
+                objectName: 'levelReadout'
                 Layout.preferredWidth: contentWidth
                 font.pointSize: 9
                 font.family: 'monospace'
                 color: window.accent
                 verticalAlignment: Text.AlignVCenter
                 horizontalAlignment: Qt.AlignLeft
+            }
+
+            // V21.0 (audit A5, step 1): what the number is
+            InfoTip {
+                objectName: 'levelUnitTip'
+                text: "The level is the spectral density relative to the dongle's full scale " +
+                      "(dBFS/Hz) at the current gain. It is NOT dBm: the same microphone reads " +
+                      "about 34 dB higher at 33.8 dB gain than at 0 dB. A narrow carrier reads " +
+                      "about 46 dB below its power in dBFS (25 kHz points, Hann window). " +
+                      "Compare a level only with the floor of the same scan. The exported " +
+                      "files hold the same numbers; WWB shows them as dBm. A scan opened " +
+                      "from a file of another device keeps the levels of that device."
             }
 
             Item { Layout.preferredWidth: 12 }

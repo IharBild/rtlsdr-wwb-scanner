@@ -13,11 +13,6 @@ Item {
     property alias sweepOverlapRatio: model.sweepOverlapRatio
     property alias windowType: model.windowType
     property alias windowSize: model.windowSize
-    property alias smoothingEnabled: model.smoothingEnabled
-    property alias smoothingFactor: model.smoothingFactor
-    property alias scalingEnabled: model.scalingEnabled
-    property alias scalingMinDB: model.scalingMinDB
-    property alias scalingMaxDB: model.scalingMaxDB
     property alias cleanRipple: model.cleanRipple
     property alias cleanSpurs: model.cleanSpurs
     property alias cleanImages: model.cleanImages
@@ -38,11 +33,6 @@ Item {
         sweepOverlapRatio: 0.65
         windowType: 'hann'
         windowSize: 96
-        smoothingEnabled: false
-        smoothingFactor: 1.0
-        scalingEnabled: false
-        scalingMinDB: -140
-        scalingMaxDB: -55
         cleanRipple: true
         cleanSpurs: true
         cleanImages: false      // V20.9: images are marked, hidden only on request
@@ -65,11 +55,6 @@ Item {
         property alias sweepOverlapRatio: model.sweepOverlapRatio
         property alias windowType: model.windowType
         property alias windowSize: model.windowSize
-        property alias smoothingEnabled: model.smoothingEnabled
-        property alias smoothingFactor: model.smoothingFactor
-        property alias scalingEnabled: model.scalingEnabled
-        property alias scalingMinDB: model.scalingMinDB
-        property alias scalingMaxDB: model.scalingMaxDB
         property alias cleanRipple: model.cleanRipple
         property alias cleanSpurs: model.cleanSpurs
         property alias cleanImages: model.cleanImages

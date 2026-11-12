@@ -457,6 +457,10 @@ class SpectrumGraphData(QtQuick.QQuickItem):
                          exc_info=not isinstance(exc, (ValueError, OSError)))
             return
         print('export done: %s' % filename, flush=True)
+        # V21.0 (audit A5, step 1): the export is confirmed in the window,
+        # with what the numbers in the file are
+        note = EXPORT_LEVEL_NOTE_WSM if fmt == 'wsm' else EXPORT_LEVEL_NOTE
+        logging.getLogger('wwb_scanner.status').info('Exported %s. %s', os.path.basename(filename), note)
 
     @Slot(QtCore.QUrl, str)
     def save_to_file_as(self, uri, name_filter):
@@ -481,6 +485,10 @@ class SpectrumGraphData(QtQuick.QQuickItem):
             sys.stdout.flush()
 
 EXPORT_EXTENSIONS = ('.csv', '.sdb2', '.sdb3', '.npz')
+LEVEL_UNIT = 'dBFS/Hz'
+EXPORT_LEVEL_NOTE = ('Levels in the file are %s at the gain of the scan (relative, not dBm; '
+                     'WWB shows them as dBm)' % LEVEL_UNIT)
+EXPORT_LEVEL_NOTE_WSM = 'Levels in the file are WSM units above the floor of the scan (0-48)'
 
 
 def add_export_extension(filename, name_filter):

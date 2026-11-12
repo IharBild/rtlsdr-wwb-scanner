@@ -299,6 +299,7 @@ def main():
     v205_checks(app, win, si)
     v206_checks(app, win, si)
     v207_checks(app, win, si)
+    v210_checks(app, win)
     v209_checks(app, win, si)
     v208_checks(app, win, controls, si, fresh, first_start)
     win.close()
@@ -531,8 +532,8 @@ def v18_checks(app, win, controls, si):
 
 
 def v181_checks(app, win, controls, si):
-    """V18.1 (audit): a damaged file and a too short scan for smoothing give a
-    message in the window and leave it working."""
+    """V18.1 (audit): a damaged file gives a message in the window and leaves
+    it working; U22 (V21.0): no Smoothing / Scaling, a short scan ends."""
     hubs = [o for o in win.findChildren(QtCore.QObject) if o.metaObject().indexOfProperty('logFile') >= 0]
     if not hubs:
         check('U21', False, 'no status hub')
@@ -554,14 +555,25 @@ def v181_checks(app, win, controls, si):
     got = [t for lvl, t in msgs if lvl == 'error' and 'Could not open' in t]
     check('U21', err is None and bool(got) and bool(gds),
           'damaged .sdb3 opened from the window: exception %r; messages %s' % (err, got[:1] or msgs[-2:]))
-    if os.environ.get('QA_UI_REAL'):
-        check('U22', True, 'INFO: skipped with the real dongle (would need a short scan with smoothing)')
-        return
+    # U22. Until V20.9: a scan too short for smoothing. V21.0: Smoothing and
+    # Scaling are gone from the window; a short scan ends and is left as measured.
     cfg = si.scanConfig
-    old = (cfg.smoothingEnabled, cfg.smoothingFactor, cfg.startFreq, cfg.endFreq, cfg.scanRanges)
+    gone = not hasattr(cfg, 'smoothingEnabled') and not hasattr(cfg, 'scalingEnabled') \
+        and not hasattr(si, 'smooth_scan') and not hasattr(si, 'scale_scan')
+    dlg_sw = win.findChild(QtCore.QObject, 'cleanSpursSwitch')
+    in_dialog = None
+    if dlg_sw is not None:
+        try:
+            in_dialog = str(_qml_eval(dlg_sw, "typeof root.smoothingEnabled + '/' + typeof root.scalingEnabled"))
+        except Exception as exc:
+            in_dialog = 'error: %s' % exc
+    if os.environ.get('QA_UI_REAL'):
+        check('U22', gone and in_dialog == 'undefined/undefined',
+              'Smoothing and Scaling removed: settings %s, dialog %s (short scan skipped with the real dongle)'
+              % (gone, in_dialog))
+        return
+    old = (cfg.startFreq, cfg.endFreq, cfg.scanRanges)
     cfg.scanRanges = ''
-    cfg.smoothingEnabled = True
-    cfg.smoothingFactor = 1.0
     cfg.startFreq, cfg.endFreq = 863.0, 865.0
     del msgs[:]
     t0 = time.time()
@@ -570,11 +582,12 @@ def v181_checks(app, win, controls, si):
     while si.running and time.time() - t0 < 120:
         pump(app, 0.1)
     pump(app, 1.0)
-    skipped = [t for lvl, t in msgs if 'Smoothing skipped' in t]
-    check('U22', not si.running and bool(skipped),
-          'scan 863-865 MHz with smoothing 1 %%: window running=%s after %.0f s; messages %s'
-          % (si.running, time.time() - t0, skipped[:1] or msgs[-3:]))
-    cfg.smoothingEnabled, cfg.smoothingFactor, cfg.startFreq, cfg.endFreq, cfg.scanRanges = old
+    bad = [t for lvl, t in msgs if 'Smoothing' in t or 'Scaling' in t or lvl == 'error']
+    n = int(si.spectrum.sample_data.size) if si.spectrum is not None else 0
+    check('U22', not si.running and gone and in_dialog == 'undefined/undefined' and not bad and n == 81,
+          'Smoothing and Scaling removed: settings %s, dialog %s; scan 863-865 MHz: %d points, window running=%s '
+          'after %.0f s, messages %s' % (gone, in_dialog, n, si.running, time.time() - t0, bad[:2]))
+    cfg.startFreq, cfg.endFreq, cfg.scanRanges = old
 
 
 def v203_checks(app, win):
@@ -891,6 +904,63 @@ def v208_checks(app, win, controls, si, fresh, first_start):
               'Start looks for a new dongle %s' % (text[:60], started, n0, n1, cal, gcal, looks))
     except Exception as exc:
         check('U32', False, 'error: %s' % exc)
+
+
+def v210_checks(app, win):
+    """V21.0 (audit A5, step 1). U36: the level is named dBFS/Hz on the axis
+    and in the readout, with an explanation; U37: an export is confirmed in
+    the status line with what the numbers in the file are."""
+    try:
+        gr = [o for o in win.findChildren(QtCore.QObject) if o.metaObject().indexOfMethod('spurMarkModel()') >= 0]
+        readout = win.findChild(QtCore.QObject, 'levelReadout')
+        tip = win.findChild(QtCore.QObject, 'levelUnitTip')
+        if not gr or readout is None or tip is None:
+            check('U36', False, 'graph %s, readout %s, tip %s (V21.0 not installed)'
+                  % (bool(gr), readout is not None, tip is not None))
+            return
+        axis = gr[0].property('levelAxis')
+        title = str(axis.property('titleText'))
+        fmt_wide = str(axis.property('labelFormat'))
+        keep = (float(axis.property('min')), float(axis.property('max')))
+        axis.setProperty('min', -99.5)
+        axis.setProperty('max', -97.5)
+        pump(app, 0.2)
+        step = float(axis.property('tickInterval'))
+        fmt_narrow = str(axis.property('labelFormat'))
+        axis.setProperty('min', keep[0])
+        axis.setProperty('max', keep[1])
+        pump(app, 0.2)
+        text = str(readout.property('text'))
+        tip_text = str(tip.property('text'))
+        ok = (title == 'dBFS/Hz' and text.endswith('dBFS/Hz') and 'NOT dBm' in tip_text
+              and fmt_wide == '%.0f' and (step >= 1 or fmt_narrow == '%.1f'))
+        check('U36', ok, 'axis title %r, readout %r, labels %r, zoomed to 2 dB: tick %.2f dB, labels %r; '
+              'explanation %d characters' % (title, text, fmt_wide, step, fmt_narrow, len(tip_text)))
+    except Exception as exc:
+        check('U36', False, 'error: %s' % exc)
+    try:
+        from wwb_scanner.ui.pyside import status as ui_status
+        from wwb_scanner.ui.pyside.graph import SpectrumGraphData
+        hub = (find(win, lambda o: isinstance(o, ui_status.StatusHub)) or [None])[0]
+        sgs = [g for g in win.findChildren(SpectrumGraphData) if g.spectrum is not None]
+        if hub is None or not sgs:
+            check('U37', False, 'status hub %s, scans %d' % (hub is not None, len(sgs)))
+            return
+        import tempfile
+        d = tempfile.mkdtemp(prefix='qa_ui_')
+        got = []
+        for name, frag in (('u37.csv', ''), ('u37.sdb2', ''), ('u37wsm.csv', 'wsm')):
+            url = QtCore.QUrl.fromLocalFile(os.path.join(d, name))
+            if frag:
+                url.setFragment(frag)
+            sgs[-1].save_to_file(url)
+            pump(app, 0.3)
+            got.append((name, os.path.exists(os.path.join(d, name)), str(hub.text)))
+        ok = (all(e for _, e, _ in got) and all(t.startswith('Exported ' + n) for n, _, t in got)
+              and 'dBFS/Hz' in got[0][2] and 'not dBm' in got[1][2] and 'above the floor' in got[2][2])
+        check('U37', ok, '; '.join('%s: %r' % (n, t[:95]) for n, _, t in got))
+    except Exception as exc:
+        check('U37', False, 'error: %s' % exc)
 
 
 def v209_checks(app, win, si):

@@ -18,6 +18,8 @@ Item {
     property color accent: "#3aa0ff"
     property string tvPlan: 'EU'
     property bool showSpurs: true
+    readonly property string levelUnit: 'dBFS/Hz'      // V21.0
+    property alias levelAxis: axisY
     // own spurs of the RTL-SDR Blog V4 (multiples of its 28.8 MHz crystal),
     // measured without antenna: 3 dB or more above its noise (V10-V15)
     readonly property var spurFreqs: [86.4, 115.2, 144.0, 172.8, 201.6, 230.4, 259.2, 288.0,
@@ -282,7 +284,14 @@ Item {
                     tickType: ValueAxis.TicksDynamic
                     tickAnchor: 0
                     tickInterval: chart.niceStep(max - min, 8)
-                    labelFormat: "%.0f dB"
+                    // V21.0 (audit A5, step 1): the unit by its name. The level is the
+                    // spectral density relative to the dongle's full scale at the
+                    // current gain - not dBm, although WWB calls it so.
+                    // Zoomed in below 1 dB per tick the labels need a decimal
+                    // (they read "-98, -98, -99, -99").
+                    labelFormat: tickInterval >= 1 ? "%.0f" : "%.1f"
+                    titleText: root.levelUnit
+                    titleFont.pointSize: 8
                 }
 
                 function addMappedSeries(){

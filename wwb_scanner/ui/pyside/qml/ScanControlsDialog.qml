@@ -13,11 +13,6 @@ Dialog {
     property alias sweepOverlapRatio: sweepOverlapRatioInput.value
     property alias windowType: windowCombo.textValue
     property alias windowSize: windowSizeInput.value
-    property alias smoothingEnabled: smoothingSwitch.checked
-    property alias smoothingFactor: smoothingFactorInput.value
-    property alias scalingEnabled: scalingSwitch.checked
-    property alias scalingMinDB: scalingMinDBInput.value
-    property alias scalingMaxDB: scalingMaxDBInput.value
     property alias cleanRipple: cleanRippleSwitch.checked
     property alias cleanSpurs: cleanSpursSwitch.checked
     property alias cleanImages: cleanImagesSwitch.checked
@@ -194,44 +189,9 @@ Dialog {
             }
         }
 
-        GroupBox {
-            title: 'Smoothing'
-
-            RowLayout {
-                anchors.fill: parent
-                Switch {
-                    id: smoothingSwitch
-                    text: 'Enabled'
-                }
-                NumberInput {
-                    id: smoothingFactorInput
-                    name: 'Factor'
-                    showFrame: true
-                }
-            }
-        }
-
-        GroupBox {
-            title: 'Scaling'
-
-            RowLayout {
-                anchors.fill: parent
-                Switch {
-                    id: scalingSwitch
-                    text: 'Enabled'
-                }
-                NumberInput {
-                    id: scalingMinDBInput
-                    name: 'Minimum (dB)'
-                    showFrame: true
-                }
-                NumberInput {
-                    id: scalingMaxDBInput
-                    name: 'Maximum (dB)'
-                    showFrame: true
-                }
-            }
-        }
+        // V21.0: the Smoothing and Scaling groups were here (audit A4): both
+        // changed the levels on the graph and in the exported files after
+        // the scan had been saved.
 
         GroupBox {
             id: cleanBox
@@ -500,11 +460,6 @@ Dialog {
         config.sweepOverlapRatio = root.sweepOverlapRatio;
         config.windowType = root.windowType;
         config.windowSize = root.windowSize;
-        config.smoothingEnabled = root.smoothingEnabled;
-        config.smoothingFactor = root.smoothingFactor;
-        config.scalingEnabled = root.scalingEnabled;
-        config.scalingMinDB = root.scalingMinDB;
-        config.scalingMaxDB = root.scalingMaxDB;
         config.cleanRipple = root.cleanRipple;
         config.cleanSpurs = root.cleanSpurs;
         config.cleanImages = root.cleanImages;
@@ -521,11 +476,6 @@ Dialog {
         root.sweepOverlapRatio = config.sweepOverlapRatio;
         root.windowType = config.windowType;
         root.windowSize = config.windowSize;
-        root.smoothingEnabled = config.smoothingEnabled;
-        root.smoothingFactor = config.smoothingFactor;
-        root.scalingEnabled = config.scalingEnabled;
-        root.scalingMinDB = config.scalingMinDB;
-        root.scalingMaxDB = config.scalingMaxDB;
         root.cleanRipple = config.cleanRipple;
         root.cleanSpurs = config.cleanSpurs;
         root.cleanImages = config.cleanImages;

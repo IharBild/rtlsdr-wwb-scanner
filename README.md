@@ -109,6 +109,21 @@ Current release: **[v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releas
     much there. Calibrations made before are corrected when they are used; no need to
     calibrate again.
   - A scan opened from the history shows what was hidden in it.
+- **V21.0** (third part of the audit):
+  - **Smoothing** and **Scaling** are gone from Scan settings. Both changed the levels after
+    the scan had been saved, so the graph and the exported files differed from the history:
+    Scaling stretched the dB axis (19.8 dB between two carriers became 36.7 dB), Smoothing
+    averaged over a share of the scan (2.3 MHz for 470-700 MHz). Settings saved by an older
+    version are ignored. `Spectrum.smooth()` / `Spectrum.scale()` stay for scripts.
+  - **The level has its name: dBFS/Hz** - on the level axis, at the cursor, and in an
+    explanation (i) next to it. It is the spectral density relative to the dongle's full
+    scale at the current gain, not dBm: the same microphone reads about 34 dB higher at
+    33.8 dB gain than at 0 dB, and a narrow carrier reads about 46 dB below its power in
+    dBFS (25 kHz points, Hann window). The numbers and the files do not change; WWB still
+    shows them as "dBm". Compare a level only with the floor of the same scan.
+  - An export is confirmed in the status line, with what the numbers in the file are.
+  - Level axis zoomed in below 1 dB per tick: labels with a decimal (they read
+    "-98, -98, -99, -99").
 - **Tuner I2C errors** (`i2c wr failed`, LIBUSB_ERROR_PIPE): the driver build scanner-v5
   (`drivers/rtlsdr-scanner-v5`, `python install_dll.py`) repeats a failed tuner transfer up
   to 3 times with the I2C repeater switched on again; the console prints how many were
@@ -126,7 +141,8 @@ Current release: **[v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releas
   Switzerland, Liechtenstein, United Kingdom, Ukraine, Serbia (partial data) and Belarus
   (no reliable public data).
 - **WWB export.** CSV in the WWB layout (kHz), `.sdb2` and `.sdb3` (WWB 7). Gaps in a scan
-  stay gaps: no invented values.
+  stay gaps: no invented values. The levels are dBFS/Hz at the gain of the scan (WWB shows
+  them as dBm): set exclusion thresholds relative to the floor of the scan.
 - **Sennheiser WSM.** *File > Export > Sennheiser WSM CSV* writes the layout of WSM's own
   receiver scans (EM 300-500 G3); WSM receiver scans can be imported and laid over an
   RTL-SDR scan. The level is dB above the floor x 1.3 (0..48), set from side-by-side scans

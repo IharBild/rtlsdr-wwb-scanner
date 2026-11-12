@@ -40,11 +40,6 @@ class ScanConfigData(GenericQObject):
     _n_sweepOverlapRatio = Signal()
     _n_windowType = Signal()
     _n_windowSize = Signal()
-    _n_smoothingEnabled = Signal()
-    _n_smoothingFactor = Signal()
-    _n_scalingEnabled = Signal()
-    _n_scalingMinDB = Signal()
-    _n_scalingMaxDB = Signal()
     _n_cleanRipple = Signal()
     _n_cleanSpurs = Signal()
     _n_cleanImages = Signal()
@@ -62,11 +57,9 @@ class ScanConfigData(GenericQObject):
         self._sweepOverlapRatio = FACTORY['sweepOverlapRatio']
         self._windowType = 'hann'
         self._windowSize = FACTORY['windowSize']
-        self._smoothingEnabled = False
-        self._smoothingFactor = 1.
-        self._scalingEnabled = False
-        self._scalingMinDB = -140.
-        self._scalingMaxDB = -55.
+        # V21.0: Smoothing and Scaling are gone (audit A4): both changed the
+        # levels after the scan was saved, so the graph and the exported
+        # files differed from the history. Their saved settings are ignored.
         self._cleanRipple = True
         self._cleanSpurs = True
         self._cleanImages = False     # V20.9: images of strong signals are marked, not hidden
@@ -105,26 +98,6 @@ class ScanConfigData(GenericQObject):
     def _g_windowSize(self): return self._windowSize
     def _s_windowSize(self, value): self._generic_setter('_windowSize', value)
     windowSize = Property(int, _g_windowSize, _s_windowSize, notify=_n_windowSize)
-
-    def _g_smoothingEnabled(self): return self._smoothingEnabled
-    def _s_smoothingEnabled(self, value): self._generic_setter('_smoothingEnabled', value)
-    smoothingEnabled = Property(bool, _g_smoothingEnabled, _s_smoothingEnabled, notify=_n_smoothingEnabled)
-
-    def _g_smoothingFactor(self): return self._smoothingFactor
-    def _s_smoothingFactor(self, value): self._generic_setter('_smoothingFactor', value)
-    smoothingFactor = Property(float, _g_smoothingFactor, _s_smoothingFactor, notify=_n_smoothingFactor)
-
-    def _g_scalingEnabled(self): return self._scalingEnabled
-    def _s_scalingEnabled(self, value): self._generic_setter('_scalingEnabled', value)
-    scalingEnabled = Property(bool, _g_scalingEnabled, _s_scalingEnabled, notify=_n_scalingEnabled)
-
-    def _g_scalingMinDB(self): return self._scalingMinDB
-    def _s_scalingMinDB(self, value): self._generic_setter('_scalingMinDB', value)
-    scalingMinDB = Property(float, _g_scalingMinDB, _s_scalingMinDB, notify=_n_scalingMinDB)
-
-    def _g_scalingMaxDB(self): return self._scalingMaxDB
-    def _s_scalingMaxDB(self, value): self._generic_setter('_scalingMaxDB', value)
-    scalingMaxDB = Property(float, _g_scalingMaxDB, _s_scalingMaxDB, notify=_n_scalingMaxDB)
 
     def _g_cleanRipple(self): return self._cleanRipple
     def _s_cleanRipple(self, value): self._generic_setter('_cleanRipple', value)
@@ -551,10 +524,7 @@ class ScannerInterface(GenericQObject):
                 self._finish_calibration()
             elif self._gain_calibrating:
                 self.calibrationChanged.emit()      # V20.5: status set by the scanner
-            elif self.scanConfig.smoothingEnabled:
-                self.smooth_scan()
-            if self.scanConfig.scalingEnabled and not self.calibrating:
-                self.scale_scan()
+            # V21.0: no smoothing / scaling of the finished scan any more
         except Exception as exc:
             logging.getLogger('wwb_scanner.ui').error('After the scan: %s', exc, exc_info=True)
         finally:
@@ -614,25 +584,6 @@ class ScannerInterface(GenericQObject):
             logging.getLogger('wwb_scanner').error('Calibration failed: %s', exc, exc_info=True)
         finally:
             self.calibrationChanged.emit()
-
-    @Slot()
-    def smooth_scan(self):
-        logger.info('Smoothing scan')
-        N = int(self.spectrum.sample_data.size * self.scanConfig.smoothingFactor / 100.)
-        if not self.spectrum.smooth(N):
-            # V18.1 (audit 1.4)
-            logging.getLogger('wwb_scanner.status').warning(
-                'Smoothing skipped: %d points is too short for a %d-point window', self.spectrum.sample_data.size, N)
-        # TODO: figure out why interpolate stopped working
-        # self.spectrum.interpolate()
-
-    @Slot()
-    def scale_scan(self):
-        logger.info('Scaling scan')
-        conf = self.scanConfig
-        if not self.spectrum.scale(conf.scalingMinDB, conf.scalingMaxDB):
-            # V18.1 (audit 1.3)
-            logging.getLogger('wwb_scanner.status').warning('Scaling skipped: the scan is empty or flat')
 
     @Slot()
     def on_scanner_ready(self):
