@@ -17,6 +17,20 @@ scanner prints them). x64 only. `python install_dll.py` finds the DLL that pyrtl
 keeps a copy `.before-v5` and installs; `python install_dll.py rollback` puts it back.
 Status: built 10.11.2026, checked on the USB model (forced -9 errors recover, repeater
 restored, retune still 9 USB transfers) and in Wine; NOT yet tested on the real dongle.
-(The dithering stub mentioned above would now be patch 0007.)
+Tested on the real dongle 11-12.11.2026 (scans, gain survey: 20-23 retries, 0 failures).
+
+`rtlsdr-scanner-v6/` - the v5 build plus the fixes of the driver audit of 12.11.2026
+(patches 0007, 0008), only on failure paths: after a tuner transfer that needed a retry
+(the tuner may have been reset) all tuner registers are written again from the driver's
+copy and the PLL lock is checked again (`rtlsdr_get_tuner_restores()`, console line
+"r82xx: tuner registers restored"); after a failed write the next write restores all
+registers and skipping redundant writes works again; no retries once the dongle is gone
+(NO_DEVICE); `rtlsdr_read_sync()` returns LIBUSB_ERROR_TIMEOUT after 2 s + twice the
+reading time instead of blocking for ever (`rtlsdr_set_sync_read_timeout()`). Normal
+retunes unchanged (9 USB transfers). `source/build_all.sh` builds everything from pinned
+sources; two builds gave bit-identical binaries. x64 only.
+Status: built 12.11.2026, checked on the USB model (`source/model`, results for v5 and v6
+in `model_results.txt`) and in Wine; NOT yet tested on the real dongle.
+(The dithering stub mentioned above would now be patch 0009.)
 
 Licenses: rtl-sdr GPL-2.0-or-later, libusb LGPL-2.1 (see `source/`).
