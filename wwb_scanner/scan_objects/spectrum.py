@@ -48,6 +48,11 @@ class Spectrum(JSONMixin):
     def __init__(self, **kwargs):
         self.name = kwargs.get('name')
         self.eid = kwargs.get('eid')
+        # V20.9: what the clean scan did (saved with the scan since V17) is
+        # read back, so a scan opened from the history shows its spur marks
+        info = kwargs.get('cleanup')
+        if isinstance(info, dict):
+            self.cleanup_info = info
         eid = kwargs.get('scan_config_eid')
         config = kwargs.get('scan_config')
         if config is not None:

@@ -41,7 +41,7 @@ Dialog {
         onActivated: root.tvPlan = values[index]
     }
     CheckBox {
-        text: "Mark the dongle's own spurs (k x 28.8 MHz)"
+        text: "Mark the dongle's own spurs (k x 14.4 MHz)"
         checked: root.showSpurs
         onToggled: root.showSpurs = checked
     }

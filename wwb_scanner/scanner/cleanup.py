@@ -9,10 +9,11 @@ Three corrections, all done after the scan in a fraction of a second
    repeats with the tile step (0.775 MHz = 31 points). It is measured from
    the scan itself (median over all tiles) and removed.
 
-2. Own spurs. The dongle makes its own carriers at multiples of 28.8 MHz
-   (its crystal). A calibration scan without antenna records them; their
-   power is subtracted (as power, not dB), so a real signal on the same
-   frequency stays.
+2. Own spurs. The dongle makes its own carriers at multiples of 14.4 MHz
+   (half of its 28.8 MHz crystal; V20.9: the odd multiples too) and at
+   480 MHz. Such a carrier is hidden only while it is narrow and not more
+   than SPUR_HIDE_MAX_DB above the floor; a stronger narrow carrier on
+   that grid is kept and reported - it may be a transmitter.
 
 3. Floor shape. Without antenna the floor is not flat (a hump below
    300 MHz, falling 2 dB above 1 GHz). The calibration records that shape
@@ -34,12 +35,23 @@ import numpy as np
 
 logger = logging.getLogger('wwb_scanner.cleanup')
 
-PROFILE_VERSION = 1
+PROFILE_VERSION = 2        # V20.9: floor without the signals that leak in without antenna
 BIN_MHZ = 0.025
 FLOOR_BINS = 81            # running median for the floor shape: 2 MHz
 SPUR_DB = 0.5              # a calibration point this much over the floor is a spur
 SPUR_WIDEN = 2             # spur area +-2 points (window leakage)
-SPUR_STEP_MHZ = 28.8       # the dongle's crystal: spurs only at its multiples
+# V20.9: half of the 28.8 MHz crystal. The odd multiples (475.2, 504.0,
+# 532.8 ... MHz) were seen in every scan of 11-12.11.2026: +6.8 dB without
+# antenna at 49.6 dB gain, up to +16.5 dB with the antenna.
+SPUR_STEP_MHZ = 14.4
+# V20.9: a narrow carrier on the spur grid is hidden only up to this level
+# above the floor around it. Strongest own spur measured with the antenna:
+# +16.5 dB (504.0 MHz, 49.6 dB), +12.8 dB at 33.8 dB; a microphone next to
+# the antenna is +35 dB and more. Where the calibration (no antenna) shows
+# a stronger own spur (86.4 MHz: +21.5 dB at 49.6 dB) the limit is that
+# level + SPUR_CAL_MARGIN_DB.
+SPUR_HIDE_MAX_DB = 20.0
+SPUR_CAL_MARGIN_DB = 6.0
 SPUR_NEAR_MHZ = 0.05
 EXTRA_SPURS_MHZ = [480.0]  # USB 2.0 clock of the dongle
 EXTERNAL_DB = 3.0          # other peaks in the calibration = transmitters nearby
@@ -48,6 +60,19 @@ SPUR_SHOULDER_DB = 1.0     # points 75-100 kHz away at most this much over them
 RIPPLE_MIN_PERIODS = 40    # shorter scans use the ripple of the calibration
 RIPPLE_CLIP_DB = 3.0       # points further than this from the floor are signals
 GAIN_TOLERANCE_DB = 0.6
+# V20.9: strong transmitters reach the dongle even without antenna (user's
+# calibration of 12.11.2026 at 49.6 dB: TV 518-526 MHz +5.6 dB, 423-424 MHz
+# +11 dB, GSM 930-942 MHz +4 dB in the floor shape, so every scan was
+# lowered by that much there). Such a signal is a bump: the floor goes up
+# and comes down again within LEAK_MAX_MHZ. The dongle's own floor has
+# steps (75, 250, 278 MHz: up to +3.7 dB) that go up and stay - not touched.
+LEAK_GRID_BINS = 20        # the floor shape is looked at every 0.5 MHz
+LEAK_EDGE_STEPS = 5        # an edge: LEAK_DB within 2.5 MHz
+LEAK_DB = 1.0
+LEAK_RETURN_DB = 0.5       # "down again": this close to the level before the bump
+LEAK_FALL_DB = 0.5         # ... with a falling edge of at least this much within 2.5 MHz
+LEAK_MAX_MHZ = 24.0
+LEAK_MARGIN_MHZ = 1.0
 
 # Ripple measured on the user's RTL-SDR Blog V4 (4 scans, 31-1766 MHz,
 # 2.4 MS/s, 25 kHz points, step 0.775 MHz); used when a scan is too short
@@ -126,6 +151,68 @@ def remove_ripple(f_mhz, y_db, start_mhz, ripple_db):
     return np.asarray(y_db, dtype=np.float64) - ripple_db[ph]
 
 
+def ignore_leaks(f_mhz, floor_db):
+    """V20.9: floor shape without the bumps of outside signals.
+    Returns (floor_db, [[lo MHz, hi MHz, dB], ...] of the bumps taken out).
+    Between the edges of a bump the floor is a straight line."""
+    f = np.asarray(f_mhz, dtype=np.float64)
+    floor = np.asarray(floor_db, dtype=np.float64)
+    n = f.size
+    e = LEAK_EDGE_STEPS
+    if n < LEAK_GRID_BINS * (4 * e + 2):
+        return floor.copy(), []
+    step = float(np.median(np.diff(f)))
+    if not (0.6 * BIN_MHZ <= step <= 1.4 * BIN_MHZ):
+        return floor.copy(), []
+    at = np.arange(0, n, LEAK_GRID_BINS)
+    g = floor[at]
+    d = g[e:] - g[:-e]                       # d[k]: change from point k to k + e
+    max_steps = int(round(LEAK_MAX_MHZ / (step * LEAK_GRID_BINS)))
+    margin = int(round(LEAK_MARGIN_MHZ / step))
+    mask = np.zeros(n, dtype=bool)
+    leaks = []
+    k = 0
+    while k < d.size:
+        if d[k] < LEAK_DB:
+            k += 1
+            continue
+        a = k                                # the floor starts to rise here
+        base = float(g[a])
+        stop = min(g.size - 1, a + max_steps)
+        b = None
+        top = base
+        for m in range(a + 1, stop + 1):
+            top = max(top, float(g[m]))
+            if m > a + e and top - base >= LEAK_DB and \
+                    g[m] <= base + max(LEAK_RETURN_DB, 0.25 * (top - base)):
+                b = m                        # ... and is down again here
+                break
+        if b is None or d[a:min(b, d.size)].min() > -LEAK_FALL_DB:
+            k += 1                           # up and stays up, or comes down slowly: a step
+            continue
+        height = top - base
+        lo = max(int(at[a]) - margin, 0)
+        hi = min(int(at[b]) + margin, n - 1)
+        mask[lo:hi + 1] = True
+        leaks.append([round(float(f[lo]), 1), round(float(f[hi]), 1), round(height, 1)])
+        k = b
+    if not leaks:
+        return floor.copy(), []
+    good = ~mask
+    if good.sum() < 2:
+        return floor.copy(), []
+    out = floor.copy()
+    out[mask] = np.interp(f[mask], f[good], floor[good])
+    merged = []
+    for lo, hi, db in leaks:
+        if merged and lo <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], hi)
+            merged[-1][2] = max(merged[-1][2], db)
+        else:
+            merged.append([lo, hi, db])
+    return out, merged
+
+
 # ---------------------------------------------------------------- profile
 
 def build_profile(f_mhz, y_db, start_mhz, period_bins, meta=None):
@@ -142,6 +229,7 @@ def build_profile(f_mhz, y_db, start_mhz, period_bins, meta=None):
     # light 9-point mean
     k = np.ones(9) / 9.0
     floor = np.convolve(np.pad(floor, 4, mode='edge'), k, mode='valid')
+    floor, leaks = ignore_leaks(f, floor)    # V20.9
     excess = yc - floor
     k_near = np.abs(f - np.rint(f / SPUR_STEP_MHZ) * SPUR_STEP_MHZ) <= SPUR_NEAR_MHZ
     for x in EXTRA_SPURS_MHZ:
@@ -178,6 +266,7 @@ def build_profile(f_mhz, y_db, start_mhz, period_bins, meta=None):
         floor_ref_db=float(np.median(floor)),
         spurs=spurs,
         external=external,
+        leaks=leaks,
         meta=dict(meta or {}),
     )
     prof['meta'].setdefault('created', time.strftime('%Y-%m-%d %H:%M:%S'))
@@ -230,8 +319,35 @@ def spur_freqs(f_lo, f_hi):
     return sorted(out)
 
 
+def known_spur_levels(profile):
+    """{MHz: dB above the floor without antenna} of the spur grid, from a
+    calibration (its 'spurs'; calibrations made before V20.9 list the odd
+    multiples of 14.4 MHz under 'external')."""
+    out = {}
+    if not profile:
+        return out
+    for key in ('spurs', 'external'):
+        for item in profile.get(key) or []:
+            try:
+                fr, db = float(item[0]), float(item[1])
+            except (TypeError, ValueError, IndexError):
+                continue
+            on_grid = abs(fr - round(fr / SPUR_STEP_MHZ) * SPUR_STEP_MHZ) <= SPUR_NEAR_MHZ or \
+                any(abs(fr - x) <= SPUR_NEAR_MHZ for x in EXTRA_SPURS_MHZ)
+            if on_grid:
+                k = round(fr, 1)
+                out[k] = max(out.get(k, 0.), db)
+    return out
+
+
 def remove_spurs(f_mhz, y_db):
-    """Remove the dongle's own carriers (k x 28.8 MHz, 480 MHz).
+    """As hide_spurs() with the default limit; returns (y_db, hidden)."""
+    y, hidden, _ = hide_spurs(f_mhz, y_db)
+    return y, hidden
+
+
+def hide_spurs(f_mhz, y_db, limit_db=None, known=None):
+    """Hide the dongle's own carriers (k x 14.4 MHz, 480 MHz).
 
     Such a carrier is one pure tone: exactly 3 points wide (centre and one
     point on each side, the window of the FFT), at a known frequency. With
@@ -241,15 +357,24 @@ def remove_spurs(f_mhz, y_db):
     the surroundings (nothing wide there), the 5 centre points get the
     level of the surroundings. A real transmitter on that frequency is
     wider than 100 kHz and stays untouched.
-    Returns (y_db, list of removed frequencies)."""
+
+    V20.9: a narrow carrier there that stands more than ``limit_db``
+    (SPUR_HIDE_MAX_DB) above the floor is NOT hidden: no own spur was ever
+    that strong, so it may be a transmitter. ``known`` ({MHz: dB without
+    antenna}, known_spur_levels()) raises the limit where the dongle's own
+    spur is known to be stronger. limit_db=float('inf'): as before V20.9.
+    Returns (y_db, hidden frequencies, kept [[MHz, dB above the floor], ...])."""
     f = np.asarray(f_mhz, dtype=np.float64)
     y = np.asarray(y_db, dtype=np.float64).copy()
-    removed = []
+    removed, kept = [], []
+    if limit_db is None:
+        limit_db = SPUR_HIDE_MAX_DB
+    known = known or {}
     if f.size < 25:
-        return y, removed
+        return y, removed, kept
     step = float(np.median(np.diff(f)))
     if not (0.6 * BIN_MHZ <= step <= 1.4 * BIN_MHZ):
-        return y, removed           # other point spacing: shape test not valid
+        return y, removed, kept     # other point spacing: shape test not valid
     p = from_db(y)
     for s in spur_freqs(f[0], f[-1]):
         i = int(np.argmin(np.abs(f - s)))
@@ -269,15 +394,22 @@ def remove_spurs(f_mhz, y_db):
             continue
         if mid_db > max(SPUR_SHOULDER_DB, centre_db - 3.0):
             continue                # +-50 kHz too high for a tone: something wide
+        limit = max(float(limit_db), known.get(round(s, 1), -1e9) + SPUR_CAL_MARGIN_DB)
+        if centre_db > limit:
+            kept.append([round(float(f[i]), 4), round(float(centre_db), 1)])
+            continue                # V20.9: too strong for an own spur
         p[i - 2:i + 3] = line[2:7]
         removed.append(round(float(f[i]), 4))
-    return to_db(p), removed
+    return to_db(p), removed, kept
 
 
 def clean(f_mhz, y_db, start_mhz, period_bins, profile=None, ripple=True,
-          spurs=True, flatten=True, default_ripple=None):
+          spurs=True, flatten=True, default_ripple=None, spur_limit_db=None,
+          spur_profile=None):
     """Return (clean_db, info). Ripple and spurs need no calibration; the
-    floor shape (flatten) needs the profile of a calibration scan."""
+    floor shape (flatten) needs the profile of a calibration scan.
+    V20.9: ``spur_profile`` (default: ``profile``) only tells how strong the
+    dongle's own spurs are without antenna (see hide_spurs)."""
     f = np.asarray(f_mhz, dtype=np.float64)
     y = np.asarray(y_db, dtype=np.float64).copy()
     info = {'ripple': None, 'spurs': False, 'flatten': False}
@@ -297,9 +429,14 @@ def clean(f_mhz, y_db, start_mhz, period_bins, profile=None, ripple=True,
             info['ripple'] = src
             info['ripple_pp_db'] = round(float(np.ptp(r)), 2)
     if spurs:
-        y, gone = remove_spurs(f, y)
+        if spur_limit_db is None:
+            spur_limit_db = SPUR_HIDE_MAX_DB
+        y, gone, kept = hide_spurs(f, y, spur_limit_db,
+                                   known_spur_levels(spur_profile if spur_profile is not None else profile))
         info['spurs'] = True
         info['spurs_removed'] = gone
+        info['spurs_kept'] = kept
+        info['spur_limit_db'] = None if np.isinf(spur_limit_db) else float(spur_limit_db)
     if profile is not None and flatten:
         pf = np.asarray(profile['freq'], dtype=np.float64)
         inside = (f >= pf[0] - 0.5 * BIN_MHZ) & (f <= pf[-1] + 0.5 * BIN_MHZ)
@@ -338,6 +475,13 @@ def find_profile(gain, sample_rate, period_bins=None):
         logger.warning('calibration file %s can not be read: %s', path, exc)
         return None, 'calibration file damaged, calibrate again'
     why = profile_matches(prof, gain, sample_rate, period_bins)
+    if not why and int(prof.get('version', 1)) < 2:
+        # V20.9: made before the leak check - the same check now, in memory
+        # (the file stays as it is; floor_ref_db too, levels do not move)
+        try:
+            prof['floor_db'], prof['leaks'] = ignore_leaks(prof['freq'], prof['floor_db'])
+        except Exception:
+            logger.exception('leak check of %s', path)
     if not why and prof.get('floor_ref_db', -200.) > CAL_FLOOR_MAX_DB:
         # V20.7.3: saved before the check existed (10.11 20:44: floor -65 dB)
         why = ('the calibration of %s is broken (floor %.1f dB, the dongle alone gives about -96 dB): '
@@ -359,6 +503,9 @@ def status_text(gain, sample_rate):
     ext = prof.get('external') or []
     if ext:
         text += ' %d outside signal(s) were received during the calibration.' % len(ext)
+    leaks = prof.get('leaks') or []
+    if leaks:
+        text += ' Left out of the floor shape: %s MHz.' % ', '.join('%.0f-%.0f' % (lo, hi) for lo, hi, _ in leaks[:6])
     return text
 
 
@@ -414,5 +561,11 @@ def calibrate(f_mhz, y_db, start_mhz, step_mhz, meta, clipped_share=None):
     if ext:
         text += '; received without antenna: %s MHz (own transmitters on? they are NOT removed from scans)' % (
             ', '.join('%.3f' % e[0] for e in ext[:5]))
+    leaks = prof.get('leaks') or []
+    if leaks:
+        # V20.9
+        text += '; outside signals left out of the floor shape: %s MHz' % ', '.join(
+            '%.0f-%.0f' % (lo, hi) for lo, hi, _ in leaks[:6]) + (
+            ' and %d more' % (len(leaks) - 6) if len(leaks) > 6 else '')
     logger.info('calibration profile written to %s', path)
     return True, text

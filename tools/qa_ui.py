@@ -299,6 +299,7 @@ def main():
     v205_checks(app, win, si)
     v206_checks(app, win, si)
     v207_checks(app, win, si)
+    v209_checks(app, win, si)
     v208_checks(app, win, controls, si, fresh, first_start)
     win.close()
     pump(app, 0.3)
@@ -341,7 +342,19 @@ def v16_checks(app, win, controls, si, seen_left):
     marks = [o for o in walk(win.contentItem())
              if o.metaObject().indexOfProperty('f') >= 0 and o.metaObject().indexOfProperty('span') >= 0]
     vis = [round(float(m.property('f')), 1) for m in marks if m.property('visible')]
-    check('U11', len(marks) == 16, 'spur marks: %d defined, %d visible in the current view %s' % (len(marks), len(vis), vis[:4]))
+    want, cleaned = 16, False
+    try:
+        # V20.9: a scan cleaned of spurs brings its own marks (hidden and kept),
+        # any other scan gets the 16 known frequencies
+        gr = [o for o in win.findChildren(QtCore.QObject) if o.metaObject().indexOfMethod('spurMarkModel()') >= 0]
+        if gr:
+            want = int(_qml_eval(gr[0], 'spurMarkModel().length'))
+            cleaned = bool(_qml_eval(gr[0], 'activeSpectrum ? activeSpectrum.spursCleaned : false'))
+    except Exception:
+        pass
+    check('U11', len(marks) == want and (cleaned or want == 16),
+          'spur marks: %d drawn, %d expected (%s), %d visible in the current view %s'
+          % (len(marks), want, 'of this scan' if cleaned else 'known frequencies', len(vis), vis[:4]))
     # U12: preset sets the range
     combos = find(win, lambda o: o.metaObject().indexOfSignal('activated(int)') >= 0
                   and str(o.property('displayText') or '').startswith('Preset'))
@@ -569,12 +582,13 @@ def v203_checks(app, win):
     acts = {}
     for o in win.findChildren(QtCore.QObject):
         t = str(o.property('text') or '')
-        if t in ('&Lost sensitivity bands', 'Removed &image marks') \
+        if t in ('&Lost sensitivity bands', 'Removed &image marks', '&Image marks') \
                 and 'Action' in o.metaObject().className():
             acts[t] = o
     graphs = [o for o in win.findChildren(QtCore.QObject) if o.metaObject().indexOfProperty('showLossBands') >= 0
               and o.metaObject().indexOfProperty('activeSpectrum') >= 0]
     reps = {n: win.findChild(QtCore.QObject, n) for n in ('lossBandRepeater', 'imageMarkRepeater')}
+    image_action = '&Image marks' if '&Image marks' in acts else 'Removed &image marks'   # V20.9: renamed
     if len(acts) != 2 or not graphs or None in reps.values():
         check('U23', False, 'View actions %s, graphs %d, repeaters %s' % (sorted(acts), len(graphs), reps))
         return
@@ -592,11 +606,11 @@ def v203_checks(app, win):
         return tuple(int(reps[n].property('count')) for n in ('lossBandRepeater', 'imageMarkRepeater'))
     shown = counts()
     seq = []
-    for t in ('&Lost sensitivity bands', 'Removed &image marks'):
+    for t in ('&Lost sensitivity bands', image_action):
         QtCore.QMetaObject.invokeMethod(acts[t], 'trigger')
         pump(app, 0.2)
         seq.append((bool(acts[t].property('checked')), counts()))
-    for t in ('&Lost sensitivity bands', 'Removed &image marks'):
+    for t in ('&Lost sensitivity bands', image_action):
         QtCore.QMetaObject.invokeMethod(acts[t], 'trigger')
         pump(app, 0.2)
     back = counts()
@@ -877,6 +891,100 @@ def v208_checks(app, win, controls, si, fresh, first_start):
               'Start looks for a new dongle %s' % (text[:60], started, n0, n1, cal, gcal, looks))
     except Exception as exc:
         check('U32', False, 'error: %s' % exc)
+
+
+def v209_checks(app, win, si):
+    """V20.9. U33: "Hide dongle's own spurs" and "Hide images of strong
+    signals" (off unless switched on) reach the scan settings; U34: the graph
+    marks what the spur cleaning hid and what it kept; U35: an image mark
+    says whether the image was left in the scan."""
+    from wwb_scanner.ui.pyside.graph import SpectrumGraphData
+    sw_s = win.findChild(QtCore.QObject, 'cleanSpursSwitch')
+    sw_i = win.findChild(QtCore.QObject, 'cleanImagesSwitch')
+    if sw_i is None or not hasattr(SpectrumGraphData, 'spur_marks_of'):
+        check('U33', False, 'no "Hide images of strong signals" switch (V20.9 not installed)')
+        return
+    # U33
+    try:
+        sc = si.scanConfig
+        old = (bool(sc.property('cleanSpurs')), bool(sc.property('cleanImages')))
+        first = bool(si.build_scan_config().processing.clean_images)
+        got = []
+        for spurs, images in ((True, True), (False, False), (True, False)):
+            _qml_eval(sw_i, 'root.open()')
+            pump(app, 0.3)
+            sw_s.setProperty('checked', spurs)
+            sw_i.setProperty('checked', images)
+            pump(app, 0.1)
+            _qml_eval(sw_i, 'root.accept()')
+            pump(app, 0.3)
+            pc = si.build_scan_config().processing
+            got.append((spurs, images) == (bool(pc.clean_spurs), bool(pc.clean_images)))
+        sc.setProperty('cleanSpurs', old[0])
+        sc.setProperty('cleanImages', old[1])
+        text = str(sw_s.property('text'))
+        check('U33', all(got) and text.startswith('Hide') and not (first and not old[1]),
+              'spur switch %r; images hidden at start %s; three settings reach the scan %s' % (text, first, got))
+    except Exception as exc:
+        check('U33', False, 'error: %s' % exc)
+    # U34 / U35
+    try:
+        rep = win.findChild(QtCore.QObject, 'spurMarkRepeater')
+        irep = win.findChild(QtCore.QObject, 'imageMarkRepeater')
+        gr = [o for o in win.findChildren(QtCore.QObject) if o.metaObject().indexOfMethod('spurMarkModel()') >= 0][0]
+        active = _qml_eval(gr, 'activeSpectrum')
+        sg = active.findChild(SpectrumGraphData) if active is not None else None
+        if sg is None or sg.spectrum is None:
+            sgs = [g for g in win.findChildren(SpectrumGraphData) if g.spectrum is not None]
+            sg = sgs[-1] if sgs else None
+        if rep is None or sg is None:
+            check('U34', False, 'repeater %s, spectrum %s' % (rep is not None, sg is not None))
+            return
+        sp = sg.spectrum
+        keep = (getattr(sp, 'cleanup_info', None), getattr(sp, 'image_marks', None))
+        n_known = len(list(_qml_eval(gr, 'spurFreqs').toVariant()))
+        sp.cleanup_info = {'spurs': True, 'spurs_removed': [489.6, 504.0], 'spurs_kept': [[518.4, 32.0]]}
+        sp.image_marks = [{'f': 607.4, 'of': 605., 'hidden': False}]
+        sg._update_marks()
+        pump(app, 0.3)
+        is_active = bool(_qml_eval(gr, 'activeSpectrum ? activeSpectrum.spursCleaned : false'))
+        n_scan = int(rep.property('count'))
+        model = _qml_eval(gr, 'JSON.stringify(spurMarkModel())')
+        def texts(start):
+            def walk(item):
+                for c in item.childItems():
+                    yield c
+                    for g in walk(c):
+                        yield g
+            return [str(o.property('text')) for o in walk(win.contentItem())
+                    if o.metaObject().indexOfProperty('text') >= 0
+                    and str(o.property('text') or '').startswith(start)]
+        labels = texts(('on spur grid', 'image'))
+        sp.cleanup_info = {'spurs': False}
+        sp.image_marks = [{'f': 607.4, 'of': 605., 'hidden': True}]
+        sg._update_marks()
+        pump(app, 0.3)
+        n_raw = int(rep.property('count'))
+        labels2 = texts('image')
+        if keep[0] is None:
+            del sp.cleanup_info
+        else:
+            sp.cleanup_info = keep[0]
+        sp.image_marks = keep[1] or []
+        sg._update_marks()
+        pump(app, 0.2)
+        if not is_active:
+            check('U34', True, 'INFO: the changed spectrum is not the active one, marks not checked')
+            return
+        ok = n_scan == 3 and n_raw == n_known and any(t == 'on spur grid +32 dB: kept' for t in labels)
+        check('U34', ok, 'cleaned scan: %d marks %s, labels %s; scan without spur cleaning: %d known frequencies'
+              % (n_scan, model, [t for t in labels if t.startswith('on spur')], n_raw))
+        if irep is not None and int(irep.property('count') or 0) >= 0:
+            ok = 'image? of 605.000' in labels and 'image of 605.000 (hidden)' in labels2
+            check('U35', ok, 'left in the scan: %s; hidden: %s' % (
+                [t for t in labels if t.startswith('image')], labels2))
+    except Exception as exc:
+        check('U34', False, 'error: %s' % exc)
 
 
 def v206_checks(app, win, si):

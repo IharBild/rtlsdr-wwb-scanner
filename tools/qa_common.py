@@ -58,6 +58,7 @@ MARKERS = [
     ('V20.7.2', 'ui/pyside/qml/InfoTip.qml', 'V20.7.2'),
     ('V20.7.3', 'scanner/cleanup.py', 'CAL_FLOOR_MAX_DB'),
     ('V20.8', 'ui/pyside/scanner.py', 'def start_problem'),
+    ('V20.9', 'scanner/cleanup.py', 'def hide_spurs'),
 ]
 
 

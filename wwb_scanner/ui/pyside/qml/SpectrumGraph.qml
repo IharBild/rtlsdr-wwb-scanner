@@ -17,6 +17,8 @@ Item {
     property alias lossBands: graphData.lossBands
     property alias imageMarks: graphData.imageMarks
     property alias unmeasurableBands: graphData.unmeasurableBands
+    property alias spurMarks: graphData.spurMarks          // V20.9
+    property alias spursCleaned: graphData.spursCleaned
     property alias graphVisible: graphData.graphVisible
     property int index
     property alias color: graphData.color

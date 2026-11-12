@@ -20,6 +20,7 @@ Item {
     property alias scalingMaxDB: model.scalingMaxDB
     property alias cleanRipple: model.cleanRipple
     property alias cleanSpurs: model.cleanSpurs
+    property alias cleanImages: model.cleanImages
     property alias cleanFloor: model.cleanFloor
     property alias autoGain: model.autoGain
     property alias scanRanges: model.scanRanges
@@ -44,6 +45,7 @@ Item {
         scalingMaxDB: -55
         cleanRipple: true
         cleanSpurs: true
+        cleanImages: false      // V20.9: images are marked, hidden only on request
         cleanFloor: true
         autoGain: true
         scanRanges: ''
@@ -70,6 +72,7 @@ Item {
         property alias scalingMaxDB: model.scalingMaxDB
         property alias cleanRipple: model.cleanRipple
         property alias cleanSpurs: model.cleanSpurs
+        property alias cleanImages: model.cleanImages
         property alias cleanFloor: model.cleanFloor
         property alias autoGain: model.autoGain
         property alias scanRanges: model.scanRanges

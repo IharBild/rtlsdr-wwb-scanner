@@ -20,6 +20,7 @@ Dialog {
     property alias scalingMaxDB: scalingMaxDBInput.value
     property alias cleanRipple: cleanRippleSwitch.checked
     property alias cleanSpurs: cleanSpursSwitch.checked
+    property alias cleanImages: cleanImagesSwitch.checked
     property alias cleanFloor: cleanFloorSwitch.checked
     property alias autoGain: autoGainSwitch.checked
     title: 'Scan settings'
@@ -249,13 +250,15 @@ Dialog {
                     Switch {
                         id: cleanSpursSwitch
                         objectName: 'cleanSpursSwitch'
-                        text: "Remove dongle's own spurs"
+                        text: "Hide dongle's own spurs"
                     }
                     InfoTip {
                         Layout.rightMargin: 18
-                        text: "The dongle makes its own weak tones at multiples of 28.8 MHz (and at " +
-                              "480 MHz). A tone exactly there and only 75 kHz wide is replaced by the " +
-                              "level around it. A real transmitter on that frequency is wider and stays."
+                        text: "The dongle makes its own weak tones at multiples of 14.4 MHz (and at " +
+                              "480 MHz). A tone exactly there, only 75 kHz wide and not more than 20 dB " +
+                              "above the floor is replaced by the level around it - on the graph and in " +
+                              "the exported files. A stronger or wider signal on such a frequency stays " +
+                              "and is marked: it may be a transmitter. Off: nothing is hidden."
                     }
                     Switch {
                         id: cleanRippleSwitch
@@ -288,6 +291,18 @@ Dialog {
                               'again at lower gain and scaled back by the real gain difference (Gain steps ' +
                               'below). Levels near strong transmitters stay right instead of compressed; ' +
                               'the scan takes a little longer.'
+                    }
+                    Switch {
+                        id: cleanImagesSwitch
+                        objectName: 'cleanImagesSwitch'
+                        text: 'Hide images of strong signals'
+                    }
+                    InfoTip {
+                        Layout.rightMargin: 18
+                        text: 'A strong carrier shows weak copies of itself 2.4 MHz and 28.8 MHz away. ' +
+                              'Off (default): such a copy stays in the scan and is only marked "image?" - ' +
+                              'a real weak signal there looks the same and must not disappear. On: it is ' +
+                              'replaced by the floor around it, on the graph and in the exported files.'
                     }
                 }
 
@@ -492,6 +507,7 @@ Dialog {
         config.scalingMaxDB = root.scalingMaxDB;
         config.cleanRipple = root.cleanRipple;
         config.cleanSpurs = root.cleanSpurs;
+        config.cleanImages = root.cleanImages;
         config.cleanFloor = root.cleanFloor;
         config.autoGain = root.autoGain;
     }
@@ -512,6 +528,7 @@ Dialog {
         root.scalingMaxDB = config.scalingMaxDB;
         root.cleanRipple = config.cleanRipple;
         root.cleanSpurs = config.cleanSpurs;
+        root.cleanImages = config.cleanImages;
         root.cleanFloor = config.cleanFloor;
         root.autoGain = config.autoGain;
         root.updateCalibrationText();

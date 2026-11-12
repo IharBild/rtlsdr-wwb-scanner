@@ -47,6 +47,7 @@ class ScanConfigData(GenericQObject):
     _n_scalingMaxDB = Signal()
     _n_cleanRipple = Signal()
     _n_cleanSpurs = Signal()
+    _n_cleanImages = Signal()
     _n_cleanFloor = Signal()
     _n_autoGain = Signal()
     _n_scanRanges = Signal()
@@ -68,6 +69,7 @@ class ScanConfigData(GenericQObject):
         self._scalingMaxDB = -55.
         self._cleanRipple = True
         self._cleanSpurs = True
+        self._cleanImages = False     # V20.9: images of strong signals are marked, not hidden
         self._cleanFloor = True
         self._autoGain = True
         self._scanRanges = ''
@@ -131,6 +133,10 @@ class ScanConfigData(GenericQObject):
     def _g_cleanSpurs(self): return self._cleanSpurs
     def _s_cleanSpurs(self, value): self._generic_setter('_cleanSpurs', value)
     cleanSpurs = Property(bool, _g_cleanSpurs, _s_cleanSpurs, notify=_n_cleanSpurs)
+
+    def _g_cleanImages(self): return self._cleanImages
+    def _s_cleanImages(self, value): self._generic_setter('_cleanImages', value)
+    cleanImages = Property(bool, _g_cleanImages, _s_cleanImages, notify=_n_cleanImages)
 
     def _g_cleanFloor(self): return self._cleanFloor
     def _s_cleanFloor(self, value): self._generic_setter('_cleanFloor', value)
@@ -377,6 +383,7 @@ class ScannerInterface(GenericQObject):
         conf.sampling.auto_gain = bool(getattr(sc, 'autoGain', False))
         conf.processing.clean_ripple = bool(getattr(sc, 'cleanRipple', False))
         conf.processing.clean_spurs = bool(getattr(sc, 'cleanSpurs', False))
+        conf.processing.clean_images = bool(getattr(sc, 'cleanImages', False))
         conf.processing.clean_floor = bool(getattr(sc, 'cleanFloor', False))
         segs = self.scan_segments()
         if len(segs) > 1:
@@ -392,6 +399,7 @@ class ScannerInterface(GenericQObject):
             conf.sampling.auto_gain = False
             conf.processing.clean_ripple = False
             conf.processing.clean_spurs = False
+            conf.processing.clean_images = False
             conf.processing.clean_floor = False
         if self.calibrating:
             # calibration: whole range, values exactly as measured
@@ -401,6 +409,7 @@ class ScannerInterface(GenericQObject):
             conf.sampling.auto_gain = False
             conf.processing.clean_ripple = False
             conf.processing.clean_spurs = False
+            conf.processing.clean_images = False
             conf.processing.clean_floor = False
         return conf
 

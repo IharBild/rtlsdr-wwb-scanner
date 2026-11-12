@@ -33,9 +33,10 @@ def _air(mic=20., extra=()):
     return a
 
 
-def _scan(monkeypatch, tmpdir, gain, auto_gain=True, **kw):
+def _scan(monkeypatch, tmpdir, gain, auto_gain=True, clean=None, **kw):
     sk = {'air': _air(**kw), 'gain_affects': True, 'wide_adc': sim.WideAdc()}
-    return sim.run_scan(monkeypatch, tmpdir, 626, 640, gain=gain, auto_gain=auto_gain, sdr_kwargs=sk)
+    return sim.run_scan(monkeypatch, tmpdir, 626, 640, gain=gain, auto_gain=auto_gain, sdr_kwargs=sk,
+                        clean=clean)
 
 
 class _SD(object):
@@ -101,7 +102,8 @@ def test_dips_of_a_multiplex_are_not_lost_sensitivity():
 
 
 def test_image_of_a_carrier_that_did_not_clip_is_removed(monkeypatch, tmpdir):
-    sc, sdr, dt = _scan(monkeypatch, tmpdir, 0.0)
+    # V20.9: only with "Hide images of strong signals" (off: test_v209)
+    sc, sdr, dt = _scan(monkeypatch, tmpdir, 0.0, clean={'clean_images': True})
     coll = sc.sample_collection
     assert not coll.overload                  # nothing clipped at 0 dB
     got = [p for p, d, c in coll.images]

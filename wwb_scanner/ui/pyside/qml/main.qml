@@ -119,7 +119,7 @@ ApplicationWindow {
                 onTriggered: uiSettings.showLossBands = checked
             }
             Action {
-                text: qsTr("Removed &image marks")
+                text: qsTr("&Image marks")
                 checkable: true
                 checked: uiSettings.showImageMarks
                 onTriggered: uiSettings.showImageMarks = checked

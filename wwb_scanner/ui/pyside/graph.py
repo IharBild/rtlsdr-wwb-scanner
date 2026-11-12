@@ -186,6 +186,8 @@ class SpectrumGraphData(QtQuick.QQuickItem):
         self._loss_bands = []
         self._image_marks = []
         self._unmeasurable = []
+        self._spur_marks = []
+        self._spurs_cleaned = False
         self._min_value = QtCore.QPointF(0., 0.)
         self._max_value = QtCore.QPointF(0., 0.)
         self._model = None
@@ -315,13 +317,40 @@ class SpectrumGraphData(QtQuick.QQuickItem):
     imageMarks = Property('QVariantList', _g_image_marks, notify=_n_marks)
     def _g_unmeasurable(self): return self._unmeasurable
     unmeasurableBands = Property('QVariantList', _g_unmeasurable, notify=_n_marks)
+    # V20.9: own spurs hidden in this scan and strong narrow carriers on the
+    # spur grid that were kept: [{'f': MHz, 'db': dB over the floor, 'kept': bool}]
+    def _g_spur_marks(self): return self._spur_marks
+    spurMarks = Property('QVariantList', _g_spur_marks, notify=_n_marks)
+    # true when the spur cleaning ran on this scan (then spurMarks is the
+    # whole truth; otherwise the graph draws the known spur frequencies)
+    def _g_spurs_cleaned(self): return self._spurs_cleaned
+    spursCleaned = Property(bool, _g_spurs_cleaned, notify=_n_marks)
+    @staticmethod
+    def spur_marks_of(spectrum):
+        info = getattr(spectrum, 'cleanup_info', None) if spectrum is not None else None
+        if not isinstance(info, dict) or not info.get('spurs'):
+            return []
+        out = []
+        try:
+            for fr in info.get('spurs_removed') or []:
+                out.append({'f': float(fr), 'db': 0., 'kept': False})
+            for item in info.get('spurs_kept') or []:
+                out.append({'f': float(item[0]), 'db': float(item[1]), 'kept': True})
+        except (TypeError, ValueError, IndexError):
+            return []
+        return sorted(out, key=lambda m: m['f'])
     def _update_marks(self):
         sp = self.spectrum
         lb = list(getattr(sp, 'loss_bands', None) or []) if sp is not None else []
         um = list(getattr(sp, 'unmeasurable_bands', None) or []) if sp is not None else []
         im = list(getattr(sp, 'image_marks', None) or []) if sp is not None else []
-        if lb != self._loss_bands or im != self._image_marks or um != self._unmeasurable:
+        sm = self.spur_marks_of(sp)
+        info = getattr(sp, 'cleanup_info', None) if sp is not None else None
+        cleaned = bool(isinstance(info, dict) and info.get('spurs'))
+        if lb != self._loss_bands or im != self._image_marks or um != self._unmeasurable \
+                or sm != self._spur_marks or cleaned != self._spurs_cleaned:
             self._loss_bands, self._image_marks, self._unmeasurable = lb, im, um
+            self._spur_marks, self._spurs_cleaned = sm, cleaned
             self._n_marks.emit()
 
     def _set_from_graph_dtype(self, d_arr):

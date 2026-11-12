@@ -198,6 +198,12 @@ IMAGE_OVER_DB = 6.
 # - images at +-fs / +-28.8 MHz also of strong narrow carriers that did not
 #   clip (635.325 MHz +12 dB at 0 dB gain), if their level fits the
 #   dongle's image rejection (alias -36...-52 dBc, crystal -60...-80 dBc).
+# V20.9 (audit A2, user's decision 11.11.2026): an image is only marked on
+# the graph and named in the status line; it stays in the scan and in the
+# exported files. A real signal 2.4 MHz from a strong carrier and 36-52 dB
+# below it (a far microphone next to a near one) looks exactly like an
+# image and was erased. processing.clean_images=True (Scan settings >
+# "Hide images of strong signals") replaces them by the floor as before.
 STRONG_CARRIER_DB = 45.
 ALIAS_DBC = (-52., -36.)       # user's V4: -44 dBc at every gain
 XTAL_DBC = (-80., -60.)        # user's V4: -70 dBc
@@ -1274,6 +1280,7 @@ class SampleCollection(JSONMixin):
         """V20.2: images of strong carriers (clipping zones and, with the
         auto gain or the spur cleaning on, any strong narrow carrier)."""
         self.images = []
+        self.images_hidden = False
         if self.aborted:
             return
         zones = list(getattr(self, 'zone_floors', None) and [z for z, _ in self.zone_floors] or [])
@@ -1287,26 +1294,31 @@ class SampleCollection(JSONMixin):
         except Exception:
             pass
         spurs = False
+        hide = False
         try:
             spurs = bool(self.scanner.config.processing.get('clean_spurs'))
+            hide = bool(self.scanner.config.processing.get('clean_images'))
         except Exception:
             pass
-        if auto or spurs:
+        self.images_hidden = hide
+        if auto or spurs or hide:
             for c, lv in self.strong_carriers():
                 if all(abs(c - z) > IMAGE_HALF_HZ for z, _ in carriers):
                     carriers.append((c, lv))
         if not carriers:
             return
         try:
-            self._replace_images([{'carrier': c, 'members': [c], 'level_db': lv} for c, lv in carriers])
+            self._replace_images([{'carrier': c, 'members': [c], 'level_db': lv} for c, lv in carriers],
+                                 replace=hide)
         except Exception:
             logger.exception('image check failed')
 
-    def _replace_images(self, zones):
+    def _replace_images(self, zones, replace=True):
         """V20.1: images of a strong carrier that every tile there sees - at
         +-fs (aliases of the dongle's filter) and +-28.8 MHz (crystal) - are
         replaced by the floor around them. Sets self.images = [(MHz of the
-        image, dB above its surroundings, MHz of the carrier), ...]."""
+        image, dB above its surroundings, MHz of the carrier), ...].
+        V20.9: replace=False only finds them (the scan is not changed)."""
         spectrum = getattr(self.scanner, 'spectrum', None)
         if spectrum is None or not zones:
             return
@@ -1352,6 +1364,9 @@ class SampleCollection(JSONMixin):
                     if not hi.size:
                         continue
                     a, b = int(hi.min()), int(hi.max())
+                    self.images.append((round(p, 3), round(top - base, 1), round(c, 3)))
+                    if not replace:
+                        continue
                     left = y[max(a - 3, 0):a]
                     right = y[b + 1:b + 4]
                     lv = float(np.median(left)) if left.size else base
@@ -1361,11 +1376,13 @@ class SampleCollection(JSONMixin):
                         v = min(lv + (rv - lv) * t, y[i])
                         sd.data['magnitude'][i] = 10. ** (v / 10.)
                         sd.data['dbFS'][i] = v
-                    self.images.append((round(p, 3), round(top - base, 1), round(c, 3)))
                     changed = True
         if changed:
             spectrum.set_data_updated()
             logger.info('images of strong carriers replaced by the floor around them: %s',
+                        ', '.join('%.3f (+%.0f dB, of %.3f)' % t for t in self.images))
+        elif self.images:
+            logger.info('possible images of strong carriers (left in the scan): %s',
                         ', '.join('%.3f (+%.0f dB, of %.3f)' % t for t in self.images))
 
     def _reference_floor_db(self):
@@ -1490,9 +1507,14 @@ class SampleCollection(JSONMixin):
             note = (note + '; ' if note else '') + \
                 '%d tile(s) clipped even at the lowest gain - move the antenna away' % len(still)
         images = getattr(self, 'images', None) or []
-        if images:
+        hidden = bool(getattr(self, 'images_hidden', False))
+        if images and hidden:
             note = (note + '; ' if note else '') + 'images of the strong signal removed at ' + \
                 ', '.join('%.3f' % p for p, _, _ in images[:4]) + ' MHz (not measurable there)'
+        elif images:
+            # V20.9: left in the scan and in the files
+            note = (note + '; ' if note else '') + 'possible images of the strong signal at ' + \
+                ', '.join('%.3f' % p for p, _, _ in images[:4]) + ' MHz (marked, not removed)'
         if getattr(self, 'neighbours_skipped', 0):
             note = (note + '; ' if note else '') + \
                 '%d tile(s) next to strong carriers not checked' % self.neighbours_skipped
@@ -1506,7 +1528,8 @@ class SampleCollection(JSONMixin):
                 spectrum.loss_bands = [{'lo': float(lo), 'hi': float(hi), 'db': float(loss),
                                         'signal': float(c) if c is not None else 0.}
                                        for lo, hi, loss, c in self.sensitivity]
-                spectrum.image_marks = [{'f': float(p), 'of': float(c)} for p, _, c in images]
+                spectrum.image_marks = [{'f': float(p), 'of': float(c), 'hidden': hidden}
+                                        for p, _, c in images]
                 spectrum.unmeasurable_bands = [{'lo': float(lo), 'hi': float(hi), 'clip': float(r)}
                                                for lo, hi, r in self.unmeasurable]
             except Exception:

@@ -159,7 +159,7 @@ def test_scan_with_cleanup_keeps_raw(monkeypatch, tmpdir, caplog):
     k = int(np.argmin(np.abs(f - 510.3)))
     assert abs(y[k] - sp.raw_dbFS[k]) < 0.5                 # real carrier kept
     status = [r.getMessage() for r in caplog.records if r.name == 'wwb_scanner.status']
-    assert status and 'clean:' in status[-1] and 'own spurs removed' in status[-1]
+    assert status and 'clean:' in status[-1] and 'own spurs hidden' in status[-1]
     from wwb_scanner.utils.dbstore import db_store
     rec = db_store.scan_db.table('scans_performed').all()[-1]
     assert rec['cleanup']['spurs']

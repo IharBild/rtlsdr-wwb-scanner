@@ -263,17 +263,25 @@ class ScannerBase(JSONMixin):
             want_r = False
         period = int(round(period))
         profile, why = None, ''
+        spur_profile = None
         if want_f:
             profile, why = cleanup.find_profile(self.gain, self.sample_rate, period)
+        elif want_s:
+            # V20.9: how strong the own spurs are without antenna (hiding limit)
+            spur_profile = cleanup.find_profile(self.gain, self.sample_rate, period)[0]
         default = None
         if abs(self.sample_rate - cleanup.DEFAULT_RIPPLE_FS) < 1 and \
                 abs(self.step_size * 1e6 - cleanup.DEFAULT_RIPPLE_STEP_HZ) < 1:
             default = cleanup.DEFAULT_RIPPLE_DB
         start = float(self.config.scan_range[0])
         yc, info = cleanup.clean(f, y, start, period, profile=profile, ripple=want_r,
-                                 spurs=want_s, flatten=want_f, default_ripple=default)
+                                 spurs=want_s, flatten=want_f, default_ripple=default,
+                                 spur_profile=spur_profile)
         if profile is not None:
             info['calibration'] = profile.get('meta', {}).get('created')
+            if profile.get('leaks'):
+                # V20.9: outside signals found in the calibration, left out of the floor shape
+                info['calibration_leaks'] = profile['leaks']
         if why:
             info['floor_skipped'] = why
         with spectrum.data_update_lock:
@@ -284,7 +292,13 @@ class ScannerBase(JSONMixin):
         spectrum.set_data_updated()
         parts = []
         if info.get('spurs'):
-            parts.append('%d own spurs removed' % len(info.get('spurs_removed') or []))
+            parts.append('%d own spurs hidden' % len(info.get('spurs_removed') or []))
+            kept = info.get('spurs_kept') or []
+            if kept:
+                # V20.9: too strong for an own spur - may be a transmitter
+                parts.append('kept on the spur grid: %s MHz' % ', '.join(
+                    '%.3f (+%.0f dB)' % (k[0], k[1]) for k in kept[:4]) +
+                    (' and %d more' % (len(kept) - 4) if len(kept) > 4 else ''))
         if info.get('ripple'):
             parts.append('tile ripple')
         if info.get('flatten'):

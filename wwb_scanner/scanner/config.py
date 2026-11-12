@@ -58,6 +58,7 @@ class ProcessingConfig(Config):
         scaling_min_db=-140.,
         scaling_max_db=-50.,
         clean_ripple=False,       # V17: remove the tile ripple (no calibration needed)
-        clean_spurs=False,        # V17: remove the dongle's own carriers (k x 28.8 MHz)
+        clean_spurs=False,        # V17: hide the dongle's own carriers (V20.9: k x 14.4 MHz, up to +20 dB)
+        clean_images=False,       # V20.9: replace images of strong carriers by the floor (off: only marked)
         clean_floor=False,        # V17: level the floor (needs a calibration)
     )

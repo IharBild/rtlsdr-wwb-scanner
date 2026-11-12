@@ -31,9 +31,10 @@ def _air(mic=True, tv=0.0):
     return a
 
 
-def _scan(monkeypatch, tmpdir, gain, start=626, end=640, mic=True, tv=0.0, auto_gain=True):
+def _scan(monkeypatch, tmpdir, gain, start=626, end=640, mic=True, tv=0.0, auto_gain=True, clean=None):
     kw = {'air': _air(mic, tv), 'gain_affects': True, 'wide_adc': sim.WideAdc()}
-    return sim.run_scan(monkeypatch, tmpdir, start, end, gain=gain, auto_gain=auto_gain, sdr_kwargs=kw)
+    return sim.run_scan(monkeypatch, tmpdir, start, end, gain=gain, auto_gain=auto_gain, sdr_kwargs=kw,
+                        clean=clean)
 
 
 def _stop_early(monkeypatch, fc=TILE_STOPS_EARLY, at_gain=43.9):
@@ -201,7 +202,8 @@ def test_deaf_band_is_named_in_the_status(monkeypatch, tmpdir):
 # ------------------------------------------------------------- images
 
 def test_images_of_the_mic_at_plus_minus_fs_are_replaced(monkeypatch, tmpdir):
-    sc, sdr, dt = _scan(monkeypatch, tmpdir, 20.7)
+    # V20.9: only with "Hide images of strong signals" (off: test_v209)
+    sc, sdr, dt = _scan(monkeypatch, tmpdir, 20.7, clean={'clean_images': True})
     coll = sc.sample_collection
     got = dict((p, d) for p, d, c in coll.images)
     assert 635.325 in got and 630.525 in got, coll.images

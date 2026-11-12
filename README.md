@@ -22,7 +22,8 @@ Current release: **[v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releas
   Stuck USB calls time out instead of freezing the program.
 - **Speed.** About 78 ms per 2.4 MHz tile: 470–800 MHz in about 35 s, 31–1766 MHz in
   about 3 minutes (V4, 2.4 MS/s).
-- **Clean scan.** Removes the dongle's own spurs (multiples of 28.8 MHz and 480 MHz) and the
+- **Clean scan.** Hides the dongle's own spurs (multiples of 14.4 MHz and 480 MHz, up to
+  20 dB above the floor; stronger narrow carriers there are kept and marked) and the
   tile ripple, levels the noise floor with a calibration made without an antenna, and
   re-measures overloaded tiles at a lower gain (auto gain).
 - **Strong signal next to the antenna** (own mic / IEM, auto gain on). The gain of a clipped
@@ -32,8 +33,9 @@ Current release: **[v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releas
   carrier go away where the normal reading is usable. The status line names the band that
   lost sensitivity and by how many dB. All tiles of such a zone use one gain; products seen
   by one tile only are taken from the others; tiles made deaf up to 10 MHz away are raised by
-  the loss; images of the carrier at +-2.4 MHz and +-28.8 MHz are replaced by the floor around
-  them and named in the status line. Points that no reading can measure show the flat
+  the loss; images of the carrier at +-2.4 MHz and +-28.8 MHz are marked on the graph and
+  named in the status line (V20.9: left in the scan unless "Hide images of strong signals"
+  is on). Points that no reading can measure show the flat
   floor of the zone instead of false spikes; the graph shades the bands that lost
   sensitivity ("-NN dB sens.") and marks the removed images. Images of a strong carrier
   are removed even when it does not clip (dips between TV channels are not counted as
@@ -86,6 +88,27 @@ Current release: **[v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releas
     stays. All of them remain adjustable in Device Settings and Scan settings.
   - Scan settings is never taller than the window, scrolls, and opens in the middle: on a
     1366x768 laptop the calibration buttons and "Suggest gain" were cut off.
+- **V20.9** (second part of the audit, and the user's scans of 11-12.11.2026):
+  - Own spurs: the dongle also makes carriers at the odd multiples of 14.4 MHz (475.2, 504.0,
+    532.8, 561.6 ... MHz: +6.8 dB without antenna at 49.6 dB gain, up to +16.5 dB with the
+    antenna). They are now in the list; before, they stayed in every scan.
+  - "Hide dongle's own spurs" (Scan settings, was "Remove ...") hides a narrow carrier on that
+    grid only while it is not more than 20 dB above the floor. A stronger one is kept and
+    marked "on spur grid +NN dB: kept" on the graph and in the status line: it may be a
+    transmitter. Before, any narrow carrier exactly on a multiple of 28.8 MHz was erased, up
+    to +47 dB - a microphone there disappeared from the scan and from the files for WWB.
+    A weak far transmitter exactly on the grid (below +20 dB) is still hidden; switch the
+    option off to see everything.
+  - Images of a strong signal (2.4 MHz and 28.8 MHz from it) are now only marked "image?" and
+    stay in the scan and in the files: a real weak signal there looks the same. The new
+    switch "Hide images of strong signals" (off by default) replaces them by the floor as
+    before.
+  - Floor calibration: transmitters that reach the dongle even without antenna (TV, GSM,
+    423 MHz) are left out of the floor shape. The calibration of 12.11.2026 at 49.6 dB had
+    TV channel 27 in it (+5.6 dB) and 423-424 MHz (+11 dB): every scan was lowered by that
+    much there. Calibrations made before are corrected when they are used; no need to
+    calibrate again.
+  - A scan opened from the history shows what was hidden in it.
 - **Tuner I2C errors** (`i2c wr failed`, LIBUSB_ERROR_PIPE): the driver build scanner-v5
   (`drivers/rtlsdr-scanner-v5`, `python install_dll.py`) repeats a failed tuner transfer up
   to 3 times with the I2C repeater switched on again; the console prints how many were

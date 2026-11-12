@@ -22,6 +22,25 @@ Item {
     // measured without antenna: 3 dB or more above its noise (V10-V15)
     readonly property var spurFreqs: [86.4, 115.2, 144.0, 172.8, 201.6, 230.4, 259.2, 288.0,
                                       316.8, 345.6, 374.4, 403.2, 432.0, 460.8, 489.6, 518.4]
+    // V20.9: what is drawn. A scan cleaned of spurs brings its own list
+    // (hidden ones, and strong narrow carriers on the grid that were kept);
+    // any other scan gets the known frequencies above.
+    function spurMarkModel(){
+        var sp = root.activeSpectrum;
+        var out = [];
+        var i;
+        if (sp && sp.spursCleaned){
+            var marks = sp.spurMarks || [];
+            for (i = 0; i < marks.length; i++){
+                out.push({'f': marks[i].f, 'db': marks[i].db, 'kept': marks[i].kept});
+            }
+            return out;
+        }
+        for (i = 0; i < root.spurFreqs.length; i++){
+            out.push({'f': root.spurFreqs[i], 'db': 0, 'kept': false});
+        }
+        return out;
+    }
     // V18: what the regulator allows (strip at the bottom of the plot)
     property var regRegions: []
     property bool showRegulation: true
@@ -437,7 +456,9 @@ Item {
                         }
                         Text {
                             visible: parent.span < 100
-                            text: 'image of ' + modelData.of.toFixed(3)
+                            // V20.9: an image is left in the scan unless hiding is switched on
+                            text: (modelData.hidden ? 'image of ' : 'image? of ') + modelData.of.toFixed(3) +
+                                  (modelData.hidden ? ' (hidden)' : '')
                             color: '#9a7cd8'
                             opacity: 0.9
                             font.pointSize: 7
@@ -460,9 +481,11 @@ Item {
                 visible: root.showSpurs
                 clip: true
                 Repeater {
-                    model: root.spurFreqs
+                    objectName: 'spurMarkRepeater'
+                    model: root.spurMarkModel()
                     Item {
-                        property real f: modelData
+                        property real f: modelData.f
+                        property bool kept: modelData.kept
                         property real span: axisX.max - axisX.min
                         visible: span > 0 && f >= axisX.min && f <= axisX.max
                         x: span > 0 ? (f - axisX.min) / span * spurMarks.width : 0
@@ -471,14 +494,16 @@ Item {
                         Rectangle {
                             width: 1
                             height: parent.height
-                            color: '#c8913a'
-                            opacity: 0.35
+                            color: parent.kept ? '#ff9d2e' : '#c8913a'
+                            opacity: parent.kept ? 0.8 : 0.35
                         }
                         Text {
                             visible: parent.span < 600
-                            text: 'spur ' + parent.f.toFixed(1)
-                            color: '#c8913a'
-                            opacity: 0.8
+                            // V20.9: a strong narrow carrier on the spur grid is not hidden
+                            text: parent.kept ? 'on spur grid +' + modelData.db.toFixed(0) + ' dB: kept'
+                                              : 'spur ' + parent.f.toFixed(1)
+                            color: parent.kept ? '#ff9d2e' : '#c8913a'
+                            opacity: parent.kept ? 1.0 : 0.8
                             font.pointSize: 7
                             rotation: -90
                             transformOrigin: Item.TopLeft
