@@ -6,6 +6,9 @@ import DeviceConfig 1.0
 
 Dialog {
     id: root
+    objectName: 'deviceConfigPopup'
+    title: 'Device Settings'
+    anchors.centerIn: Overlay.overlay
     property var device
     property real deviceIndex
     property string deviceSerial
@@ -36,6 +39,42 @@ Dialog {
         onDevicesChanged: {
             updateDeviceList();
         }
+    }
+
+    // V21.1 (audit D2): what the field accepts. kHz as before; a value below
+    // 100 is taken as MHz ("2.4" was read as 2 kHz). The RTL2832U runs at
+    // 225-300 and 900-3200 kHz; anything else leaves the old value.
+    function parseSampleRate(text){
+        var v = parseFloat(String(text).replace(',', '.'));
+        if (!(v > 0))
+            return NaN;
+        if (v < 100)
+            v = v * 1000;
+        v = Math.round(v);
+        if ((v >= 225 && v <= 300) || (v >= 900 && v <= 3200))
+            return v;
+        return NaN;
+    }
+
+    // V21.1 (audit D2): Cancel puts back what was set when the dialog opened
+    property var atOpen: ({})
+    onAboutToShow: {
+        root.atOpen = {'gain': root.gain, 'sampleRate': root.sampleRate, 'device': root.device};
+        sampleRateField.text = root.sampleRate.toString();
+        sampleRateNote.text = '';
+    }
+    function restoreAtOpen(){
+        var o = root.atOpen;
+        if (o.sampleRate !== undefined)
+            root.sampleRate = o.sampleRate;
+        if (o.device !== undefined && o.device !== root.device){
+            root.device = o.device;
+            if (root.device)
+                device_select.currentIndex = root.device.device_index;
+        }
+        if (o.gain !== undefined)
+            root.setGain(o.gain);
+        sampleRateField.text = root.sampleRate.toString();
     }
 
     // V20.8: the dongles were listed only once, when the program started: a
@@ -97,8 +136,12 @@ Dialog {
         anchors.fill: parent
         GroupBox {
             title: 'Device Select'
+            Layout.fillWidth: true
+            // V21.1 (audit D2): the list showed "R828D - 0 (" only
+            implicitWidth: 340
             ComboBox {
                 id: device_select
+                objectName: 'deviceSelect'
                 editable: false
                 textRole: 'text'
                 anchors.fill: parent
@@ -121,14 +164,31 @@ Dialog {
         }
 
         GroupBox {
-            title: "Sample Rate (Msps)"
-            TextField {
-                id: sampleRateField
-                inputMethodHints: Qt.ImhDigitsOnly
-                maximumLength: 4
-                text: root.sampleRate.toString()
-                onEditingFinished: {
-                    root.sampleRate = parseInt(sampleRateField.text);
+            // V21.1 (audit D2): the value is kHz (the title said Msps)
+            title: "Sample Rate (kHz)"
+            RowLayout {
+                TextField {
+                    id: sampleRateField
+                    objectName: 'sampleRateField'
+                    inputMethodHints: Qt.ImhFormattedNumbersOnly
+                    maximumLength: 6
+                    text: root.sampleRate.toString()
+                    onEditingFinished: {
+                        var v = root.parseSampleRate(sampleRateField.text);
+                        if (isNaN(v)) {
+                            sampleRateNote.text = '225-300 or 900-3200 kHz';
+                        } else {
+                            root.sampleRate = v;
+                            sampleRateNote.text = '';
+                        }
+                        sampleRateField.text = root.sampleRate.toString();
+                    }
+                }
+                Label {
+                    id: sampleRateNote
+                    objectName: 'sampleRateNote'
+                    color: '#f0b44c'
+                    font.pointSize: 9
                 }
             }
         }
@@ -198,6 +258,7 @@ Dialog {
         root.close();
     }
     onRejected:{
+        root.restoreAtOpen();       // V21.1
         root.close();
     }
 

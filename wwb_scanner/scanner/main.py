@@ -57,6 +57,7 @@ class ScannerBase(JSONMixin):
     def __init__(self, **kwargs):
         self._running = threading.Event()
         self._stopped = threading.Event()
+        self.stop_requested = False     # V21.1: set by request_stop()
         self._current_freq = None
         self._progress = 0.
         ckwargs = kwargs.get('config')
@@ -198,11 +199,22 @@ class ScannerBase(JSONMixin):
             self._stopped.set()
     def _run_scan(self, running):
         t_start = time.time()
+        self.stop_requested = False
         self.build_sample_sets()
         running.set()
         self.sample_collection.scan_all_freqs()
         self.sample_collection.stopped.wait()
-        if running.is_set():
+        # V21.1 (audit B5): a scan ended by Stop is finished like any other
+        # (cropped to the range, cleaned, saved to the history) - it was left
+        # as a raw piece that reached beyond the range and could be exported.
+        stopped_by_user = bool(self.stop_requested)
+        if stopped_by_user and (self.config.get('gain_calibration') or
+                                not self.spectrum.sample_data.size):
+            logging.getLogger('wwb_scanner.status').info(
+                'Scan %s stopped%s', self.range_text(),
+                '' if self.spectrum.sample_data.size else ' before the first tile: nothing measured')
+            return
+        if running.is_set() or stopped_by_user:
             t0 = time.time()
             print('scan finished, cropping...', flush=True)
             self.crop_spectrum()
@@ -216,7 +228,15 @@ class ScannerBase(JSONMixin):
             print('saved, total %.1f s' % (time.time() - t0), flush=True)
             what = self.range_text()
             coll = self.sample_collection
-            if getattr(coll, 'aborted', False):
+            if stopped_by_user and not getattr(coll, 'aborted', False):
+                done = len(getattr(coll, 'processed_keys', ()))
+                total = len(coll.sample_sets)
+                sd = self.spectrum.sample_data
+                logging.getLogger('wwb_scanner.status').info(
+                    'Scan %s stopped after %.0f s at %.1f MHz (%d of %d tiles), measured part kept%s',
+                    what, time.time() - t_start,
+                    float(np.max(sd['frequency'])) if sd.size else 0., done, total, clean_note)
+            elif getattr(coll, 'aborted', False):
                 logging.getLogger('wwb_scanner.status').info(
                     'Scan %s stopped after %.0f s (dongle error), measured part kept',
                     what, time.time() - t_start)
@@ -232,13 +252,23 @@ class ScannerBase(JSONMixin):
                 (st.warning if note and getattr(coll, 'overload_warn', False) else st.info)(
                     'Scan %s done in %.0f s%s%s', what, time.time() - t_start, clean_note,
                     ('; ' + note) if note else '')
-    def stop_scan(self):
+    def request_stop(self):
+        """V21.1 (audit B4): ask the scan to end and return at once. The scan
+        thread finishes the tile it is reading (a hanging USB read: up to
+        READ_TIMEOUT), then crops, cleans and saves what was measured.
+        Returns False when no scan is running."""
         if not self._running.is_set():
+            return False
+        self.stop_requested = True
+        self._running.clear()
+        self.sample_collection.scanning.clear()     # as cancel(), without waiting
+        return True
+    def stop_scan(self):
+        """Stop and wait until the scan thread is done (scripts, tests)."""
+        if not self.request_stop():
             # not started yet or already finished: nothing to wait for
             # (waiting here used to hang forever before the first scan)
             return
-        self._running.clear()
-        self.sample_collection.cancel()
         self._stopped.wait()
     def apply_cleanup(self):
         """V17 clean scan (tile ripple, own spurs, floor shape). The values as

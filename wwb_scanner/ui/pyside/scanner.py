@@ -505,9 +505,12 @@ class ScannerInterface(GenericQObject):
         self.scan_init_thread.start()
 
     def _stop(self):
+        # V21.1 (audit B4): only asks. Waiting here for the scan thread froze
+        # the window for as long as a USB read hung (11 s measured, up to 40 s);
+        # the end of the scan arrives through on_scanner_finished as always.
         if self.scanner is not None:
-            if self.scanner._running.is_set():
-                self.scanner.stop_scan()
+            if self.scanner.request_stop():
+                logging.getLogger('wwb_scanner.status').info('Stopping the scan...')
 
     @Slot()
     def on_scanner_progress(self, value):
@@ -557,7 +560,9 @@ class ScannerInterface(GenericQObject):
         scanner = self.scanner
         try:
             if scanner is None or getattr(scanner, 'error', None) is not None or \
-                    getattr(scanner.sample_collection, 'aborted', False):
+                    getattr(scanner.sample_collection, 'aborted', False) or \
+                    getattr(scanner, 'stop_requested', False):
+                # V21.1: also when Stop ended it (a part of the range is no calibration)
                 status.warning('Calibration not saved: the scan did not finish')
                 return
             sd = scanner.spectrum.sample_data

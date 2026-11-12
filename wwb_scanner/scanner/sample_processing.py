@@ -443,7 +443,9 @@ class SampleSet(JSONMixin):
                 # scan edition DLL: the stock library says "OK" even when
                 # the tuner PLL did not lock; such a tile would be garbage
                 if scan_dll.tuner_locked(sdr) is False:
-                    logger.error('PLL not locked at %s Hz (attempt %d)', freq, attempt + 1)
+                    # V21.1: a warning (status line, log); the tile that stays
+                    # without data is reported at the end of the scan
+                    logger.warning('PLL not locked at %s Hz (attempt %d)', freq, attempt + 1)
                     continue
                 return True
             except SdrTimeout as exc:
@@ -451,8 +453,11 @@ class SampleSet(JSONMixin):
                 self.abort_scan()
                 return False
             except Exception as exc:
-                logger.error('set_center_freq(%s) failed (attempt %d): %s',
-                             freq, attempt + 1, exc)
+                # V21.1: a warning, not an error. When the dongle is pulled out
+                # this raw text opened the "Problem" dialog before the message
+                # that says what to do ("the dongle stopped answering ...").
+                logger.warning('set_center_freq(%s) failed (attempt %d): %s',
+                               freq, attempt + 1, exc)
                 if self.device_closed(sdr):
                     return False
         return False

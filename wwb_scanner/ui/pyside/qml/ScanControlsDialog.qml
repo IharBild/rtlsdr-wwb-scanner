@@ -441,11 +441,15 @@ Dialog {
     // V20.6: gain step from the gain survey profile for the scan range and
     // the auto gain switch; main.qml puts it into Device Settings
     signal gainSuggested(real gain)
+    // V21.1 (audit D2): the gain when the dialog opened; Cancel puts it back
+    property real gainAtOpen: -1
     function suggestGain(){
         if (!root.scanner)
             return;
         var r = root.scanner.suggestGain(root.autoGain);
         if (r[0] >= 0) {
+            if (root.gainAtOpen < 0)
+                root.gainAtOpen = root.scanner.gain;
             root.gainSuggested(r[0]);
             suggestGainLbl.text = 'Set to ' + r[1];
             root.updateCalibrationText();       // its calibration (per gain)
@@ -486,14 +490,22 @@ Dialog {
 
     onAccepted: {
         commitSettings();
+        root.gainAtOpen = -1;
         root.close();
     }
 
     onRejected: {
+        if (root.gainAtOpen >= 0) {
+            // V21.1: a suggested gain was applied at once and stayed after Cancel
+            root.gainSuggested(root.gainAtOpen);
+            suggestGainLbl.text = '';
+        }
+        root.gainAtOpen = -1;
         reloadSettings();
         root.close();
     }
     onAboutToShow: {
+        root.gainAtOpen = -1;
         reloadSettings();
     }
     Component.onCompleted: {

@@ -164,7 +164,7 @@ Dialog {
                             anchors.fill: parent
                             anchors.leftMargin: 10
                             spacing: 6
-                            CheckBox {
+                            BoxCheck {
                                 checked: model.on
                                 onClicked: root.setChosen(model.id, checked)
                             }

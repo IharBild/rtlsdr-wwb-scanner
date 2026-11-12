@@ -60,6 +60,7 @@ MARKERS = [
     ('V20.8', 'ui/pyside/scanner.py', 'def start_problem'),
     ('V20.9', 'scanner/cleanup.py', 'def hide_spurs'),
     ('V21.0', 'ui/pyside/graph.py', 'EXPORT_LEVEL_NOTE'),
+    ('V21.1', 'scanner/main.py', 'def request_stop'),
 ]
 
 

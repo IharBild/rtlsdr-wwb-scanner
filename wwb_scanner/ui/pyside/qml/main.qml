@@ -151,6 +151,8 @@ ApplicationWindow {
     }
 
     footer: ToolBar {
+        // V21.1: room for two lines of the status text (long messages were cut)
+        implicitHeight: 38
         RowLayout {
             anchors.fill: parent
 
@@ -217,9 +219,14 @@ ApplicationWindow {
             // V16: last warning / error / info of the scanner (click clears)
             Label {
                 id: statusLine
+                objectName: 'statusLine'
                 Layout.fillWidth: true
+                Layout.rightMargin: 8
                 text: statusHub.text
                 elide: Text.ElideRight
+                wrapMode: Text.Wrap             // V21.1: up to two lines, the rest in the tooltip
+                maximumLineCount: 2
+                lineHeight: 0.92
                 font.pointSize: 9
                 color: statusHub.level == 'error' ? '#ff6b6b'
                      : statusHub.level == 'warning' ? '#f0b44c' : palette.windowText

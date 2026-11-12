@@ -300,6 +300,7 @@ def main():
     v206_checks(app, win, si)
     v207_checks(app, win, si)
     v210_checks(app, win)
+    v211_checks(app, win, si)
     v209_checks(app, win, si)
     v208_checks(app, win, controls, si, fresh, first_start)
     win.close()
@@ -961,6 +962,42 @@ def v210_checks(app, win):
         check('U37', ok, '; '.join('%s: %r' % (n, t[:95]) for n, _, t in got))
     except Exception as exc:
         check('U37', False, 'error: %s' % exc)
+
+
+def v211_checks(app, win, si):
+    """V21.1. U38: Device Settings - the sample rate field takes kHz or MHz,
+    refuses nonsense, Cancel puts gain and sample rate back; U39: the status
+    line shows two lines; Stop only asks the scan to end."""
+    dlg = win.findChild(QtCore.QObject, 'deviceConfigPopup')
+    if dlg is None or dlg.metaObject().indexOfMethod('parseSampleRate(QVariant)') < 0:
+        check('U38', False, 'Device Settings without parseSampleRate (V21.1 not installed)')
+        return
+    try:
+        got = [str(_qml_eval(dlg, 'String(parseSampleRate(%r))' % t)) for t in ('2400', '2.4', '2,048', '250', '5', 'abc', '400')]
+        want = ['2400', '2400', '2048', '250', 'NaN', 'NaN', 'NaN']
+        before = (float(dlg.property('gain')), float(dlg.property('sampleRate')))
+        _qml_eval(dlg, 'open()')
+        pump(app, 0.3)
+        dlg.setProperty('sampleRate', 2048.)
+        _qml_eval(dlg, 'setGain(12.5)')
+        pump(app, 0.1)
+        changed = (float(dlg.property('gain')), float(dlg.property('sampleRate')))
+        _qml_eval(dlg, 'reject()')
+        pump(app, 0.3)
+        after = (float(dlg.property('gain')), float(dlg.property('sampleRate')))
+        check('U38', got == want and after == before and changed != before,
+              'field: %s; Cancel: %s -> %s -> %s' % (got, before, changed, after))
+    except Exception as exc:
+        check('U38', False, 'error: %s' % exc)
+    try:
+        line = win.findChild(QtCore.QObject, 'statusLine')
+        from wwb_scanner.scanner import main as scan_main
+        ok = line is not None and int(line.property('maximumLineCount')) == 2 and \
+            hasattr(scan_main.Scanner, 'request_stop')
+        check('U39', ok, 'status line: %s lines; Stop asks without waiting: %s' % (
+            line.property('maximumLineCount') if line is not None else None, hasattr(scan_main.Scanner, 'request_stop')))
+    except Exception as exc:
+        check('U39', False, 'error: %s' % exc)
 
 
 def v209_checks(app, win, si):

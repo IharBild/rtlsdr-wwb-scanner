@@ -10,7 +10,8 @@ company in Poland and for sound engineers across Europe. Most of the code in thi
 written with Claude (Anthropic); every release is checked on a real V4 dongle by the
 maintainer.
 
-Current release: **[v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v18.1)**
+Current version: **V21.1** in the branch `v4-fixes` (installed by the command below). Last tagged
+release: [v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v18.1)
 (branch `v4-fixes`). The `master` branch is the original upstream code and is not used here.
 
 Русская часть — [в конце страницы](#по-русски).
@@ -124,6 +125,23 @@ Current release: **[v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releas
   - An export is confirmed in the status line, with what the numbers in the file are.
   - Level axis zoomed in below 1 dB per tick: labels with a decimal (they read
     "-98, -98, -99, -99").
+- **V21.1** (the small items left from the audit and from the tests on the PC):
+  - **Stop** only asks the scan to end: the window no longer freezes while a USB read
+    hangs (11 s measured). A stopped scan is finished like any other - cropped to the
+    range, cleaned, saved to the history - and the status line says how far it got.
+  - Pulling the dongle out no longer opens the "Problem" dialog with the raw text
+    `set_center_freq(...) failed (attempt 1)` before the message that says what to do.
+  - The status line shows two lines (long messages were cut); the full text is in its
+    tooltip.
+  - **Rename** reaches the scan itself, the history and the "Receiver;" line of a WSM file.
+  - **Device Settings**: the sample rate field is kHz (the title said Msps) and also takes
+    MHz ("2.4" was read as 2 kHz); the device list is wide enough; Cancel puts gain and
+    sample rate back. Cancel in Scan settings puts back a suggested gain.
+  - Empty check boxes are visible in the dark theme; the cursor reads the nearest point.
+  - The window starts without setuptools (`pkg_resources` is gone); the package has a
+    version (21.1.0).
+  - Bands: Germany 470-608 and 614-698 MHz until 31.12.2030, professional productions only
+    (BNetzA Vfg. 37/2026); Shure SLX-D S50 with 863-865 MHz, SLX-D P53 added.
 - **Tuner I2C errors** (`i2c wr failed`, LIBUSB_ERROR_PIPE): the driver build scanner-v5
   (`drivers/rtlsdr-scanner-v5`, `python install_dll.py`) repeats a failed tuner transfer up
   to 3 times with the I2C repeater switched on again; the console prints how many were

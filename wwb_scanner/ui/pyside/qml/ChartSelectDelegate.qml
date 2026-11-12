@@ -35,7 +35,7 @@ RadioDelegate {
         horizontalAlignment: Qt.AlignRight
     }
 
-    CheckBox {
+    BoxCheck {
         id: visibleCheckBox
         x: control.indicator.width + control.spacing
         y: control.topPadding + (control.availableHeight - height) / 2

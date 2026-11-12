@@ -12,7 +12,10 @@ tests use the same code):
 Sources (checked 2026-11):
 * CEPT ECO, ERC/REC 25-10 Annex 4, national implementation table (EFIS)
   https://efis.cept.org/ -> Reports -> ERC/REC 25-10 Annex 4
-* Germany: Bundesnetzagentur general allocation for PMSE (until 31.12.2032)
+* Germany: Bundesnetzagentur, Vfg. 37/2026 of 15.04.2026 (general allocation for
+  wireless microphones): 470-608 and 614-698 MHz until 31.12.2030, professional
+  productions only; 174-230, 736-753 and 1350-1400 MHz until 31.03.2036
+  (V21.1: was "until 31.12.2032")
 * Romania: ANCOM RO-IR MICRO, edition 5/2025 (22.12.2025)
 * Ukraine: NKEK resolution No 361 of 03.07.2024 (lists of radio equipment)
 * Manufacturer band charts (Shure, Sennheiser) for the systems.
@@ -90,7 +93,8 @@ _S = [
     ('Shure', 'SLX-D', 'J53', [(562, 606)], ''),
     ('Shure', 'SLX-D', 'K59', [(606, 650)], ''),
     ('Shure', 'SLX-D', 'L56', [(650, 694)], ''),
-    ('Shure', 'SLX-D', 'S50', [(823, 832)], ''),
+    ('Shure', 'SLX-D', 'P53', [(710, 754)], ''),                # V21.1: in Shure's European list
+    ('Shure', 'SLX-D', 'S50', [(823, 832), (863, 865)], ''),    # V21.1: 863-865 was missing
     ('Shure', 'Axient Digital', 'G56', [(470, 636)], ''),
     ('Shure', 'Axient Digital', 'K55', [(606, 694)], ''),
     ('Shure', 'Axient Digital', 'K56', [(606, 714)], ''),
@@ -216,9 +220,11 @@ _C = [
     ], regulator='UKE', url='https://www.uke.gov.pl'),
     _country('DE', 'Germany', _EU, [
         _r((174, 230), 'free', 'general allocation, up to 50 mW'),
-        _r((470, 608), 'free', 'general allocation for PMSE until 31.12.2032, up to 50 mW'),
+        _r((470, 608), 'free', 'general allocation (BNetzA Vfg. 37/2026) until 31.12.2030, '
+                               'professional productions only, up to 50 mW'),
         _r((608, 614), 'no', 'radio astronomy (TV channel 38)'),
-        _r((614, 698), 'free', 'general allocation until 2032; 5G Broadcast tests: 614-622 Berlin, '
+        _r((614, 698), 'free', 'general allocation until 31.12.2030, professional productions only; '
+                               '5G Broadcast tests: 614-622 Berlin, '
                                '622-630 Hamburg/Halle/Stuttgart, 646-654 Munich'),
         _r((736, 753), 'free', '700 MHz duplex gap, general allocation'),
         _r(A5, 'limited', 'up to 100 mW (823-826 MHz: 82 mW handheld)'),

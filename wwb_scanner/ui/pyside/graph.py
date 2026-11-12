@@ -259,7 +259,24 @@ class SpectrumGraphData(QtQuick.QQuickItem):
             return
         self._name = value
         self._n_name.emit()
+        self._rename_spectrum(value)
     name = Property(str, _g_name, _s_name, notify=_n_name)
+
+    def _rename_spectrum(self, value):
+        """V21.1 (audit C3): Rename changed the name in the list only. The
+        scan itself, its entry in the history (scan_index.json) and so the
+        "Receiver;" line of a WSM export kept the old name."""
+        sp = getattr(self, '_spectrum', None)
+        if sp is None or not value or getattr(sp, 'name', None) == value:
+            return
+        try:
+            sp.name = value
+            eid = getattr(sp, 'eid', None)
+            if eid is not None:
+                from wwb_scanner.utils.dbstore import db_store
+                db_store.update_scan(eid, name=value)
+        except Exception:
+            logger.exception('rename of the scan')
 
     def _g_color(self): return self._color
     def _s_color(self, value):
@@ -368,6 +385,8 @@ class SpectrumGraphData(QtQuick.QQuickItem):
         ix = np.searchsorted(xy_data['x'], value)
         if ix >= xy_data.size:
             ix = xy_data.size - 1
+        elif ix > 0 and value - xy_data['x'][ix - 1] < xy_data['x'][ix] - value:
+            ix -= 1     # V21.1 (audit D5): the nearest point, not the next one to the right
         x = xy_data['x'][ix]
         y = xy_data['y'][ix]
         return QtCore.QPointF(x, y)
