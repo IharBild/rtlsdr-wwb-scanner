@@ -1,0 +1,7 @@
+# Byte-exact files: checksums (SHA256SUMS of the drivers) and reference files
+# must not get CRLF line ends on a Windows checkout (core.autocrlf=true on the
+# GitHub Windows runners broke test_csv_format and test_dll_v6 there).
+# The source archives of GitHub are not affected: they keep the bytes as committed.
+drivers/** -text
+tests/reference/** -text
+tests/data/** -text
