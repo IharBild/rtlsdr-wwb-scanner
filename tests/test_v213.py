@@ -113,6 +113,9 @@ def test_dependencies_by_python_version():
     # PySide2 5.15 is built against numpy 1.x ("may crash" with numpy 2)
     assert re.search(r'numpy[^;\n]*<\s*2\s*;\s*python_version\s*<\s*"3\.11"', req), req
     assert 'tinydb' in req and 'numpy' in req and 'scipy' in req
+    # pyrtlsdr 0.3 imports pkg_resources without declaring setuptools;
+    # setuptools 82 removed pkg_resources (checked 13.11.2026)
+    assert re.search(r'^\s*setuptools\s*<\s*82\s*;\s*python_version\s*<\s*"3\.10"', req, re.M), req
     assert re.search(r'python_requires\s*=\s*>=\s*3\.7', cfg)
 
 
