@@ -106,7 +106,8 @@ class Spectrum(JSONMixin):
         if value is None:
             return
         self._timestamp_utc = value
-        dt = datetime.datetime.utcfromtimestamp(value)
+        # V21.3: utcfromtimestamp() is deprecated since Python 3.12; same naive UTC value
+        dt = datetime.datetime.fromtimestamp(value, datetime.timezone.utc).replace(tzinfo=None)
         if dt != self.datetime_utc:
             self.datetime_utc = dt
     @property

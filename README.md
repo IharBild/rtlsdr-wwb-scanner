@@ -10,7 +10,7 @@ company in Poland and for sound engineers across Europe. Most of the code in thi
 written with Claude (Anthropic); every release is checked on a real V4 dongle by the
 maintainer.
 
-Current version: **V21.2** in the branch `v4-fixes` (installed by the command below). Last tagged
+Current version: **V21.3** in the branch `v4-fixes` (installed by the command below). Last tagged
 release: [v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v18.1)
 (branch `v4-fixes`). The `master` branch is the original upstream code and is not used here.
 
@@ -138,6 +138,25 @@ release: [v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v18
   when there are fewer than two strong narrow carriers (30 dB above the floor); at most
   30 tiles are read again (about 0.2 s each, up to about 6 s per scan). Checked on the
   dongle simulator with a tuner nonlinearity model; not yet on the real V4.
+- **V21.3** - **New Python and pip.** The scanner installs on Python 3.7 to 3.14 with
+  current pip (`pyproject.toml`); pip picks the libraries by the Python version:
+  - Python 3.7-3.9: as before (pyrtlsdr 0.3, PySide2, numpy 1.x). Nothing changes on a
+    working PC.
+  - Python 3.10: the window with PySide2 5.15, pyrtlsdr 0.5 and numpy 1.26 (numpy stays
+    below 2 wherever PySide2 is installed: PySide2 warns that it may crash with numpy 2).
+  - Python 3.11-3.14: the scanner core, the tests and the file export with numpy 2 and
+    pyrtlsdr 0.5. **No window yet**: PySide2 has no packages there, the window moves to
+    PySide6 in the next version. `wwb_scanner-ui` says so instead of a traceback.
+  - pyrtlsdr 0.4+ needs `rtlsdr_set_dithering`, which no V4 driver exported. New driver
+    **scanner-v7** (`drivers/rtlsdr-scanner-v7`) = v6 + that function and the GPIO
+    functions of pyrtlsdr 0.4+; with pyrtlsdr 0.3 it works like v6. Its `install_dll.py`
+    also sets it up in a new environment.
+  - On Windows with Python 3.8+ a DLL in the `Scripts` folder of a virtual environment is
+    not found by pyrtlsdr 0.4+ (Python no longer searches PATH for DLLs). The scanner now
+    adds that folder itself.
+  - Checked: all tests on Python 3.8, 3.10 and 3.13; the window check on 3.8 and 3.10;
+    the real pyrtlsdr 0.5 with the v7 driver built for Linux against a USB model (a full
+    scan); DLL loading with Windows Python 3.13 in Wine. **Not yet on the real V4.**
 - **V21.1** (the small items left from the audit and from the tests on the PC):
   - **Stop** only asks the scan to end: the window no longer freezes while a USB read
     hangs (11 s measured). A stopped scan is finished like any other - cropped to the
@@ -183,7 +202,7 @@ release: [v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v18
 - **Safety and reliability.** Scan history stored without pickle, XML files with a DTD are
   refused, every uncaught error is shown in the window and written to the log, and the
   window never stays stuck in "scanning".
-- **Tests.** A dongle simulator and about 350 automatic tests (no dongle needed), a window
+- **Tests.** A dongle simulator and about 600 automatic tests (no dongle needed), a window
   check and a test kit for a PC with a real dongle (`qa-kit` in the releases).
 
 ## Tested with
@@ -193,16 +212,19 @@ release: [v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v18
 | Hardware | RTL-SDR Blog V4 (R828D tuner) |
 | System | Windows 11, Python 3.7.8 64-bit |
 | Libraries | numpy 1.21.6, scipy 1.7.3, pyrtlsdr 0.3.0, PySide2 5.15.2.1, tinydb 4.8.0 |
-| Automatic tests | GitHub Actions: Linux and Windows, Python 3.8, simulator instead of the dongle |
+| Driver | `rtlsdr-scanner-v6` (checked on the V4 13.11.2026); v7 not yet on the V4 |
+| Automatic tests | GitHub Actions: Linux and Windows, Python 3.8; Linux, Python 3.10 and 3.13; simulator instead of the dongle |
 
-PySide2 5.15 has no packages for Python 3.11 or newer: use Python 3.7–3.10, 64-bit.
-Keep `pyrtlsdr` below 0.4 (0.4 needs a function that the V4 drivers do not export).
+The window needs PySide2 5.15, which has no packages for Python 3.11 or newer: for the
+window use Python 3.7–3.10, 64-bit. On Python 3.11–3.14 only the core works until the
+PySide6 port. pyrtlsdr 0.4 and newer (Python 3.10+) need the `rtlsdr-scanner-v7` driver.
 
 ## Installation (Windows)
 
 1. **Dongle driver.** Plug in the V4 and install the WinUSB driver with
    [Zadig](https://zadig.akeo.ie/) (standard RTL-SDR step).
-2. **Python.** Install Python 3.8–3.10, 64-bit, then create a virtual environment:
+2. **Python.** Install Python 3.7–3.10, 64-bit (the window does not work on 3.11+ yet),
+   then create a virtual environment:
 
    ```bat
    py -3.10 -m venv C:\wwb-scanner
@@ -212,15 +234,20 @@ Keep `pyrtlsdr` below 0.4 (0.4 needs a function that the V4 drivers do not expor
 3. **The scanner** from the source archive of this branch (no git needed):
 
    ```bat
-   python -m pip install "pyrtlsdr<0.4" "numpy<2" ^
+   python -m pip install --upgrade pip
+   python -m pip install ^
      https://github.com/IharBild/rtlsdr-wwb-scanner/archive/refs/heads/v4-fixes.zip
    ```
 
+   pip picks pyrtlsdr, numpy and PySide2 to match the Python version (V21.3+).
+
    For a fixed release use `.../archive/refs/tags/v18.1.zip` instead.
 
-4. **rtlsdr.dll.** Copy `drivers\rtlsdr-scanner-v4\x64\rtlsdr.dll` from the source
-   archive into `C:\wwb-scanner\Scripts` (the folder of `python.exe`).
-   `python drivers\rtlsdr-scanner-v4\dll_ab_test.py where` shows which DLL is loaded.
+4. **rtlsdr.dll.** Unpack the same source archive, then with the environment active:
+   `python drivers\rtlsdr-scanner-v7\install_dll.py` (puts the DLL into
+   `C:\wwb-scanner\Scripts`; `... install_dll.py where` shows which DLL is loaded,
+   `... install_dll.py rollback` restores the previous one). With Python 3.7–3.9
+   (pyrtlsdr 0.3) the v6 driver works too: `drivers\rtlsdr-scanner-v6\install_dll.py`.
 5. **Start:** `C:\wwb-scanner\Scripts\wwb_scanner-ui`. You can make a desktop shortcut to it.
 
 A one-click Windows installer is planned.
@@ -276,7 +303,7 @@ Sources: CEPT ERC/REC 25-10 Annex 4 (EFIS, November 2026), BNetzA general alloca
 No dongle is needed:
 
 ```bash
-python -m pytest tests          # about 350 tests, dongle simulator
+python -m pytest tests          # about 600 tests, dongle simulator
 python tools/qa_ui.py           # opens the window offscreen, scans with the simulator
 python tools/qa_sandbox.py      # all test types, report in Markdown
 ```
@@ -310,5 +337,10 @@ Windows: быстрее, без собственных помех донгла �
   микрофоны у антенны) перечитываются с усилением на 10 дБ ниже. Продукт самого донгла
   при этом падает примерно вдвое сильнее, настоящий сигнал остаётся на месте. Продукты
   отмечаются розовой меткой «dongle product», из скана и файлов не удаляются.
+- V21.3: установка на Python 3.7–3.14 современным pip; pip сам подбирает библиотеки под
+  версию Python. Окно пока работает только на Python 3.7–3.10 (PySide2); на 3.11–3.14 —
+  ядро, тесты и экспорт, окно появится с переходом на PySide6. Для pyrtlsdr 0.4+
+  (Python 3.10+) нужен драйвер `rtlsdr-scanner-v7` — его ставит
+  `drivers\rtlsdr-scanner-v7\install_dll.py`. На реальном V4 v7 ещё не проверен.
 
 [osmosdr-wiki]: https://osmocom.org/projects/rtl-sdr/wiki

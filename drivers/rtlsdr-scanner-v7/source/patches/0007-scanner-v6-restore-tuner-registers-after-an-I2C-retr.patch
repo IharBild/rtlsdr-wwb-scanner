@@ -1,0 +1,443 @@
+From f06c170056d299f65f70d69d187c9701ac3261b1 Mon Sep 17 00:00:00 2001
+From: rtlsdr-wwb-scanner <noreply@example.invalid>
+Date: Thu, 12 Nov 2026 22:26:39 +0100
+Subject: [PATCH 7/8] scanner-v6: restore tuner registers after an I2C retry or
+ failed write, no retries when the dongle is gone
+
+- A tuner transfer that needed a retry may have met a tuner that was just
+  reset (supply dip): its registers are at power-on values while the shadow
+  copy says otherwise, and redundant-write skipping would keep them wrong
+  until the device is reopened. After such a transfer all registers
+  0x05..0x22 are written again from the shadow copy (as r82xx_init does),
+  a read is repeated, and the PLL lock bit is checked again.
+- After a write that failed for good (shadow_dirty), the next tuner write
+  rewrites all registers; when that goes through without a retry, skipping
+  works again (before: only after reopening).
+- LIBUSB_ERROR_NO_DEVICE: no retries, later tuner transfers fail at once,
+  the 'i2c wr failed' line is printed once. Errors other than PIPE are
+  retried only if the RTL2832U still answers (repeater can be switched on);
+  PIPE is retried exactly as in scanner-v5.
+- rtlsdr_get_tuner_restores(): number of full register rewrites; each one
+  also prints "r82xx: tuner registers restored (N since open)".
+---
+ include/rtl-sdr.h     |  12 ++++
+ include/rtlsdr_i2c.h  |   4 ++
+ include/tuner_r82xx.h |   6 ++
+ src/librtlsdr.c       |  71 +++++++++++++++++---
+ src/tuner_r82xx.c     | 153 +++++++++++++++++++++++++++++++++++++-----
+ 5 files changed, 221 insertions(+), 25 deletions(-)
+
+diff --git a/include/rtl-sdr.h b/include/rtl-sdr.h
+index 6ba410e..4abb460 100644
+--- a/include/rtl-sdr.h
++++ b/include/rtl-sdr.h
+@@ -443,6 +443,18 @@ RTLSDR_API const char *rtlsdr_get_build_info(void);
+  */
+ RTLSDR_API int rtlsdr_get_i2c_stats(rtlsdr_dev_t *dev, uint32_t *retries, uint32_t *failures);
+ 
++/*!
++ * scanner-v6: how many times all tuner registers were written again from
++ * the driver's copy since the device was opened: after a tuner transfer
++ * that needed a retry (the tuner may have been reset) or after an earlier
++ * write that failed. R820T/R828D only.
++ *
++ * \param dev the device handle given by rtlsdr_open()
++ * \param restores number of full register rewrites (may be NULL)
++ * \return 0 on success, -1 no device or not an R82xx tuner
++ */
++RTLSDR_API int rtlsdr_get_tuner_restores(rtlsdr_dev_t *dev, uint32_t *restores);
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/include/rtlsdr_i2c.h b/include/rtlsdr_i2c.h
+index b683896..c1dafec 100644
+--- a/include/rtlsdr_i2c.h
++++ b/include/rtlsdr_i2c.h
+@@ -6,5 +6,9 @@ int rtlsdr_set_bias_tee_gpio(void *dev, int gpio, int on);
+ uint32_t rtlsdr_get_tuner_clock(void *dev);
+ int rtlsdr_i2c_write_fn(void *dev, uint8_t addr, uint8_t *buf, int len);
+ int rtlsdr_i2c_read_fn(void *dev, uint8_t addr, uint8_t *buf, int len);
++/* scanner-v6: retried tuner I2C transfers so far (the tuner driver compares
++ * it before and after a transfer), and 1 once the USB device is gone */
++uint32_t rtlsdr_i2c_retry_count(void *dev);
++int rtlsdr_i2c_device_gone(void *dev);
+ 
+ #endif
+diff --git a/include/tuner_r82xx.h b/include/tuner_r82xx.h
+index 08a72d8..337c119 100644
+--- a/include/tuner_r82xx.h
++++ b/include/tuner_r82xx.h
+@@ -92,6 +92,12 @@ struct r82xx_priv {
+ 	/* scanner-v4: PLL statistics since open */
+ 	uint32_t			pll_late_locks;	/* locked only after extra wait */
+ 	uint32_t			pll_unlocks;	/* gave up, PLL not locked */
++	/* scanner-v6: all registers written again from the shadow copy
++	 * (after an I2C retry or an earlier failed write) */
++	uint32_t			restores;
++	int				restoring;	/* inside r82xx_restore() */
++	int				pll_written;	/* PLL programmed since init */
++	int				gone_reported;	/* "device gone" already printed */
+ 
+ 	/* Store current mode */
+ 	uint32_t			delsys;
+diff --git a/src/librtlsdr.c b/src/librtlsdr.c
+index 05efb3a..3ef0396 100644
+--- a/src/librtlsdr.c
++++ b/src/librtlsdr.c
+@@ -120,6 +120,9 @@ struct rtlsdr_dev {
+ 	/* scanner-v5: tuner I2C transfers retried / failed after all retries */
+ 	uint32_t i2c_retries;
+ 	uint32_t i2c_failures;
++	/* scanner-v6: 1 after LIBUSB_ERROR_NO_DEVICE on a tuner transfer (the
++	 * dongle was unplugged): further tuner transfers fail at once */
++	int i2c_gone;
+ 	/* status */
+ 	int dev_lost;
+ 	int driver_active;
+@@ -1513,7 +1516,7 @@ int rtlsdr_check_dongle_model(void *dev, char *manufact_check, char *product_che
+ 
+ /* ---- scanner-v4 additions ---- */
+ #ifndef RTLSDR_BUILD_INFO
+-#define RTLSDR_BUILD_INFO "rtl-sdr-blog + scanner-v4 (unknown revision)"
++#define RTLSDR_BUILD_INFO "rtl-sdr-blog + scanner-v6 (unknown revision)"
+ #endif
+ 
+ int rtlsdr_get_tuner_pll_lock(rtlsdr_dev_t *dev, uint32_t *late_locks,
+@@ -2141,6 +2144,28 @@ static void i2c_retry_pause(int attempt)
+ #endif
+ }
+ 
++/* scanner-v6: no retry when the dongle is gone (NO_DEVICE). For other
++ * errors than the PIPE stall seen on the user's V4 (IO, TIMEOUT: how an
++ * unplugged dongle may look on Windows) retry only if the RTL2832U itself
++ * still answers, i.e. the I2C repeater can be switched on. PIPE is retried
++ * exactly as in scanner-v5. */
++static int i2c_retry_ok(rtlsdr_dev_t *d, int r)
++{
++	if (r == LIBUSB_ERROR_NO_DEVICE) {
++		d->i2c_gone = 1;
++		return 0;
++	}
++	return 1;
++}
++
++static int i2c_prepare_retry(rtlsdr_dev_t *d, int attempt, int r)
++{
++	i2c_retry_pause(attempt);
++	d->i2c_repeater_state = -1;
++	rtlsdr_set_i2c_repeater(d, 1);
++	return d->i2c_repeater_state == 1 || r == LIBUSB_ERROR_PIPE;
++}
++
+ int rtlsdr_i2c_write_fn(void *dev, uint8_t addr, uint8_t *buf, int len)
+ {
+ 	rtlsdr_dev_t *d = (rtlsdr_dev_t *)dev;
+@@ -2148,17 +2173,20 @@ int rtlsdr_i2c_write_fn(void *dev, uint8_t addr, uint8_t *buf, int len)
+ 
+ 	if (!d)
+ 		return -1;
++	if (d->i2c_gone)
++		return LIBUSB_ERROR_NO_DEVICE;
+ 
+ 	r = rtlsdr_i2c_write(d, addr, buf, len);
+ 	for (i = 0; i < I2C_RETRIES && r != len; i++) {
++		if (!i2c_retry_ok(d, r) || !i2c_prepare_retry(d, i, r))
++			break;
+ 		d->i2c_retries++;
+-		i2c_retry_pause(i);
+-		d->i2c_repeater_state = -1;
+-		rtlsdr_set_i2c_repeater(d, 1);
+ 		r = rtlsdr_i2c_write(d, addr, buf, len);
+ 	}
+-	if (r != len)
++	if (r != len) {
++		i2c_retry_ok(d, r);
+ 		d->i2c_failures++;
++	}
+ 	return r;
+ }
+ 
+@@ -2169,20 +2197,33 @@ int rtlsdr_i2c_read_fn(void *dev, uint8_t addr, uint8_t *buf, int len)
+ 
+ 	if (!d)
+ 		return -1;
++	if (d->i2c_gone)
++		return LIBUSB_ERROR_NO_DEVICE;
+ 
+ 	r = rtlsdr_i2c_read(d, addr, buf, len);
+ 	for (i = 0; i < I2C_RETRIES && r != len; i++) {
++		if (!i2c_retry_ok(d, r) || !i2c_prepare_retry(d, i, r))
++			break;
+ 		d->i2c_retries++;
+-		i2c_retry_pause(i);
+-		d->i2c_repeater_state = -1;
+-		rtlsdr_set_i2c_repeater(d, 1);
+ 		r = rtlsdr_i2c_read(d, addr, buf, len);
+ 	}
+-	if (r != len)
++	if (r != len) {
++		i2c_retry_ok(d, r);
+ 		d->i2c_failures++;
++	}
+ 	return r;
+ }
+ 
++uint32_t rtlsdr_i2c_retry_count(void *dev)
++{
++	return dev ? ((rtlsdr_dev_t *)dev)->i2c_retries : 0;
++}
++
++int rtlsdr_i2c_device_gone(void *dev)
++{
++	return dev ? ((rtlsdr_dev_t *)dev)->i2c_gone : 0;
++}
++
+ int rtlsdr_get_i2c_stats(rtlsdr_dev_t *dev, uint32_t *retries, uint32_t *failures)
+ {
+ 	if (!dev)
+@@ -2194,6 +2235,18 @@ int rtlsdr_get_i2c_stats(rtlsdr_dev_t *dev, uint32_t *retries, uint32_t *failure
+ 	return 0;
+ }
+ 
++int rtlsdr_get_tuner_restores(rtlsdr_dev_t *dev, uint32_t *restores)
++{
++	if (!dev)
++		return -1;
++	if (dev->tuner_type != RTLSDR_TUNER_R820T &&
++	    dev->tuner_type != RTLSDR_TUNER_R828D)
++		return -1;
++	if (restores)
++		*restores = dev->r82xx_p.restores;
++	return 0;
++}
++
+ int rtlsdr_set_bias_tee_gpio(rtlsdr_dev_t *dev, int gpio, int on)
+ {
+ 	if (!dev)
+diff --git a/src/tuner_r82xx.c b/src/tuner_r82xx.c
+index 2397a1d..6cd5bf6 100644
+--- a/src/tuner_r82xx.c
++++ b/src/tuner_r82xx.c
+@@ -284,18 +284,13 @@ static bool shadow_equal(struct r82xx_priv *priv, uint8_t reg, const uint8_t *va
+ 	return false;
+ }
+ 
+-static int r82xx_write(struct r82xx_priv *priv, uint8_t reg, const uint8_t *val,
+-		       unsigned int len)
++/* Send registers to the chip, split into I2C messages, without looking at the
++ * shadow copy. On failure the shadow copy no longer matches the chip. */
++static int r82xx_xfer_write(struct r82xx_priv *priv, uint8_t reg, const uint8_t *val,
++			    unsigned int len)
+ {
+ 	int rc, size, pos = 0;
+ 
+-	/* Avoid setting registers unnecessarily since it's slow */
+-	if (shadow_equal(priv, reg, val, len))
+-		return 0;
+-
+-	/* Store the shadow registers */
+-	shadow_store(priv, reg, val, len);
+-
+ 	do {
+ 		if (len > priv->cfg->max_i2c_msg_len - 1)
+ 			size = priv->cfg->max_i2c_msg_len - 1;
+@@ -310,8 +305,12 @@ static int r82xx_write(struct r82xx_priv *priv, uint8_t reg, const uint8_t *val,
+ 					 priv->buf, size + 1);
+ 
+ 		if (rc != size + 1) {
+-			fprintf(stderr, "%s: i2c wr failed=%d reg=%02x len=%d\n",
+-				   __FUNCTION__, rc, reg, size);
++			/* scanner-v6: once the dongle is gone, say it once */
++			if (!rtlsdr_i2c_device_gone(priv->rtl_dev) || !priv->gone_reported)
++				fprintf(stderr, "%s: i2c wr failed=%d reg=%02x len=%d\n",
++					   "r82xx_write", rc, reg, size);
++			if (rtlsdr_i2c_device_gone(priv->rtl_dev))
++				priv->gone_reported = 1;
+ 			/* scanner-v4: the shadow copy was updated before the
+ 			 * write, so it may not match the chip any more */
+ 			priv->shadow_dirty = 1;
+@@ -328,6 +327,42 @@ static int r82xx_write(struct r82xx_priv *priv, uint8_t reg, const uint8_t *val,
+ 	return 0;
+ }
+ 
++static int r82xx_restore(struct r82xx_priv *priv);
++
++static int r82xx_write(struct r82xx_priv *priv, uint8_t reg, const uint8_t *val,
++		       unsigned int len)
++{
++	int rc;
++	uint32_t mark;
++
++	/* Avoid setting registers unnecessarily since it's slow */
++	if (shadow_equal(priv, reg, val, len))
++		return 0;
++
++	/* Store the shadow registers */
++	shadow_store(priv, reg, val, len);
++
++	/* scanner-v6: after an earlier failed write the chip may differ from
++	 * the shadow copy anywhere: write all registers (the new value is
++	 * already in the shadow copy). On success skipping works again. */
++	if (priv->shadow_dirty && !priv->restoring &&
++	    !rtlsdr_i2c_device_gone(priv->rtl_dev))
++		return r82xx_restore(priv);
++
++	mark = rtlsdr_i2c_retry_count(priv->rtl_dev);
++	rc = r82xx_xfer_write(priv, reg, val, len);
++
++	/* scanner-v6: the transfer needed a retry. If the tuner was reset
++	 * (supply dip), its registers are back at power-on values while the
++	 * shadow copy says otherwise, and later "redundant" writes would be
++	 * skipped. Write all registers again from the shadow copy. */
++	if (rc >= 0 && !priv->restoring &&
++	    rtlsdr_i2c_retry_count(priv->rtl_dev) != mark)
++		rc = r82xx_restore(priv);
++
++	return rc;
++}
++
+ static int r82xx_write_reg(struct r82xx_priv *priv, uint8_t reg, uint8_t val)
+ {
+ 	return r82xx_write(priv, reg, &val, 1);
+@@ -364,7 +399,7 @@ static uint8_t r82xx_bitrev(uint8_t byte)
+ 	return (lut[byte & 0xf] << 4) | lut[byte >> 4];
+ }
+ 
+-static int r82xx_read(struct r82xx_priv *priv, uint8_t reg, uint8_t *val, int len)
++static int r82xx_xfer_read(struct r82xx_priv *priv, uint8_t reg, uint8_t *val, int len)
+ {
+ 	int rc, i;
+ 	uint8_t *p = &priv->buf[1];
+@@ -374,8 +409,11 @@ static int r82xx_read(struct r82xx_priv *priv, uint8_t reg, uint8_t *val, int le
+ 	rc = rtlsdr_i2c_write_fn(priv->rtl_dev, priv->cfg->i2c_addr, priv->buf, 1);
+ 
+ 	if (rc != 1) {
+-		fprintf(stderr, "%s: i2c wr failed=%d reg=%02x len=%d\n",
+-			   __FUNCTION__, rc, reg, 1);
++		if (!rtlsdr_i2c_device_gone(priv->rtl_dev) || !priv->gone_reported)
++			fprintf(stderr, "%s: i2c wr failed=%d reg=%02x len=%d\n",
++				   "r82xx_read", rc, reg, 1);
++		if (rtlsdr_i2c_device_gone(priv->rtl_dev))
++			priv->gone_reported = 1;
+ 		if (rc < 0)
+ 			return rc;
+ 		return -1;
+@@ -384,8 +422,11 @@ static int r82xx_read(struct r82xx_priv *priv, uint8_t reg, uint8_t *val, int le
+ 	rc = rtlsdr_i2c_read_fn(priv->rtl_dev, priv->cfg->i2c_addr, p, len);
+ 
+ 	if (rc != len) {
+-		fprintf(stderr, "%s: i2c rd failed=%d reg=%02x len=%d\n",
+-			   __FUNCTION__, rc, reg, len);
++		if (!rtlsdr_i2c_device_gone(priv->rtl_dev) || !priv->gone_reported)
++			fprintf(stderr, "%s: i2c rd failed=%d reg=%02x len=%d\n",
++				   "r82xx_read", rc, reg, len);
++		if (rtlsdr_i2c_device_gone(priv->rtl_dev))
++			priv->gone_reported = 1;
+ 		if (rc < 0)
+ 			return rc;
+ 		return -1;
+@@ -398,6 +439,81 @@ static int r82xx_read(struct r82xx_priv *priv, uint8_t reg, uint8_t *val, int le
+ 	return 0;
+ }
+ 
++static int r82xx_read(struct r82xx_priv *priv, uint8_t reg, uint8_t *val, int len)
++{
++	int rc;
++	uint32_t mark = rtlsdr_i2c_retry_count(priv->rtl_dev);
++
++	rc = r82xx_xfer_read(priv, reg, val, len);
++
++	/* scanner-v6: a read that needed a retry may have seen a tuner that
++	 * was just reset: restore its registers and read again */
++	if (rc >= 0 && !priv->restoring &&
++	    rtlsdr_i2c_retry_count(priv->rtl_dev) != mark) {
++		rc = r82xx_restore(priv);
++		if (rc < 0)
++			return rc;
++		rc = r82xx_xfer_read(priv, reg, val, len);
++	}
++
++	return rc;
++}
++
++/* scanner-v6: after all registers were written again the PLL starts over;
++ * check the lock bit (with the same short extra wait as r82xx_set_pll) */
++static int r82xx_recheck_lock(struct r82xx_priv *priv)
++{
++	uint8_t data[3];
++	int rc, i;
++
++	for (i = 0; i <= PLL_EXTRA_CHECKS; i++) {
++		if (i)
++			r82xx_sleep_ms(PLL_EXTRA_WAIT_MS);
++		rc = r82xx_read(priv, 0x00, data, 3);
++		if (rc < 0)
++			return rc;
++		if (data[2] & 0x40) {
++			priv->has_lock = 1;
++			return 0;
++		}
++	}
++	fprintf(stderr, "[R82XX] PLL not locked after restoring the registers!\n");
++	priv->has_lock = 0;
++	return 0;
++}
++
++/* scanner-v6: write all tuner registers from the shadow copy (as r82xx_init
++ * does with the power-on table). Used after a transfer that needed a retry
++ * (the tuner may have been reset) and after an earlier failed write. A pass
++ * that itself needed a retry is repeated, at most RESTORE_PASSES times. */
++#define RESTORE_PASSES	3
++
++static int r82xx_restore(struct r82xx_priv *priv)
++{
++	int rc = 0, pass;
++	uint32_t mark = 0;
++
++	priv->restoring = 1;
++	for (pass = 0; pass < RESTORE_PASSES; pass++) {
++		mark = rtlsdr_i2c_retry_count(priv->rtl_dev);
++		rc = r82xx_xfer_write(priv, REG_SHADOW_START, priv->regs, NUM_REGS);
++		if (rc < 0 || rtlsdr_i2c_retry_count(priv->rtl_dev) == mark)
++			break;
++	}
++	if (rc >= 0) {
++		priv->restores++;
++		fprintf(stderr, "r82xx: tuner registers restored (%u since open)\n",
++			priv->restores);
++		/* the last pass went through without a retry: the chip
++		 * matches the shadow copy, skipping redundant writes is safe */
++		priv->shadow_dirty = rtlsdr_i2c_retry_count(priv->rtl_dev) != mark;
++		if (priv->pll_written)
++			rc = r82xx_recheck_lock(priv);
++	}
++	priv->restoring = 0;
++	return rc;
++}
++
+ /*
+  * r82xx tuning logic
+  */
+@@ -582,6 +698,9 @@ static int r82xx_set_pll(struct r82xx_priv *priv, uint32_t freq)
+ 	if (rc < 0)
+ 		return rc;
+ 
++	/* scanner-v6: from now on a register restore also checks the lock */
++	priv->pll_written = 1;
++
+ 	for (i = 0; i < 2; i++) {
+ //		usleep_range(sleep_time, sleep_time + 1000);
+ 
+@@ -1498,6 +1617,8 @@ int r82xx_init(struct r82xx_priv *priv)
+ 	/* Initialize registers */
+ 	memset(priv->regs, 0, NUM_REGS);
+ 	priv->shadow_dirty = 0;
++	priv->pll_written = 0;
++	priv->restoring = 0;
+ 	rc = r82xx_write(priv, 0x05,
+ 			 r82xx_init_array, sizeof(r82xx_init_array));
+ 
+-- 
+2.43.0
+

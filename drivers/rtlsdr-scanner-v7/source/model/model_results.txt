@@ -1,0 +1,94 @@
+# scanner-v7 (sh run_model.sh <drv after git am 0001-0009> <libusb src>)
+Found Rafael Micro R828D tuner
+RTL-SDR Blog V4 Detected
+[R82XX] PLL not locked!
+r82xx: tuner registers restored (1 since open)
+r82xx: tuner registers restored (2 since open)
+r82xx: tuner registers restored (3 since open)
+r82xx_write: i2c wr failed=-9 reg=17 len=1
+r82xx_set_freq: failed=-9
+r82xx: tuner registers restored (4 since open)
+r82xx: tuner registers restored (5 since open)
+r82xx: tuner registers restored (6 since open)
+r82xx_read: i2c wr failed=-9 reg=00 len=1
+r82xx: tuner registers restored (7 since open)
+r82xx: tuner registers restored (8 since open)
+r82xx: tuner registers restored (9 since open)
+[R82XX] PLL not locked after restoring the registers!
+rtlsdr_demod_write_reg failed with -1
+rtlsdr_demod_read_reg failed with -1
+r82xx_write: i2c wr failed=-1 reg=17 len=1
+r82xx_set_freq: failed=-1
+r82xx: tuner registers restored (10 since open)
+Exact sample rate is: 250000.000414 Hz
+r82xx_write: i2c wr failed=-4 reg=17 len=1
+r82xx_set_freq: failed=-4
+rtlsdr_demod_write_reg failed with -4
+rtlsdr_demod_read_reg failed with -4
+rtlsdr_write_reg failed with -4
+Found Rafael Micro R828D tuner
+RTL-SDR Blog V4 Detected
+tuner 6 xtal 28800000 int_freq 1815000
+470-800    tiles  426 | USB ctrl per retune avg 9.0 max 10 | tuner I2C wr 7.0 rd 2.0 | set_freq errors 0 | max LO error 107.4 Hz
+30-1766    tiles 2241 | USB ctrl per retune avg 8.8 max 17 | tuner I2C wr 6.8 rd 2.0 | set_freq errors 0 | max LO error 205.1 Hz
+build: rtl-sdr-blog + scanner-v7 (unknown revision)
+PLL late lock  : lock=1 late_locks=1 unlocks=0
+PLL no lock    : set_center_freq=0 lock=0 late_locks=1 unlocks=1
+PLL recovered  : lock=1
+T1 PLL write fails : 1st 0, retry 0, LO error after retry 10 Hz
+T2 input switch fails: 1st 0, retry 0, reg05 cable1=0 air_in_off=0 (want 0 0 = UHF input)
+tuner I2C transfers while the repeater was off: 0
+T3 2 writes fail    : set_center_freq 0, LO error 18 Hz, retries 2, failures 0 (want 0, <300, 2, 0)
+T4 tuner silent     : set_center_freq -9 (want <0), failures 1 (want >= 1)
+T4 tuner back       : set_center_freq 0, LO error 91 Hz (want 0, <300)
+T5 repeater lost    : set_tuner_gain 0, set_center_freq 0, retries 1, failures 0 (want 0, 0, >=1, 0)
+T6 before           : registers chip != copy 0 (want 0)
+T6 tuner reset      : set_tuner_gain 0, resets 1, retries 1, registers chip != copy 0 (first 0x00) (want 0, 1, >=1, 0)
+T6 next retune      : set_center_freq 0, LO error 102 Hz, registers chip != copy 0, PLL lock 1 (want 0, <300, 0, 1)
+T6 restores         : 1 (want 1)
+T7 failure, recovery: set_tuner_gain -9, set_center_freq 0, registers chip != copy 0, shadow_dirty 0 (want <0, 0, 0, 0)
+T7 after   tiles  220 | USB ctrl per retune avg 9.0 max 9 | tuner I2C wr 7.0 rd 2.0 | set_freq errors 0 | max LO error 108.6 Hz
+T11 read retry+reset: set_center_freq 0, LO error 89 Hz, registers chip != copy 0, PLL lock 1 (want 0, <300, 0, 1)
+T12 reset in rewrite: set_tuner_gain 0, tuner resets 2, registers chip != copy 0, shadow_dirty 0 (want 0, 2, 0, 0)
+T13 no lock after   : set_tuner_gain 0, PLL lock 0 (want 0, 0)
+T13 next retune     : set_center_freq 0, PLL lock 1 (want 0, 1)
+T9 link lost (IO)   : set_center_freq -1, tuner I2C writes tried 1, USB ctrl 3 (v5: 4 tries per write)
+T9 link back        : set_center_freq 0, LO error 51 Hz, registers chip != copy 0 (want 0, <300, 0)
+T10 no samples      : read_sync -7, timeout passed 2068 ms (want -7, ~2068; v5: -99 = blocks for ever, 0 ms)
+T10 timeout 0       : read_sync -99, timeout 0 ms (want -99, 0 = upstream)
+T10 timeout 1500    : read_sync -7, timeout 1500 ms (want -7, 1500)
+T10 250 kS/s        : timeout 2655 ms (want 2655)
+T10 samples back    : read_sync 0, 163840 bytes (want 0, 163840)
+T14 dithering       : set(1) 0 with 0 USB transfers, reg 0x12 bit4 on/off/on 0/16/0, LO error off 62 Hz, chip != copy 0, set(NULL) -1 (want 0, 0, 0/16/0, <300, 0, -1)
+T15 GPIO            : rc 0 0 0 0 0 0; out pin 3: GPO 08 GPOE 08 GPD 00 read 1; in pin 2: 1, status(GPD) 04, byte 0c; bad pin -1, NULL -1 (want 0s, 08 08 00 1, 1, 04, 0c)
+T8 unplugged retune : set_center_freq -4, tuner I2C writes tried 1
+T8 close unplugged  : tuner I2C writes tried 0, USB ctrl 3 (v5: 4 tries)
+T8 plugged in again : set_center_freq 0, LO error 59 Hz (want 0, <300)
+
+# the same scenarios on scanner-v6 (drv at patch 0008, run_model.sh ... v6), stdout only
+T1 PLL write fails : 1st 0, retry 0, LO error after retry 10 Hz
+T2 input switch fails: 1st 0, retry 0, reg05 cable1=0 air_in_off=0 (want 0 0 = UHF input)
+T3 2 writes fail    : set_center_freq 0, LO error 18 Hz, retries 2, failures 0 (want 0, <300, 2, 0)
+T4 tuner silent     : set_center_freq -9 (want <0), failures 1 (want >= 1)
+T4 tuner back       : set_center_freq 0, LO error 91 Hz (want 0, <300)
+T5 repeater lost    : set_tuner_gain 0, set_center_freq 0, retries 1, failures 0 (want 0, 0, >=1, 0)
+T6 before           : registers chip != copy 0 (want 0)
+T6 tuner reset      : set_tuner_gain 0, resets 1, retries 1, registers chip != copy 0 (first 0x00) (want 0, 1, >=1, 0)
+T6 next retune      : set_center_freq 0, LO error 102 Hz, registers chip != copy 0, PLL lock 1 (want 0, <300, 0, 1)
+T6 restores         : 1 (want 1)
+T7 failure, recovery: set_tuner_gain -9, set_center_freq 0, registers chip != copy 0, shadow_dirty 0 (want <0, 0, 0, 0)
+T7 after   tiles  220 | USB ctrl per retune avg 9.0 max 9 | tuner I2C wr 7.0 rd 2.0 | set_freq errors 0 | max LO error 108.6 Hz
+T11 read retry+reset: set_center_freq 0, LO error 89 Hz, registers chip != copy 0, PLL lock 1 (want 0, <300, 0, 1)
+T12 reset in rewrite: set_tuner_gain 0, tuner resets 2, registers chip != copy 0, shadow_dirty 0 (want 0, 2, 0, 0)
+T13 no lock after   : set_tuner_gain 0, PLL lock 0 (want 0, 0)
+T13 next retune     : set_center_freq 0, PLL lock 1 (want 0, 1)
+T9 link lost (IO)   : set_center_freq -1, tuner I2C writes tried 1, USB ctrl 3 (v5: 4 tries per write)
+T9 link back        : set_center_freq 0, LO error 51 Hz, registers chip != copy 0 (want 0, <300, 0)
+T10 no samples      : read_sync -7, timeout passed 2068 ms (want -7, ~2068; v5: -99 = blocks for ever, 0 ms)
+T10 timeout 0       : read_sync -99, timeout 0 ms (want -99, 0 = upstream)
+T10 timeout 1500    : read_sync -7, timeout 1500 ms (want -7, 1500)
+T10 250 kS/s        : timeout 2655 ms (want 2655)
+T10 samples back    : read_sync 0, 163840 bytes (want 0, 163840)
+T8 unplugged retune : set_center_freq -4, tuner I2C writes tried 1
+T8 close unplugged  : tuner I2C writes tried 0, USB ctrl 5 (v5: 4 tries)
+T8 plugged in again : set_center_freq 0, LO error 59 Hz (want 0, <300)

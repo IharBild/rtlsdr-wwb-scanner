@@ -31,6 +31,15 @@ retunes unchanged (9 USB transfers). `source/build_all.sh` builds everything fro
 sources; two builds gave bit-identical binaries. x64 only.
 Status: built 12.11.2026, checked on the USB model (`source/model`, results for v5 and v6
 in `model_results.txt`) and in Wine; NOT yet tested on the real dongle.
-(The dithering stub mentioned above would now be patch 0009.)
+Tested on the real dongle 13.11.2026 (qa_pc standard, no-antenna, window: 0 FAIL).
+
+`rtlsdr-scanner-v7/` - the v6 build plus patch 0009: `rtlsdr_set_dithering()` and the GPIO
+API of the librtlsdr fork (`rtlsdr_set_gpio_output/_input/_bit`, `rtlsdr_get_gpio_bit`,
+`rtlsdr_set_gpio_byte`, `rtlsdr_get_gpio_byte`, `rtlsdr_set_gpio_status`), which pyrtlsdr
+0.4+ binds when it is imported (0.5.1 runs on Python 3.10+). Dithering stays on by default;
+all v6 scenarios of the USB model give the same results. `install_dll.py` also installs into
+a new environment (`<venv>\Scripts\rtlsdr.dll`, found through `wwb_scanner/dllpath.py`).
+Status: built 13.11.2026, checked on the USB model and in Wine with Windows Python 3.13 and
+pyrtlsdr 0.5.1; NOT yet tested on the real dongle.
 
 Licenses: rtl-sdr GPL-2.0-or-later, libusb LGPL-2.1 (see `source/`).

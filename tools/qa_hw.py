@@ -41,6 +41,22 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 KIT = HERE if os.path.isdir(os.path.join(HERE, 'tests')) else os.path.dirname(HERE)
 TESTS = os.path.join(KIT, 'tests')
 
+
+def prepare_dll_search():
+    """V21.3: Python 3.8+ on Windows does not search PATH or the Scripts folder
+    of a virtual environment for DLLs, so pyrtlsdr 0.4+ would not find the
+    rtlsdr.dll that install_dll.py put there. The scanner package (V21.3+) adds
+    that folder when it is imported; do it before any 'import rtlsdr' here.
+    Older installed versions have no dllpath: nothing changes for them."""
+    try:
+        from wwb_scanner import dllpath
+        return dllpath.prepare()
+    except Exception:
+        return None
+
+
+prepare_dll_search()
+
 RESULTS = []      # (id, status, title, detail)   status: PASS / FAIL / WARN / INFO / SKIP
 
 # Reference numbers of the user's dongle, V10 + rtlsdr.dll scanner-v4 (04.11.2026)
@@ -114,8 +130,12 @@ def check_environment(args):
         except Exception as exc:
             info[mod] = 'нет (%s)' % type(exc).__name__
     try:
-        import pkg_resources
-        info['pyrtlsdr'] = pkg_resources.get_distribution('pyrtlsdr').version
+        try:
+            from importlib.metadata import version as _v  # novm
+        except ImportError:                               # Python 3.7
+            from pkg_resources import get_distribution
+            _v = lambda n: get_distribution(n).version
+        info['pyrtlsdr'] = _v('pyrtlsdr')
     except Exception:
         info['pyrtlsdr'] = '?'
     import wwb_scanner

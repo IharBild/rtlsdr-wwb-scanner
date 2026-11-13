@@ -648,9 +648,15 @@ def security(out):
         except Exception:
             pass
         vt = tuple(int(x) for x in re.findall(r'\d+', ver)[:2]) if ver != '?' else ()
-        st = 'INFO' if not loc else ('WARN' if vt and vt >= (0, 4) else 'PASS')
-        R.add('SE5', 'SECURITY', st, 'зависимости: pyrtlsdr < 0.4 из ожидаемого места',
-              'pyrtlsdr %s, %s%s' % (ver, loc, '; 0.4+ требует функцию DLL, которой нет в scanner-v4' if st == 'WARN' else ''))
+        # V21.3: setup.cfg picks pyrtlsdr < 0.4 for Python < 3.10 and 0.4+ for 3.10+
+        # (0.4+ needs rtlsdr_set_dithering: DLL scanner-v7)
+        want_new = sys.version_info >= (3, 10)
+        good = bool(vt) and ((vt >= (0, 4)) == want_new)
+        st = 'INFO' if not loc else ('PASS' if good else 'WARN')
+        R.add('SE5', 'SECURITY', st, 'зависимости: pyrtlsdr %s из ожидаемого места' % ('>= 0.4' if want_new else '< 0.4'),
+              'pyrtlsdr %s, %s%s' % (ver, loc, '' if good else
+                                     ('; для Python 3.10+ нужен pyrtlsdr 0.4+ и DLL scanner-v7' if want_new else
+                                      '; 0.4+ требует rtlsdr_set_dithering: только DLL scanner-v7')))
     except Exception as exc:
         R.add('SE5', 'SECURITY', 'INFO', 'зависимости: pyrtlsdr', repr(exc))
 

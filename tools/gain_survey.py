@@ -92,6 +92,12 @@ class Dongle(object):
         if self.simulate:
             self.sdr = self.sim.FakeRtlSdr(air=self.air, gain_affects=True,
                                            gain_error=self.sim.vhf_gain_error)
+            # V21.3: never hand the simulated dongle to a real rtlsdr library.
+            # pyrtlsdr 0.4+ finds librtlsdr where 0.3 did not, and its I2C
+            # counter read the fake device pointer: a crash at the end of a
+            # simulated survey (Linux; Windows turns it into an exception).
+            from wwb_scanner import scan_dll
+            scan_dll._cache['lib'] = None
         else:
             from rtlsdr import RtlSdr
             self.sdr = RtlSdr()

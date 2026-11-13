@@ -14,7 +14,7 @@ else:
 setup_data = dict(
     entry_points={
         'console_scripts':[
-            'wwb_scanner-ui = wwb_scanner.ui.pyside.main:run',
+            'wwb_scanner-ui = wwb_scanner.ui.launch:run',   # V21.3: clear message without PySide2
         ],
     },
 )

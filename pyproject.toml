@@ -1,0 +1,7 @@
+# V21.3: PEP 517 build, so that current pip (24+) installs the package without
+# the legacy "setup.py install" path. All metadata stays in setup.cfg, which
+# old pip (Python 3.7) also reads. setuptools 40.8 is the first with
+# build_meta and the newest that still runs on Python 3.7 is picked by pip.
+[build-system]
+requires = ["setuptools>=40.8", "wheel"]
+build-backend = "setuptools.build_meta"

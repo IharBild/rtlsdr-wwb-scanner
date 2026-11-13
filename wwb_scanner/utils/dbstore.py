@@ -131,7 +131,8 @@ class DBStore(object):
                 self.db.purge_table(table_name)
     def add_scan_config(self, config, force_insert=False):
         if config.get('datetime') is None:
-            config['datetime'] = datetime.datetime.utcnow()
+            # V21.3: utcnow() is deprecated since Python 3.12; same naive UTC value
+            config['datetime'] = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
         table = self.db.table('scan_configs')
         if config.get('eid') is not None:
             dbconfig = get_by_id(table, config.eid)

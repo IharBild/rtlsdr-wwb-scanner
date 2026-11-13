@@ -28,12 +28,28 @@ jobs:
             os: ubuntu-22.04
             python: '3.8'
             pins: ''
+            pytest: 'pytest<8'
             window: true
+          # V21.3: the newest Python with PySide2 (window), pyrtlsdr 0.5 and numpy 1.26
+          - name: Linux, Python 3.10, current libraries
+            os: ubuntu-22.04
+            python: '3.10'
+            pins: ''
+            pytest: 'pytest'
+            window: true
+          # V21.3: new Python, numpy 2, pyrtlsdr 0.5; no PySide2, so no window yet
+          - name: Linux, Python 3.13, current libraries (no window)
+            os: ubuntu-22.04
+            python: '3.13'
+            pins: ''
+            pytest: 'pytest'
+            window: false
           # the libraries of the maintainer's Windows PC
           - name: Windows, Python 3.8, pinned like the maintainer's PC
             os: windows-2022
             python: '3.8'
             pins: 'numpy==1.21.6 scipy==1.7.3 tinydb==4.8.0 pyrtlsdr==0.3.0 PySide2==5.15.2.1'
+            pytest: 'pytest<8'
             window: false
     env:
       QT_QPA_PLATFORM: offscreen
@@ -57,7 +73,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           if [ -n "${{ matrix.pins }}" ]; then python -m pip install ${{ matrix.pins }}; fi
-          python -m pip install . "pytest<8"
+          python -m pip install . "${{ matrix.pytest }}"
           python -m pip list
 
       - name: Automatic tests (dongle simulator)

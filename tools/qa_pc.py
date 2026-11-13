@@ -42,6 +42,7 @@ KNOWN_DLL = {
     '31bdf1a8fcd969c1aa14854f6fdecc56ad9ea693aace8aca5d14f4738f23429f': 'scanner-v4 x86 (cda6b29)',
     'a6616ed2829e1569e197f2039a1fc0aa296c0b5dae160f5951d45ee0e920bf73': 'scanner-v5 x64 (fa7729d, I2C retry)',
     '279fd1bdc082ea0b5100f5a27c920374833d2c003133dd9e5b2096e4169be605': 'scanner-v6 x64 (19c7b92, tuner restore, read timeout)',
+    '7d2a2f11646c90ab1b19748d40acaa1be07d9604ca230d42697bcc9059cdf7de': 'scanner-v7 x64 (5049ecd, dithering + GPIO for pyrtlsdr 0.4+)',
 }
 
 # qa_hw check -> category of the methodology
@@ -228,8 +229,22 @@ def child_smoke_scan(out):
                                  'formats': fm}), flush=True)
 
 
+def have_window_qt():
+    try:
+        import importlib.util
+        return importlib.util.find_spec('PySide2') is not None
+    except Exception:
+        return False
+
+
 def pc_window(out, real, gain, only_u1=False, start=470, end=600):
     tag = 'окно с донглом' if real else 'окно с имитатором'
+    if not have_window_qt():
+        # V21.3: Python 3.11+ has no PySide2; the window comes with PySide6
+        R.add('PC8' if only_u1 else 'PW', 'SMOKE' if only_u1 else 'SYSTEM', 'SKIP', tag + ': запуск',
+              'нет PySide2 для Python %d.%d: окно будет после перехода на PySide6, '
+              'ядро и донгл проверяются остальными пунктами' % sys.version_info[:2])
+        return
     env = env_utf8(QT_QPA_PLATFORM='offscreen', QA_UI_GAIN=str(gain))
     if real:
         env['QA_UI_REAL'] = '1'
