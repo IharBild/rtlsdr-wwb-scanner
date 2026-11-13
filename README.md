@@ -10,7 +10,7 @@ company in Poland and for sound engineers across Europe. Most of the code in thi
 written with Claude (Anthropic); every release is checked on a real V4 dongle by the
 maintainer.
 
-Current version: **V21.1** in the branch `v4-fixes` (installed by the command below). Last tagged
+Current version: **V21.2** in the branch `v4-fixes` (installed by the command below). Last tagged
 release: [v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v18.1)
 (branch `v4-fixes`). The `master` branch is the original upstream code and is not used here.
 
@@ -125,6 +125,19 @@ release: [v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v18
   - An export is confirmed in the status line, with what the numbers in the file are.
   - Level axis zoomed in below 1 dB per tick: labels with a decimal (they read
     "-98, -98, -99, -99").
+- **V21.2** - **Check peaks with less gain** (Scan settings, on by default). Two strong
+  carriers (own mics / IEMs near the antenna) make false peaks in the dongle's tuner at
+  2 f1 - f2 and 2 f2 - f1, even when nothing clips. After the scan, narrow peaks that are
+  at least 10 dB above the floor and 6 dB weaker than the second strongest carrier are
+  read again: twice with about 10 dB less gain and once more with the scan gain. Scaled
+  back by the real gain difference, a real signal keeps its level; a product of the
+  dongle falls by about twice the gain drop. Such peaks get a pink mark "dongle product"
+  (View > Dongle product marks) and are named in the status line. They are **not**
+  removed: the scan and the exported files stay as measured. A peak whose level changed
+  between the readings, or that is too weak to tell, is left unmarked. Nothing is read
+  when there are fewer than two strong narrow carriers (30 dB above the floor); at most
+  30 tiles are read again (about 0.2 s each, up to about 6 s per scan). Checked on the
+  dongle simulator with a tuner nonlinearity model; not yet on the real V4.
 - **V21.1** (the small items left from the audit and from the tests on the PC):
   - **Stop** only asks the scan to end: the window no longer freezes while a USB read
     hangs (11 s measured). A stopped scan is finished like any other - cropped to the
@@ -293,5 +306,9 @@ Windows: быстрее, без собственных помех донгла �
 - Проверка на своём ПК с донглом — архив `qa-kit` из релиза, `python qa_pc.py --smoke`.
 - Правила стран — подсказка для планирования, а не юридический документ: перед шоу
   сверяйтесь с регулятором (в Польше — UKE).
+- V21.2: «Check peaks with less gain» — пики рядом с двумя сильными несущими (свои
+  микрофоны у антенны) перечитываются с усилением на 10 дБ ниже. Продукт самого донгла
+  при этом падает примерно вдвое сильнее, настоящий сигнал остаётся на месте. Продукты
+  отмечаются розовой меткой «dongle product», из скана и файлов не удаляются.
 
 [osmosdr-wiki]: https://osmocom.org/projects/rtl-sdr/wiki

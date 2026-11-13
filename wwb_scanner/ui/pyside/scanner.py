@@ -45,6 +45,7 @@ class ScanConfigData(GenericQObject):
     _n_cleanImages = Signal()
     _n_cleanFloor = Signal()
     _n_autoGain = Signal()
+    _n_verifyPeaks = Signal()
     _n_scanRanges = Signal()
     configUpdate = Signal()
     def __init__(self, *args):
@@ -65,6 +66,7 @@ class ScanConfigData(GenericQObject):
         self._cleanImages = False     # V20.9: images of strong signals are marked, not hidden
         self._cleanFloor = True
         self._autoGain = True
+        self._verifyPeaks = True      # V21.2: second-gain check of peaks next to strong carriers
         self._scanRanges = ''
         super().__init__(*args)
 
@@ -118,6 +120,10 @@ class ScanConfigData(GenericQObject):
     def _g_autoGain(self): return self._autoGain
     def _s_autoGain(self, value): self._generic_setter('_autoGain', value)
     autoGain = Property(bool, _g_autoGain, _s_autoGain, notify=_n_autoGain)
+
+    def _g_verifyPeaks(self): return self._verifyPeaks
+    def _s_verifyPeaks(self, value): self._generic_setter('_verifyPeaks', value)
+    verifyPeaks = Property(bool, _g_verifyPeaks, _s_verifyPeaks, notify=_n_verifyPeaks)
 
     # V18: several ranges as JSON '[[470, 534], [823, 832]]'; '' = one range
     def _g_scanRanges(self): return self._scanRanges
@@ -354,6 +360,7 @@ class ScannerInterface(GenericQObject):
         conf.sampling.window_type = self.scanConfig.windowType
         sc = self.scanConfig
         conf.sampling.auto_gain = bool(getattr(sc, 'autoGain', False))
+        conf.sampling.verify_peaks = bool(getattr(sc, 'verifyPeaks', False))
         conf.processing.clean_ripple = bool(getattr(sc, 'cleanRipple', False))
         conf.processing.clean_spurs = bool(getattr(sc, 'cleanSpurs', False))
         conf.processing.clean_images = bool(getattr(sc, 'cleanImages', False))
@@ -370,6 +377,7 @@ class ScannerInterface(GenericQObject):
             conf.gain_calibration = True
             conf.device.gain = gain_cal.SURVEY_GAIN_DB
             conf.sampling.auto_gain = False
+            conf.sampling.verify_peaks = False
             conf.processing.clean_ripple = False
             conf.processing.clean_spurs = False
             conf.processing.clean_images = False
@@ -380,6 +388,7 @@ class ScannerInterface(GenericQObject):
             conf.scan_range = list(cleanup.CALIBRATION_RANGE_MHZ)
             conf.scan_ranges = None
             conf.sampling.auto_gain = False
+            conf.sampling.verify_peaks = False
             conf.processing.clean_ripple = False
             conf.processing.clean_spurs = False
             conf.processing.clean_images = False

@@ -18,6 +18,7 @@ Item {
     property alias cleanImages: model.cleanImages
     property alias cleanFloor: model.cleanFloor
     property alias autoGain: model.autoGain
+    property alias verifyPeaks: model.verifyPeaks
     property alias scanRanges: model.scanRanges
 
     signal configUpdate()
@@ -38,6 +39,7 @@ Item {
         cleanImages: false      // V20.9: images are marked, hidden only on request
         cleanFloor: true
         autoGain: true
+        verifyPeaks: true       // V21.2: second-gain check of peaks next to strong carriers
         scanRanges: ''
 
         onConfigUpdate: {
@@ -60,6 +62,7 @@ Item {
         property alias cleanImages: model.cleanImages
         property alias cleanFloor: model.cleanFloor
         property alias autoGain: model.autoGain
+        property alias verifyPeaks: model.verifyPeaks
         property alias scanRanges: model.scanRanges
     }
 }

@@ -1,3 +1,4 @@
+import bisect
 import time
 import threading
 import numpy as np
@@ -222,6 +223,90 @@ EVERYWHERE_TEXT = ('THE RESULT IS NOT VALID: %d of %d tiles clip even at the low
 WIDE_SIGNAL_MHZ = 1.0
 WIDE_SIGNAL_DB = 10.
 KNOWN_AT_FLOOR_DB = 3.
+
+# V21.2: second-gain check of narrow peaks next to strong carriers. Two
+# strong carriers make products in the tuner itself (LNA / mixer) even when
+# the ADC does not clip (2 f1 - f2, 2 f2 - f1). Such a product follows the
+# gain more steeply than a real signal: with VERIFY_DROP_DB less gain and the
+# reading scaled back by the real gain difference, a real signal stays where
+# it was, a third-order product falls by about twice the drop. A peak that
+# falls at least VERIFY_PRODUCT_FRACTION x the drop (and VERIFY_PRODUCT_MIN_DB)
+# in two readings with less gain, while two readings with the normal gain
+# (the scan and one more) agree within VERIFY_STABLE_DB, is a product of the
+# dongle: it is marked on the graph and named in the status line. It is NOT
+# removed from the scan or the files (as images, audit A2).
+VERIFY_DROP_DB = 10.          # nominal gain drop of the check readings
+VERIFY_MIN_DROP_DB = 6.       # less available below the scan gain: no check
+VERIFY_SOURCE_DB = 30.        # narrow carrier this far above the floor: may make products
+VERIFY_CAND_DB = 10.          # narrow peak this far above the floor is checked ...
+VERIFY_BELOW_SOURCE_DB = 6.   # ... if at least this much weaker than the 2nd strongest carrier
+VERIFY_NARROW_HZ = 150e3      # narrow: this far away on both sides ...
+VERIFY_NARROW_DB = 6.         # ... at least this much lower
+VERIFY_MAX_TILES = 30         # tiles read again (3 readings each, ~0.2 s per tile)
+VERIFY_MAX_SHARE = 0.10
+VERIFY_MIN_TILES = 6
+VERIFY_STABLE_DB = 3.         # the two normal readings (and the two low ones) agree
+VERIFY_REAL_TOL_DB = 3.       # a real signal: low reading within this of the normal one
+VERIFY_PRODUCT_MIN_DB = 6.
+VERIFY_PRODUCT_FRACTION = 0.7
+VERIFY_SEEN_DB = 3.           # a low reading counts above its own floor + this
+
+
+def classify_peak(a_db, n_db, low_dbs, low_floor_db, drop_db):
+    """V21.2: one narrow peak read with the scan gain (``a_db``: in the scan,
+    ``n_db``: once more) and with ``drop_db`` (real) less gain (``low_dbs``:
+    already scaled back, ``low_floor_db``: their floor, scaled back too).
+    Returns (kind, delta_db): 'product' (falls with the gain much more than a
+    real signal; delta = how much at least), 'real' (stays; delta = mean
+    difference), 'varying' (the signal changed between the readings) or
+    'unclear' (not enough above the floor to tell)."""
+    vals = [a_db, n_db] + list(low_dbs)
+    if any(v is None or not np.isfinite(v) for v in vals) or not low_dbs:
+        return 'unclear', None
+    if abs(a_db - n_db) > VERIFY_STABLE_DB:
+        return 'varying', None
+    seen = float(low_floor_db) + VERIFY_SEEN_DB
+    exact = all(v > seen for v in low_dbs)
+    if exact and max(low_dbs) - min(low_dbs) > VERIFY_STABLE_DB:
+        return 'varying', None
+    bounds = [n_db - (v if v > seen else seen) for v in low_dbs]
+    thr = max(VERIFY_PRODUCT_MIN_DB, VERIFY_PRODUCT_FRACTION * float(drop_db))
+    least = min(bounds)
+    if least >= thr:
+        return 'product', float(least)
+    if exact and max(abs(b) for b in bounds) <= VERIFY_REAL_TOL_DB:
+        return 'real', float(np.mean(bounds))
+    return 'unclear', float(least)
+
+
+def narrow_peaks(f_mhz, y_db, min_db, exclude=None):
+    """V21.2: narrow peaks of a spectrum at or above ``min_db``: local maxima
+    (+-75 kHz) that are VERIFY_NARROW_DB higher than the points
+    VERIFY_NARROW_HZ away on both sides. ``exclude``: mask of points that
+    are not candidates (inside a wide signal). Returns [(index, dB), ...]."""
+    f = np.asarray(f_mhz, dtype=np.float64)
+    y = np.asarray(y_db, dtype=np.float64)
+    if f.size < 16:
+        return []
+    df = float(np.median(np.diff(f)))
+    if not df > 0:
+        return []
+    h = max(1, int(round(0.075 / df)))
+    w = max(h + 1, int(round(VERIFY_NARROW_HZ / 1e6 / df)))
+    out = []
+    for i in np.flatnonzero(y >= min_db):
+        if exclude is not None and exclude[i]:
+            continue
+        a, b = max(i - h, 0), min(i + h, y.size - 1)
+        if y[i] < y[a:b + 1].max() or (i > a and y[i] == y[a:i].max()):
+            continue
+        lo, hi = i - w, i + w
+        if lo < 0 or hi >= y.size:
+            continue
+        if y[lo] > y[i] - VERIFY_NARROW_DB or y[hi] > y[i] - VERIFY_NARROW_DB:
+            continue
+        out.append((int(i), float(y[i])))
+    return out
 
 
 def to_db(p):
@@ -639,6 +724,29 @@ class SampleSet(JSONMixin):
             self.neighbour = True
         return True
 
+    def read_check(self, sdr):
+        """V21.2: one more reading of this tile with the gain that is set
+        now, for the second-gain check of its peaks. Linear PSD of the kept
+        bins (not scaled), or None (tuning failed, clipped, other shape)."""
+        if self.powers is None:
+            return None
+        self.tile_t0 = time.monotonic()
+        if not self.tune(sdr, self.center_frequency):
+            return None
+        sweeps, per_sweep = self.sweeps_per_scan, self.samples_per_sweep
+        n = int(-(-(sweeps * per_sweep) // 512) * 512)
+        run_with_timeout(sdr.read_samples, READ_TIMEOUT, NUM_SAMPLES_DISCARDED)
+        x = run_with_timeout(sdr.read_samples, READ_TIMEOUT, n)
+        self.check_budget()
+        if x is None or clip_ratio(x) >= OVERLOAD_RATIO:
+            return None
+        x = np.asarray(x[:sweeps * per_sweep], dtype=np.complex128)
+        offs, Pfull, keep = self.tile_psd(x)
+        P = Pfull[keep]
+        if P.shape != np.shape(self.powers):
+            return None
+        return P
+
     def _find_carrier(self, offs, Pfull):
         """V20: the strongest signal of a clipped tile (anywhere in the tile
         except DC): its zone is read again after the scan."""
@@ -912,6 +1020,10 @@ class SampleCollection(JSONMixin):
         self.retry_failed_tiles(keys)
         self.remeasure_neighbours(keys)
         self.remove_images()
+        try:
+            self.verify_peaks()
+        except Exception:
+            logger.exception('second-gain check of the peaks failed, the scan is kept as measured')
         if self.scanning.is_set():
             for e in complete_events.copy():
                 if e.is_set():
@@ -1281,6 +1393,206 @@ class SampleCollection(JSONMixin):
             out.append((f[i] * 1e6, float(y[i])))
         return out
 
+    # ------------------------------------------------------------ V21.2
+    def _verify_enabled(self):
+        sc = self.scanner
+        try:
+            if not bool(sc.sampling_config.get('verify_peaks')):
+                return False
+            if sc.config.get('gain_calibration'):
+                return False
+        except Exception:
+            return False
+        return True
+
+    def verify_peaks(self):
+        """V21.2: second-gain check of narrow peaks next to strong carriers
+        (see VERIFY_DROP_DB). Only marks: the scan data are not changed.
+        Sets self.peak_checks = [{'f': MHz, 'db': dB over the floor, 'tile': MHz,
+        'kind': 'product' | 'real' | 'varying' | 'unclear', 'delta': dB or
+        None, 'drop': real gain drop dB, 'pair': (MHz, MHz) or None}, ...],
+        self.peak_check_skipped (candidates beyond the tile limit) and
+        self.peak_check_info (why nothing was checked, or '')."""
+        self.peak_checks = []
+        self.peak_check_skipped = 0
+        self.peak_check_info = ''
+        if self.aborted or not self.scanning.is_set() or not self._verify_enabled():
+            return
+        spectrum = getattr(self.scanner, 'spectrum', None)
+        ref = self._reference_floor_db()
+        if spectrum is None or ref is None:
+            return
+        with spectrum.data_update_lock:
+            sd = spectrum.sample_data
+            f = np.asarray(sd['frequency'], dtype=np.float64).copy()
+            y = np.asarray(sd['dbFS'], dtype=np.float64).copy()
+            w = np.asarray(sd._get_counts(), dtype=np.float64).copy()
+        if f.size < 16 or w.shape != f.shape:
+            return
+        wide = wide_signal_mask(f, y, w, ref)
+        sources = sorted(narrow_peaks(f, y, ref + VERIFY_SOURCE_DB, exclude=wide),
+                         key=lambda t: -t[1])
+        if len(sources) < 2:
+            return          # one strong carrier (or none) makes no 2 f1 - f2 products
+        cap = sources[1][1] - VERIFY_BELOW_SOURCE_DB
+        src_mhz = [float(f[i]) for i, _ in sources[:12]]
+        df = float(np.median(np.diff(f)))
+        cands = [(i, v) for i, v in narrow_peaks(f, y, ref + VERIFY_CAND_DB, exclude=wide) if v <= cap]
+        if not cands:
+            return
+        # predicted third-order products of the strongest carriers come first
+        pairs = {}
+        for a in src_mhz:
+            for b in src_mhz:
+                if a != b:
+                    pairs[round(2. * a - b, 4)] = (a, b)
+
+        def pair_of(m):
+            best = None
+            for p, ab in pairs.items():
+                d = abs(p - m)
+                if d <= 1.5 * df and (best is None or d < best[0]):
+                    best = (d, ab)
+            return best[1] if best else None
+        cl = []
+        for i, v in cands:
+            m = float(f[i])
+            cl.append({'f': round(m, 4), 'db': round(v - ref, 1), 'pair': pair_of(m),
+                       'dist': min(abs(m - c) for c in src_mhz)})
+        cl.sort(key=lambda c: (c['pair'] is None, c['dist']))
+        # the tile that measured each peak with the normal gain (nearest
+        # centre); tiles sorted by centre, looked up by bisection (a full
+        # 30-1766 MHz scan has ~2240 tiles and may have hundreds of peaks)
+        done = self.processed_keys
+        elig = []
+        for k, st in self.sample_sets.items():
+            if k not in done or st.powers is None or st.powers_low is not None \
+                    or getattr(st, 'desense_db', 0.) or not np.size(st.powers):
+                continue
+            fr = np.asarray(st.frequencies, dtype=np.float64)
+            if fr.shape != np.shape(st.powers):
+                continue
+            elig.append((k / 1e6, k, fr))
+        elig.sort(key=lambda t: t[0])
+        centres = [t[0] for t in elig]
+        reach = max([max(abs(t[2][0] - t[0]), abs(t[2][-1] - t[0])) for t in elig] or [0.]) + df
+        for c in cl:
+            best = None
+            lo = bisect.bisect_left(centres, c['f'] - reach)
+            hi = bisect.bisect_right(centres, c['f'] + reach)
+            for mhz, k, fr in elig[lo:hi]:
+                if not (fr[0] - df / 2. <= c['f'] <= fr[-1] + df / 2.):
+                    continue
+                j = int(np.searchsorted(fr, c['f']))
+                j = min(max(j, 0), fr.size - 1)
+                if j > 0 and abs(fr[j - 1] - c['f']) < abs(fr[j] - c['f']):
+                    j -= 1
+                if abs(fr[j] - c['f']) > df / 2.:
+                    continue
+                d = abs(mhz - c['f'])
+                if best is None or d < best[0]:
+                    best = (d, k, j)
+            if best is not None:
+                c['tile'], c['bin'] = best[1], best[2]
+        cl = [c for c in cl if 'tile' in c]
+        n_tiles = len(self.sample_sets)
+        limit = min(VERIFY_MAX_TILES, max(VERIFY_MIN_TILES, int(VERIFY_MAX_SHARE * n_tiles)))
+        order = []
+        for c in cl:
+            if c['tile'] not in order:
+                order.append(c['tile'])
+        keep_tiles = set(order[:limit])
+        self.peak_check_skipped = len([c for c in cl if c['tile'] not in keep_tiles])
+        cl = [c for c in cl if c['tile'] in keep_tiles]
+        if not cl:
+            return
+        scanner = self.scanner
+        sdr = scanner.sdr
+        try:
+            g0 = float(sdr.gain)
+        except Exception:
+            g0 = float(scanner.gain or 0.)
+        try:
+            gains = sorted(float(g) for g in scanner.gains)
+        except Exception:
+            gains = []
+        lower = [g for g in gains if g <= g0 - VERIFY_DROP_DB + 0.5]
+        g_low = lower[-1] if lower else (gains[0] if gains else None)
+        if g_low is None or g0 - g_low < VERIFY_MIN_DROP_DB - 0.05:
+            self.peak_check_info = ('peaks next to strong carriers not checked: the gain %.1f dB '
+                                    'is too low for a reading with %.0f dB less' % (g0, VERIFY_DROP_DB))
+            logger.info(self.peak_check_info)
+            return
+        keys = sorted(keep_tiles)
+        print('checking %d peak(s) next to strong carriers with %.1f dB less gain (%d tile(s))'
+              % (len(cl), g0 - g_low, len(keys)), flush=True)
+        reads = {k: {} for k in keys}
+        g_set_low = g_low
+        was_aborted = self.aborted
+        stuck = False
+        try:
+            for name, g in (('l1', g_low), ('n2', g0), ('l2', g_low)):
+                if self.aborted or not self.scanning.is_set() or not getattr(sdr, 'device_opened', True):
+                    break
+                run_with_timeout(setattr, TUNE_TIMEOUT, sdr, 'gain', g)
+                if name != 'n2':
+                    try:
+                        g_set_low = float(sdr.gain)
+                    except Exception:
+                        g_set_low = g
+                for k in keys:
+                    if self.aborted or not self.scanning.is_set() or not getattr(sdr, 'device_opened', True):
+                        break
+                    reads[k][name] = self.sample_sets[k].read_check(sdr)
+        except SdrTimeout as exc:
+            logger.error('second-gain check of the peaks: %s', exc)
+            stuck = True
+        except Exception:
+            logger.exception('second-gain check of the peaks failed, the peaks are left unchecked')
+        finally:
+            if self.aborted and not was_aborted:
+                # a USB timeout in tune(): every tile of the scan is measured,
+                # only the check is cut short - the scan is not "stopped"
+                stuck = True
+                self.aborted = False
+            try:
+                # never on a closed handle; not on a hanging one either
+                if not stuck and getattr(sdr, 'device_opened', True):
+                    run_with_timeout(setattr, TUNE_TIMEOUT, sdr, 'gain', g0)
+            except Exception:
+                logger.exception('could not set the gain back to %s dB', g0)
+        if stuck:
+            self.peak_check_info = 'peak check stopped: the dongle did not answer in time'
+
+        out = []
+        for c in cl:
+            k, j = c['tile'], c['bin']
+            st = self.sample_sets[k]
+            r = reads.get(k, {})
+            drop = st.real_drop(g0, g_set_low)
+            a_db = float(to_db(st.powers[j]))
+            n2 = r.get('n2')
+            lows = [r.get('l1'), r.get('l2')]
+            kind, delta = 'unclear', None
+            if n2 is not None and all(x is not None for x in lows):
+                low_db = [to_db(x) + drop for x in lows]
+                floor_low = max(float(np.percentile(d, FLOOR_PERCENTILE)) for d in low_db)
+                kind, delta = classify_peak(a_db, float(to_db(n2[j])), [float(d[j]) for d in low_db],
+                                            floor_low, drop)
+            out.append({'f': c['f'], 'db': c['db'], 'kind': kind, 'tile': k / 1e6,
+                        'delta': None if delta is None else round(delta, 1),
+                        'drop': round(drop, 1), 'pair': c['pair']})
+        self.peak_checks = out
+        prods = [c for c in out if c['kind'] == 'product']
+        n_real = len([c for c in out if c['kind'] == 'real'])
+        print('peak check: %d product(s) of the dongle, %d real, %d not clear'
+              % (len(prods), n_real, len(out) - len(prods) - n_real), flush=True)
+        for c in prods:
+            logger.info('%.3f MHz (+%.0f dB) is a product of the dongle%s: %.1f dB less gain lowered it '
+                        'by %.0f dB or more (a real signal: 0 dB); marked, kept in the scan',
+                        c['f'], c['db'], ' (2 x %.3f - %.3f)' % c['pair'] if c['pair'] else '',
+                        c['drop'], c['delta'])
+
     def remove_images(self):
         """V20.2: images of strong carriers (clipping zones and, with the
         auto gain or the spur cleaning on, any strong narrow carrier)."""
@@ -1520,6 +1832,19 @@ class SampleCollection(JSONMixin):
             # V20.9: left in the scan and in the files
             note = (note + '; ' if note else '') + 'possible images of the strong signal at ' + \
                 ', '.join('%.3f' % p for p, _, _ in images[:4]) + ' MHz (marked, not removed)'
+        # V21.2: products of the dongle found by the second-gain check
+        prods = [c for c in (getattr(self, 'peak_checks', None) or []) if c.get('kind') == 'product']
+        if prods:
+            note = (note + '; ' if note else '') + \
+                'products of the dongle (not in the air) at ' + \
+                ', '.join('%.3f' % c['f'] for c in prods[:4]) + \
+                (' and %d more' % (len(prods) - 4) if len(prods) > 4 else '') + \
+                ' MHz (checked with %.0f dB less gain; marked, not removed)' % max(c['drop'] for c in prods)
+        if getattr(self, 'peak_check_info', ''):
+            note = (note + '; ' if note else '') + self.peak_check_info
+        if getattr(self, 'peak_check_skipped', 0):
+            note = (note + '; ' if note else '') + \
+                '%d peak(s) next to strong carriers not checked (tile limit)' % self.peak_check_skipped
         if getattr(self, 'neighbours_skipped', 0):
             note = (note + '; ' if note else '') + \
                 '%d tile(s) next to strong carriers not checked' % self.neighbours_skipped
@@ -1535,6 +1860,9 @@ class SampleCollection(JSONMixin):
                                        for lo, hi, loss, c in self.sensitivity]
                 spectrum.image_marks = [{'f': float(p), 'of': float(c), 'hidden': hidden}
                                         for p, _, c in images]
+                # V21.2: products of the dongle (second-gain check)
+                spectrum.product_marks = [{'f': float(c['f']), 'delta': float(c['delta'] or 0.),
+                                           'drop': float(c['drop'])} for c in prods]
                 spectrum.unmeasurable_bands = [{'lo': float(lo), 'hi': float(hi), 'clip': float(r)}
                                                for lo, hi, r in self.unmeasurable]
             except Exception:

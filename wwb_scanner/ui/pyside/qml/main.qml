@@ -30,6 +30,7 @@ ApplicationWindow {
         // V20.3: marks of V20.2 on the graph (View menu)
         property bool showLossBands: true
         property bool showImageMarks: true
+        property bool showProductMarks: true    // V21.2
     }
     property bool darkUi: uiSettings.darkWindow
     property color accent: "#3aa0ff"
@@ -123,6 +124,12 @@ ApplicationWindow {
                 checkable: true
                 checked: uiSettings.showImageMarks
                 onTriggered: uiSettings.showImageMarks = checked
+            }
+            Action {
+                text: qsTr("&Dongle product marks")
+                checkable: true
+                checked: uiSettings.showProductMarks
+                onTriggered: uiSettings.showProductMarks = checked
             }
         }
     }
@@ -257,6 +264,7 @@ ApplicationWindow {
             showRegulation: bandSettings.showRegulation
             showLossBands: uiSettings.showLossBands
             showImageMarks: uiSettings.showImageMarks
+            showProductMarks: uiSettings.showProductMarks
             regRegions: bandsData.regions(bandSettings.country)
         }
     }

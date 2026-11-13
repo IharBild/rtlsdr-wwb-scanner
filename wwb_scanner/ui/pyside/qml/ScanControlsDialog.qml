@@ -18,6 +18,7 @@ Dialog {
     property alias cleanImages: cleanImagesSwitch.checked
     property alias cleanFloor: cleanFloorSwitch.checked
     property alias autoGain: autoGainSwitch.checked
+    property alias verifyPeaks: verifyPeaksSwitch.checked
     title: 'Scan settings'
 
     function stateColor(st){
@@ -264,6 +265,20 @@ Dialog {
                               'a real weak signal there looks the same and must not disappear. On: it is ' +
                               'replaced by the floor around it, on the graph and in the exported files.'
                     }
+                    Switch {
+                        id: verifyPeaksSwitch
+                        objectName: 'verifyPeaksSwitch'
+                        text: 'Check peaks with less gain'
+                    }
+                    InfoTip {
+                        text: 'Two strong carriers (mics, IEMs next to the antenna) make false peaks in ' +
+                              'the dongle itself, at 2 f1 - f2 and 2 f2 - f1, even when nothing clips. ' +
+                              'After the scan, weaker narrow peaks there are read again with 10 dB less ' +
+                              'gain: a real signal keeps its level, a product of the dongle falls by about ' +
+                              '20 dB. Products are marked "dongle product" and named in the status line; ' +
+                              'they stay in the scan and in the files. Up to 30 tiles, about 0.2 s each; ' +
+                              'nothing is read when there are fewer than two strong carriers.'
+                    }
                 }
 
                 Rectangle { Layout.fillWidth: true; height: 1; color: root.palette.mid; opacity: 0.5 }
@@ -469,6 +484,7 @@ Dialog {
         config.cleanImages = root.cleanImages;
         config.cleanFloor = root.cleanFloor;
         config.autoGain = root.autoGain;
+        config.verifyPeaks = root.verifyPeaks;
     }
 
     function reloadSettings(){
@@ -485,6 +501,7 @@ Dialog {
         root.cleanImages = config.cleanImages;
         root.cleanFloor = config.cleanFloor;
         root.autoGain = config.autoGain;
+        root.verifyPeaks = config.verifyPeaks;
         root.updateCalibrationText();
     }
 

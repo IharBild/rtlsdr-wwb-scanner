@@ -48,6 +48,7 @@ class SamplingConfig(Config):
         rtl_crop=50,
         rtl_fir_size=4,
         auto_gain=False,          # V17: re-measure clipped tiles with lower gain
+        verify_peaks=False,       # V21.2: check peaks next to strong carriers with less gain (window: on)
     )
 
 class ProcessingConfig(Config):

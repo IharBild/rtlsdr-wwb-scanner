@@ -137,6 +137,36 @@ class WideAdc(object):
         return np.fft.ifft(out) / r          # same amplitude as at the internal ADC
 
 
+class Lna(object):
+    """V21.2: third-order nonlinearity of the tuner after the gain stage
+    (LNA / mixer compression without any ADC clipping): y = x - k3 * x |x|^2.
+    Two carriers f1, f2 of amplitude A give products at 2 f1 - f2 and
+    2 f2 - f1 of k3 * A^3, i.e. k3 * A^2 relative to the carriers. As the
+    nonlinearity is after the gain, 1 dB less gain lowers a product by 3 dB
+    (2 dB relative to the carriers, after scaling back) - a real signal at
+    the antenna by exactly 1 dB (0 dB after scaling back). The air is seen
+    ``ratio`` x wider than the output band, so carriers outside the tile
+    make products inside it."""
+    def __init__(self, k3=1.0, ratio=4):
+        self.k3 = float(k3)
+        self.ratio = int(ratio)
+
+    def read(self, air, fc, fs, n, seed, gain_factor):
+        r = self.ratio
+        nw = n * r
+        saved = air.noise
+        air.noise = saved * np.sqrt(r)      # same noise density in the output band
+        try:
+            xw = air.iq_wide(fc, fs * r, nw, seed)
+        finally:
+            air.noise = saved
+        y = xw * gain_factor
+        y = y - self.k3 * y * (np.abs(y) ** 2)
+        X = np.fft.fft(y)
+        k = np.fft.fftfreq(n, 1. / n).astype(int)           # output bins -n/2 .. n/2-1
+        return np.fft.ifft(X[k % nw].copy()) / r
+
+
 class IQReplay(object):
     """Real recordings: the tile at fc gets a slice of the recording whose
     centre is nearest (the RF content is not shifted, only the noise and
@@ -175,7 +205,7 @@ class FakeRtlSdr(object):
 
     def __init__(self, serial_number=None, air=None, faults=(), quantize=True,
                  tune_delay=0.0, read_delay=0.0, fail_open=False, gain_affects=False,
-                 wide_adc=None, gain_error=None):
+                 wide_adc=None, gain_error=None, lna=None):
         if fail_open:
             raise IOError('No devices found')
         self.air = air if air is not None else Air()
@@ -184,6 +214,7 @@ class FakeRtlSdr(object):
         self.gain_affects = gain_affects      # V17: the gain scales what is received
         self.wide_adc = wide_adc              # V20: WideAdc model (None = old model)
         self.gain_error = gain_error          # V20.5: f(fc_hz, gain) -> dB the real gain differs
+        self.lna = lna                        # V21.2: Lna model (tuner intermodulation)
         self.gains_set = []
         self.read_gains = []                  # V20: gain of every read_samples call
         self.tune_delay = tune_delay
@@ -275,7 +306,11 @@ class FakeRtlSdr(object):
         # levels of the Air are for gain 29.7 dB
         g_real = self._gain + (self.gain_error(self._fc, self._gain) if self.gain_error else 0.)
         gf = 10. ** ((g_real - 29.7) / 20.) if self.gain_affects else 1.
-        if self.wide_adc is not None:
+        if self.lna is not None:
+            gl = gf if self.gain_affects else 1.
+            x = self.lna.read(self.air, self._fc, self._fs, int(num_samples), seed, gl)
+            x = x + self.air.dc
+        elif self.wide_adc is not None:
             x = self.wide_adc.read(self.air, self._fc, self._fs, int(num_samples), seed, gf)
             x = x + self.air.dc
         else:
@@ -318,7 +353,7 @@ class FakeLockLib(object):
 
 def make_config(start, end, fs=2.4e6, window=96, sweeps=40, per_sweep=2048,
                 overlap=0.65, window_type='hann', gain=33.8, auto_gain=False, clean=None,
-                ranges=None, gain_calibration=False):
+                ranges=None, gain_calibration=False, verify_peaks=False):
     conf = {
         'scan_range': [float(start), float(end)],
         'device': {'gain': gain},
@@ -327,6 +362,7 @@ def make_config(start, end, fs=2.4e6, window=96, sweeps=40, per_sweep=2048,
             'sweeps_per_scan': sweeps, 'samples_per_sweep': per_sweep,
             'window_size': window, 'window_type': window_type,
             'auto_gain': auto_gain,
+            'verify_peaks': verify_peaks,     # V21.2
         },
     }
     if clean:

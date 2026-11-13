@@ -185,6 +185,7 @@ class SpectrumGraphData(QtQuick.QQuickItem):
         self.xy_data = np.zeros(0, dtype=GRAPH_DTYPE)
         self._loss_bands = []
         self._image_marks = []
+        self._product_marks = []      # V21.2: products of the dongle (second-gain check)
         self._unmeasurable = []
         self._spur_marks = []
         self._spurs_cleaned = False
@@ -332,6 +333,8 @@ class SpectrumGraphData(QtQuick.QQuickItem):
     lossBands = Property('QVariantList', _g_loss_bands, notify=_n_marks)
     def _g_image_marks(self): return self._image_marks
     imageMarks = Property('QVariantList', _g_image_marks, notify=_n_marks)
+    def _g_product_marks(self): return self._product_marks
+    productMarks = Property('QVariantList', _g_product_marks, notify=_n_marks)
     def _g_unmeasurable(self): return self._unmeasurable
     unmeasurableBands = Property('QVariantList', _g_unmeasurable, notify=_n_marks)
     # V20.9: own spurs hidden in this scan and strong narrow carriers on the
@@ -361,12 +364,14 @@ class SpectrumGraphData(QtQuick.QQuickItem):
         lb = list(getattr(sp, 'loss_bands', None) or []) if sp is not None else []
         um = list(getattr(sp, 'unmeasurable_bands', None) or []) if sp is not None else []
         im = list(getattr(sp, 'image_marks', None) or []) if sp is not None else []
+        pm = list(getattr(sp, 'product_marks', None) or []) if sp is not None else []
         sm = self.spur_marks_of(sp)
         info = getattr(sp, 'cleanup_info', None) if sp is not None else None
         cleaned = bool(isinstance(info, dict) and info.get('spurs'))
         if lb != self._loss_bands or im != self._image_marks or um != self._unmeasurable \
-                or sm != self._spur_marks or cleaned != self._spurs_cleaned:
+                or sm != self._spur_marks or cleaned != self._spurs_cleaned or pm != self._product_marks:
             self._loss_bands, self._image_marks, self._unmeasurable = lb, im, um
+            self._product_marks = pm
             self._spur_marks, self._spurs_cleaned = sm, cleaned
             self._n_marks.emit()
 

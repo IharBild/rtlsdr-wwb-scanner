@@ -48,6 +48,7 @@ Item {
     property bool showRegulation: true
     property bool showLossBands: true     // V20.3: View > Lost sensitivity bands
     property bool showImageMarks: true    // V20.3: View > Removed image marks
+    property bool showProductMarks: true  // V21.2: View > Dongle product marks
     property alias theme: chart.theme
     property var spectrumGraphs: []
     property var activeSpectrum
@@ -373,6 +374,7 @@ Item {
                 clip: true
                 property var bands: root.showLossBands && root.activeSpectrum && root.activeSpectrum.lossBands ? root.activeSpectrum.lossBands : []
                 property var images: root.showImageMarks && root.activeSpectrum && root.activeSpectrum.imageMarks ? root.activeSpectrum.imageMarks : []
+                property var products: root.showProductMarks && root.activeSpectrum && root.activeSpectrum.productMarks ? root.activeSpectrum.productMarks : []
                 property var unmeasurable: root.showLossBands && root.activeSpectrum && root.activeSpectrum.unmeasurableBands ? root.activeSpectrum.unmeasurableBands : []
                 // V20.4: labels below the TV channel numbers
                 property real labelTop: channelLabels.visible ? channelLabels.height + 4 : 4
@@ -470,6 +472,37 @@ Item {
                                   (modelData.hidden ? ' (hidden)' : '')
                             color: '#9a7cd8'
                             opacity: 0.9
+                            font.pointSize: 7
+                            rotation: -90
+                            transformOrigin: Item.TopLeft
+                            x: 2
+                            y: parent.height - 4
+                        }
+                    }
+                }
+                // V21.2: a peak that fell with the gain like a product of the
+                // dongle (second-gain check); it stays in the scan
+                Repeater {
+                    objectName: 'productMarkRepeater'
+                    model: lossMarks.products
+                    Item {
+                        property real span: axisX.max - axisX.min
+                        visible: span > 0 && modelData.f >= axisX.min && modelData.f <= axisX.max
+                        x: span > 0 ? (modelData.f - axisX.min) / span * lossMarks.width : 0
+                        width: 1
+                        height: lossMarks.height
+                        Rectangle {
+                            width: 1
+                            height: parent.height
+                            color: '#e0569a'
+                            opacity: 0.5
+                        }
+                        Text {
+                            visible: parent.span < 100
+                            text: 'dongle product (-' + modelData.delta.toFixed(0) + ' dB at -' +
+                                  modelData.drop.toFixed(0) + ' dB gain)'
+                            color: '#e0569a'
+                            opacity: 0.95
                             font.pointSize: 7
                             rotation: -90
                             transformOrigin: Item.TopLeft

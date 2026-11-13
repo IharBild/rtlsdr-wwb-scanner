@@ -16,6 +16,7 @@ Item {
     // V20.2: drawn on the graph by Graph.qml
     property alias lossBands: graphData.lossBands
     property alias imageMarks: graphData.imageMarks
+    property alias productMarks: graphData.productMarks
     property alias unmeasurableBands: graphData.unmeasurableBands
     property alias spurMarks: graphData.spurMarks          // V20.9
     property alias spursCleaned: graphData.spursCleaned

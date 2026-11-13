@@ -301,6 +301,7 @@ def main():
     v207_checks(app, win, si)
     v210_checks(app, win)
     v211_checks(app, win, si)
+    v212_checks(app, win, si)
     v209_checks(app, win, si)
     v208_checks(app, win, controls, si, fresh, first_start)
     win.close()
@@ -998,6 +999,81 @@ def v211_checks(app, win, si):
             line.property('maximumLineCount') if line is not None else None, hasattr(scan_main.Scanner, 'request_stop')))
     except Exception as exc:
         check('U39', False, 'error: %s' % exc)
+
+
+def v212_checks(app, win, si):
+    """V21.2. U40: "Check peaks with less gain" is on at first, reaches the
+    scan settings, and calibrations never use it; U41: a product of the
+    dongle found by the check is drawn as a mark with its label."""
+    from wwb_scanner.ui.pyside.graph import SpectrumGraphData
+    sw = win.findChild(QtCore.QObject, 'verifyPeaksSwitch')
+    if sw is None or not hasattr(SpectrumGraphData, 'productMarks'):
+        check('U40', False, 'no "Check peaks with less gain" switch (V21.2 not installed)')
+        return
+    try:
+        sc = si.scanConfig
+        old = bool(sc.property('verifyPeaks'))
+        first = bool(si.build_scan_config().sampling.verify_peaks)
+        got = []
+        for on in (False, True):
+            _qml_eval(sw, 'root.open()')
+            pump(app, 0.3)
+            sw.setProperty('checked', on)
+            pump(app, 0.1)
+            _qml_eval(sw, 'root.accept()')
+            pump(app, 0.3)
+            got.append(bool(si.build_scan_config().sampling.verify_peaks) == on)
+        cal = []
+        for attr in ('calibrating', '_gain_calibrating'):
+            keep = getattr(si, attr)
+            setattr(si, attr, True)
+            try:
+                cal.append(bool(si.build_scan_config().sampling.verify_peaks))
+            finally:
+                setattr(si, attr, keep)
+        sc.setProperty('verifyPeaks', old)
+        check('U40', all(got) and first and not any(cal),
+              'on at start %s; off/on reach the scan %s; calibrations use it %s' % (first, got, cal))
+    except Exception as exc:
+        check('U40', False, 'error: %s' % exc)
+    try:
+        rep = win.findChild(QtCore.QObject, 'productMarkRepeater')
+        sgs = [g for g in win.findChildren(SpectrumGraphData) if g.spectrum is not None]
+        if rep is None or not sgs:
+            check('U41', True, 'INFO: no scan on the graph, product marks not checked (repeater %s)'
+                  % (rep is not None))
+            return
+        gr = [o for o in win.findChildren(QtCore.QObject) if o.metaObject().indexOfMethod('spurMarkModel()') >= 0][0]
+        active = _qml_eval(gr, 'activeSpectrum')
+        sg = active.findChild(SpectrumGraphData) if active is not None else None
+        if sg is None or sg.spectrum is None:
+            sg = sgs[-1]
+        sp = sg.spectrum
+        keep = getattr(sp, 'product_marks', None)
+        f = [float(v) for v in sp.sample_data['frequency']]
+        mid = round((min(f) + max(f)) / 2., 3)
+        sp.product_marks = [{'f': mid, 'delta': 19.6, 'drop': 10.9}]
+        sg._update_marks()
+        pump(app, 0.3)
+        n = int(rep.property('count'))
+        def walk(item):
+            for c in item.childItems():
+                yield c
+                for g in walk(c):
+                    yield g
+        labels = [str(o.property('text')) for o in walk(win.contentItem())
+                  if o.metaObject().indexOfProperty('text') >= 0
+                  and str(o.property('text') or '').startswith('dongle product')]
+        sp.product_marks = keep or []
+        sg._update_marks()
+        pump(app, 0.2)
+        if not bool(_qml_eval(gr, 'activeSpectrum ? true : false')):
+            check('U41', True, 'INFO: no active spectrum, product marks not checked')
+            return
+        check('U41', n == 1 and 'dongle product (-20 dB at -11 dB gain)' in labels,
+              'marks %d, labels %s' % (n, labels))
+    except Exception as exc:
+        check('U41', False, 'error: %s' % exc)
 
 
 def v209_checks(app, win, si):
