@@ -185,7 +185,10 @@ def test_file_handlers_never_open_text_without_an_encoding():
 # ----------------------------------------------------------------------- A3
 
 def test_factory_settings_are_the_tested_configuration():
-    pytest.importorskip('PySide2')
+    try:
+        import wwb_scanner.ui.pyside.qt  # noqa: F401  (V21.4: PySide2 or PySide6)
+    except ImportError:
+        pytest.skip('no Qt binding (PySide2 or PySide6)')
     out = _isolated("""
         from wwb_scanner.ui.pyside.scanner import FACTORY, FACTORY_OLD, ScanConfigData
         from wwb_scanner.scanner.main import get_freq_resolution
@@ -233,7 +236,7 @@ def _isolated(code, timeout=180):
         import sys, types, os, tempfile
         os.environ['HOME'] = os.environ['USERPROFILE'] = tempfile.mkdtemp(prefix='v208_')
         try:
-            import PySide2
+            import wwb_scanner.ui.pyside.qt  # V21.4: PySide2 or PySide6
         except ImportError:
             print('NO_PYSIDE2'); raise SystemExit(0)
         try:
@@ -254,7 +257,7 @@ def _isolated(code, timeout=180):
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
     out = r.stdout.decode('utf-8', 'replace')
     if 'NO_PYSIDE2' in out:
-        pytest.skip('PySide2 not installed')
+        pytest.skip('no Qt binding (PySide2 or PySide6)')
     assert r.returncode == 0 and 'ALL_OK' in out, 'exit code %s\n%s' % (r.returncode, out[-3000:])
     return out
 
@@ -262,8 +265,8 @@ def _isolated(code, timeout=180):
 WINDOW = """
     import logging, time, threading
     import numpy as np
-    from PySide2 import QtCore
-    from PySide2.QtWidgets import QApplication
+    from wwb_scanner.ui.pyside.qt import QtCore
+    from wwb_scanner.ui.pyside.qt import QApplication
     import sim
     from wwb_scanner.scanner import sdrwrapper, sample_processing
     from wwb_scanner import scan_dll

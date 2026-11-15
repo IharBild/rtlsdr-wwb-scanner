@@ -10,7 +10,7 @@ Canvas {
 
     signal setData(point pos, point value)
 
-    onSetData: {
+    onSetData: function(pos, value) {
         root.dataPos = pos;
         root.dataValue = value;
         root.requestPaint();

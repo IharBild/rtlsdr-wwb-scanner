@@ -109,7 +109,7 @@ Item {
 
     ViewXYScale {
         id: dataExtents
-        onValuesChanged: {
+        onValuesChanged: function(min, max) {
             if (root.isDefault){
                 viewScale.setValueExtents(min, max);
             }
@@ -118,7 +118,7 @@ Item {
 
     ViewXYScale {
         id: viewScale
-        onValuesChanged: {
+        onValuesChanged: function(min, max) {
             root.updateAxes();
         }
         onValueSizeChanged: {

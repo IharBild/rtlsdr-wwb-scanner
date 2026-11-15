@@ -1,6 +1,6 @@
 """QA plan group U: run the real Qt window offscreen with the dongle simulator.
 
-Run with Python 3.8 + PySide2 5.15:
+Run with PySide2 5.15 (Python 3.7-3.10) or PySide6 (Python 3.10+, V21.4):
     QT_QPA_PLATFORM=offscreen python tools/qa_ui.py [start end]
 Prints one line per check; exit code 1 if a check failed.
 """
@@ -63,8 +63,8 @@ if not REAL:
     fake_mod.RtlSdr = UIFakeRtlSdr
     sys.modules['rtlsdr'] = fake_mod
 
-from PySide2 import QtCore, QtQml           # noqa: E402
-from PySide2.QtWidgets import QApplication  # noqa: E402
+from wwb_scanner.ui.pyside import qt       # noqa: E402  (V21.4: PySide2 or PySide6)
+from wwb_scanner.ui.pyside.qt import QtCore, QtQml, QApplication  # noqa: E402
 
 from wwb_scanner.ui.pyside import main as ui_main   # noqa: E402
 from wwb_scanner.ui.pyside import scanner as ui_scanner, graph as ui_graph  # noqa: E402
@@ -85,9 +85,10 @@ def check(name, ok, detail):
 def handler(mode, context, message):
     if 'Implicitly defined onFoo' in message or 'QFontDatabase' in message:
         return      # QFontDatabase: no font folder for the offscreen platform on Windows (harmless)
-    if mode == QtCore.QtFatalMsg:
+    level = qt.msg_level_name(mode)
+    if level == 'FATAL':
         sys.stderr.write('QT FATAL: %s\n' % message)
-    if mode in (QtCore.QtWarningMsg, QtCore.QtCriticalMsg, QtCore.QtFatalMsg):
+    if level in ('WARNING', 'CRITICAL', 'FATAL'):
         QML_WARNINGS.append(message)
 
 
@@ -114,21 +115,14 @@ def has_method(sig):
 
 
 def portable_qml_copy():
-    """Copy of the QML folder where the file dialogs keep their Settings in a
-    property instead of a child Item. On Linux (no native dialog) Qt's
-    QML FileDialog has no default property and main.qml does not load;
-    on Windows the native dialog accepts it. Finding for the Linux/macOS port."""
-    import shutil, re
+    """Copy of the QML folder (the window is tested from a copy).
+    V21.4: the file dialogs keep their Settings in a property in the real
+    QML now (Qt 5 FileDialog on Linux has no default property; Qt 6), so the
+    copy is no longer rewritten."""
+    import shutil
     from pathlib import Path
     dst = Path(TMP) / 'qml'
     shutil.copytree(str(ui_main.QML_PATH), str(dst))
-    for name in ('ImportDialog.qml', 'ExportDialog.qml'):
-        p = dst / name
-        s = p.read_text()
-        s = re.sub(r'\n    Item \{\n        Settings \{(.*?)\n        \}\n    \}',
-                   lambda m: '\n    property Settings folderSettings: Settings {' + m.group(1).replace('\n    ', '\n') + '\n    }',
-                   s, flags=re.S)
-        p.write_text(s)
     return dst
 
 
@@ -145,6 +139,8 @@ def main():
     engine = QtQml.QQmlApplicationEngine()
     engine.setBaseUrl(str(qml_dir))
     engine.addImportPath(str(qml_dir))
+    engine.addImportPath(qt.compat_qml_dir(qml_dir))      # V21.4: WwbCompat for Qt 5 / Qt 6
+    print('Qt: %s' % qt.version_text(), flush=True)
     ui_main.register_qml_types()
     t0 = time.time()
     engine.load(str(qml_dir / 'main.qml'))
@@ -211,14 +207,15 @@ def main():
     check('U3', gaps.max() < 5.0, 'longest GUI freeze %.2f s (99th pct %.3f s), >0.5 s freezes: %d'
           % (gaps.max(), np.percentile(gaps, 99), (gaps > 0.5).sum()))
     pump(app, 2.0)
-    from PySide2.QtCharts import QtCharts
+    qt.load_charts()
     gds = find(win, lambda o: isinstance(o, ui_graph.SpectrumGraphData))
     counts = [g._series.count() for g in gds if getattr(g, '_series', None) is not None and hasattr(g._series, 'count')]
     expect = ui_graph.decimate_max(np.zeros(npts, ui_graph.GRAPH_DTYPE), ui_graph.group_size_for((end - start) / 0.025)).size
     check('U7', bool(counts) and max(counts) == expect, 'chart series points %s (expected %d)' % (counts, expect))
     # U8: no series animation (with replace() it redrew the line from the left on every update)
     charts = find(win, lambda o: o.metaObject().indexOfProperty('animationOptions') >= 0)
-    anim = [int(c.property('animationOptions')) for c in charts]
+    # V21.4: through QML - PySide6 has no converter for the enum property
+    anim = [int(_qml_eval(c, 'animationOptions + 0')) for c in charts]
     check('U8', bool(anim) and not any(anim), 'chart animationOptions %s (0 = none)' % anim)
     shot = os.environ.get('QA_SHOT')
     if shot:
@@ -737,12 +734,9 @@ def v205_checks(app, win, si):
 
 
 def _qml_eval(obj, js):
-    from PySide2 import QtQml
     ctx = QtQml.QQmlEngine.contextForObject(obj)
     expr = QtQml.QQmlExpression(ctx, obj, js)
-    val = expr.evaluate()
-    if isinstance(val, tuple):          # PySide2: (value, valueIsUndefined)
-        val = val[0]
+    val = qt.js_value(expr.evaluate())   # PySide2: (value, valueIsUndefined)
     if expr.hasError():
         raise RuntimeError(expr.error().toString())
     return val

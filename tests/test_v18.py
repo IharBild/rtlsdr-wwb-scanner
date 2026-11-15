@@ -188,7 +188,10 @@ def test_M6_bad_ranges_fall_back_to_one_range(monkeypatch, tmpdir):
 
 
 def test_G1_graph_shows_gaps():
-    pytest.importorskip('PySide2')
+    try:
+        import wwb_scanner.ui.pyside.qt  # noqa: F401  (V21.4: PySide2 or PySide6)
+    except ImportError:
+        pytest.skip('no Qt binding (PySide2 or PySide6)')
     from wwb_scanner.ui.pyside import graph
     x = np.r_[np.arange(480, 500, 0.025), np.arange(530, 545, 0.025)]
     pts = np.zeros(x.size, dtype=graph.GRAPH_DTYPE)
@@ -203,7 +206,10 @@ def test_G1_graph_shows_gaps():
 
 
 def test_U1_window_tables():
-    pytest.importorskip('PySide2')
+    try:
+        import wwb_scanner.ui.pyside.qt  # noqa: F401  (V21.4: PySide2 or PySide6)
+    except ImportError:
+        pytest.skip('no Qt binding (PySide2 or PySide6)')
     from wwb_scanner.ui.pyside import bands_qt
     d = bands_qt.BandsData()
     assert len(d.countries()) == len(B.COUNTRIES)

@@ -1,8 +1,7 @@
 """V18: the Bands tables (wwb_scanner.bands) for the QML window."""
 import json
 
-from PySide2 import QtCore, QtQml
-from PySide2.QtCore import Slot
+from wwb_scanner.ui.pyside.qt import QtCore, QtQml, Slot
 
 from wwb_scanner import bands
 

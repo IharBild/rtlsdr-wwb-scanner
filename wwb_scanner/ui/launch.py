@@ -1,36 +1,36 @@
 """Entry point of the program window (wwb_scanner-ui).
 
-V21.3: on Python 3.11+ PySide2 does not exist, and the window waits for the
-PySide6 port. Instead of a traceback the user gets a short explanation of
-what works and what to do.
+V21.3: a clear message instead of a traceback when there is no Qt binding.
+V21.4: the window runs on PySide2 (Python 3.7-3.10) or PySide6 (Python 3.10+).
 """
 import sys
 
 NO_QT = (
-    'The program window needs PySide2, which is not installed for this Python '
-    '(%(py)s).\n'
-    'PySide2 exists only for Python 3.7-3.10; the window for Python 3.11+ '
-    '(PySide6) is the next version.\n'
-    'For the window now: use your Python 3.7-3.10 environment.\n'
+    'The program window needs PySide2 (Python 3.7-3.10) or PySide6 (Python 3.10+);\n'
+    'neither works for this Python (%(py)s): %(why)s\n'
+    'Install it into this environment:  python -m pip install "PySide6>=6.8"\n'
+    '(or reinstall the scanner: pip picks the right one for the Python version)\n'
     '\n'
-    'Окно программы требует PySide2, а для этого Python (%(py)s) его нет.\n'
-    'PySide2 есть только для Python 3.7-3.10; окно для Python 3.11+ '
-    '(PySide6) будет в следующей версии.\n'
-    'Чтобы работать с окном сейчас, запустите его из окружения Python 3.7-3.10.\n'
+    'Окну программы нужен PySide2 (Python 3.7-3.10) или PySide6 (Python 3.10+);\n'
+    'для этого Python (%(py)s) нет ни того, ни другого.\n'
+    'Установите в это окружение:  python -m pip install "PySide6>=6.8"\n'
+    '(или переустановите программу: pip сам выберет нужный под версию Python)\n'
 )
 
 
-def pyside_missing():
+def qt_problem():
+    """None when a Qt binding loads, else the reason (text)."""
     try:
-        __import__('PySide2')
-    except ImportError:
-        return True
-    return False
+        from wwb_scanner.ui.pyside import qt  # noqa: F401
+    except ImportError as exc:
+        return str(exc)
+    return None
 
 
 def run():
-    if pyside_missing():
-        sys.stderr.write(NO_QT % {'py': '%d.%d' % sys.version_info[:2]})
+    why = qt_problem()
+    if why is not None:
+        sys.stderr.write(NO_QT % {'py': '%d.%d' % sys.version_info[:2], 'why': why})
         return 1
     from wwb_scanner.ui.pyside import main
     return main.run()

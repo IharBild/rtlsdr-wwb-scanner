@@ -3,8 +3,7 @@ import time
 
 import numpy as np
 
-from PySide2 import QtCore, QtQml, QtQuick
-from PySide2.QtCore import Signal, Property, Slot
+from wwb_scanner.ui.pyside.qt import QtCore, QtQml, QtQuick, Signal, Property, Slot
 import logging
 logger = logging.getLogger(__name__)
 

@@ -10,7 +10,7 @@ company in Poland and for sound engineers across Europe. Most of the code in thi
 written with Claude (Anthropic); every release is checked on a real V4 dongle by the
 maintainer.
 
-Current version: **V21.3.1** in the branch `v4-fixes` (installed by the command below). Last tagged
+Current version: **V21.4** in the branch `v4-fixes` (installed by the command below). Last tagged
 release: [v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v18.1)
 (branch `v4-fixes`). The `master` branch is the original upstream code and is not used here.
 
@@ -169,6 +169,20 @@ release: [v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v18
   - On the V4 with V21.3 + v7 on Python 3.7: full scan 175 s (v6: 177 s), unplugging and
     plugging back during a scan: the scan goes on and loses nothing. On Python 3.13
     (pyrtlsdr 0.5): a 470-480 MHz scan with export works.
+- **V21.4** - **The window on PySide6 (Qt 6).** On Python 3.11-3.15 pip now installs
+  PySide6 (only PySide6-Essentials and PySide6-Addons, about 125 MB for Windows; the
+  `PySide6` package would also pull WebEngine) and the window works there. Python 3.7-3.10
+  keep PySide2 5.15 as before.
+  - One code for both: `wwb_scanner/ui/pyside/qt.py` picks PySide2 or PySide6
+    (`WWB_QT=pyside6` prefers PySide6 when both are installed).
+  - File and colour dialogs and the saved settings differ between Qt 5 and Qt 6; the QML
+    uses a small module `WwbCompat` with one version per Qt (`qml/compat/qt5|qt6`).
+  - Signal handlers name their parameters (Qt 6 warned about every one).
+  - The export/import dialogs keep their folder setting in a property: the Qt 5 dialog on
+    Linux did not load main.qml before (the test tool had rewritten a copy for that).
+  - Checked: the window check U1-U41 passes on PySide2 5.15 (Python 3.8) and PySide6 6.12
+    (Python 3.13, also from a clean install with only Essentials + Addons); all tests on
+    both. **Not yet on Windows with the dongle.**
 - **V21.1** (the small items left from the audit and from the tests on the PC):
   - **Stop** only asks the scan to end: the window no longer freezes while a USB read
     hangs (11 s measured). A stopped scan is finished like any other - cropped to the
@@ -214,7 +228,7 @@ release: [v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v18
 - **Safety and reliability.** Scan history stored without pickle, XML files with a DTD are
   refused, every uncaught error is shown in the window and written to the log, and the
   window never stays stuck in "scanning".
-- **Tests.** A dongle simulator and about 600 automatic tests (no dongle needed), a window
+- **Tests.** A dongle simulator and about 750 automatic tests (no dongle needed), a window
   check and a test kit for a PC with a real dongle (`qa-kit` in the releases).
 
 ## Tested with
@@ -224,24 +238,27 @@ release: [v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v18
 | Hardware | RTL-SDR Blog V4 (R828D tuner) |
 | System | Windows 11, Python 3.7.8 64-bit |
 | Libraries | numpy 1.21.6, scipy 1.7.3, pyrtlsdr 0.3.0, PySide2 5.15.2.1, tinydb 4.8.0 |
-| Driver | `rtlsdr-scanner-v6` (checked on the V4 13.11.2026); v7 not yet on the V4 |
-| Automatic tests | GitHub Actions: Linux and Windows, Python 3.8; Linux, Python 3.10 and 3.13; simulator instead of the dongle |
+| Driver | `rtlsdr-scanner-v7` (checked on the V4 15.11.2026) |
+| Also on the V4 | Windows 11, Python 3.13.17: numpy 2.5.4, scipy 1.18.1, pyrtlsdr 0.5.1 (core; the PySide6 window since V21.4 not yet) |
+| Automatic tests | GitHub Actions: Linux and Windows, Python 3.8 and 3.13; Linux, Python 3.10; simulator instead of the dongle |
 
-The window needs PySide2 5.15, which has no packages for Python 3.11 or newer: for the
-window use Python 3.7–3.10, 64-bit. On Python 3.11–3.14 only the core works until the
-PySide6 port. pyrtlsdr 0.4 and newer (Python 3.10+) need the `rtlsdr-scanner-v7` driver.
+The window runs on PySide2 5.15 (Python 3.7–3.10) or PySide6 (Python 3.11–3.15, V21.4+);
+pip picks the right one. pyrtlsdr 0.4 and newer (Python 3.10+) need the
+`rtlsdr-scanner-v7` driver.
 
 ## Installation (Windows)
 
 1. **Dongle driver.** Plug in the V4 and install the WinUSB driver with
    [Zadig](https://zadig.akeo.ie/) (standard RTL-SDR step).
-2. **Python.** Install Python 3.7–3.10, 64-bit (the window does not work on 3.11+ yet),
-   then create a virtual environment:
+2. **Python.** Install Python 3.13, 64-bit (or any of 3.7–3.15), then create a virtual
+   environment:
 
    ```bat
-   py -3.10 -m venv C:\wwb-scanner
+   py -3.13 -m venv C:\wwb-scanner
    C:\wwb-scanner\Scripts\activate
    ```
+
+   The last 3.13 with a Windows installer is 3.13.17 (later 3.13 releases are source only).
 
 3. **The scanner** from the source archive of this branch (no git needed):
 
@@ -251,7 +268,7 @@ PySide6 port. pyrtlsdr 0.4 and newer (Python 3.10+) need the `rtlsdr-scanner-v7`
      https://github.com/IharBild/rtlsdr-wwb-scanner/archive/refs/heads/v4-fixes.zip
    ```
 
-   pip picks pyrtlsdr, numpy and PySide2 to match the Python version (V21.3+).
+   pip picks pyrtlsdr, numpy and PySide2 / PySide6 to match the Python version (V21.4+).
 
    For a fixed release use `.../archive/refs/tags/v18.1.zip` instead.
 
@@ -315,7 +332,7 @@ Sources: CEPT ERC/REC 25-10 Annex 4 (EFIS, November 2026), BNetzA general alloca
 No dongle is needed:
 
 ```bash
-python -m pytest tests          # about 600 tests, dongle simulator
+python -m pytest tests          # about 750 tests, dongle simulator
 python tools/qa_ui.py           # opens the window offscreen, scans with the simulator
 python tools/qa_sandbox.py      # all test types, report in Markdown
 ```
@@ -359,5 +376,9 @@ Windows: быстрее, без собственных помех донгла �
   install_dll.py больше не трогает DLL другого Python, а ставит v7 в это окружение.
   v7 проверен на V4 15.11.2026: скорость как у v6, выдёргивание донгла посреди скана —
   скан продолжается без потерь.
+- V21.4: окно работает и на PySide6 (Qt 6): на Python 3.11–3.15 pip ставит PySide6
+  (только Essentials + Addons, около 125 МБ), на 3.7–3.10 остаётся PySide2. Один код для
+  обоих; диалоги файлов и цвета и сохранённые настройки — через модуль WwbCompat.
+  Проверено на имитаторе (U1–U41 на обоих Qt); на Windows с донглом ещё нет.
 
 [osmosdr-wiki]: https://osmocom.org/projects/rtl-sdr/wiki

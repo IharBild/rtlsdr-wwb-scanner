@@ -2,8 +2,7 @@ import time
 import threading
 import pathlib
 
-from PySide2 import QtCore, QtQml
-from PySide2.QtCore import QObject, Property, Signal
+from wwb_scanner.ui.pyside.qt import QtCore, QtQml, QObject, Property, Signal
 import logging
 logger = logging.getLogger(__name__)
 
@@ -61,16 +60,12 @@ class IntervalTimer(QObject):
             self._stop()
             self._start()
         self._interval_ms_changed.emit()
-    @Signal
-    def _interval_ms_changed(self):
-        pass
+    _interval_ms_changed = Signal()     # V21.4: @Signal decorator - PySide2 only
     interval_ms = Property(float, _get_interval_ms, _set_interval_ms, notify=_interval_ms_changed)
 
     def _get_active(self):
         return self._active
-    @Signal
-    def _on_active_changed(self):
-        pass
+    _on_active_changed = Signal()
     active = Property(bool, _get_active)
 
     def _get_working(self):

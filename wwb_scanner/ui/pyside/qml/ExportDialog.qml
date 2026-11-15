@@ -1,13 +1,11 @@
 import QtQuick 2.0
-import QtQuick.Dialogs 1.0
-import Qt.labs.settings 1.0
+import WwbCompat 1.0
 
-FileDialog {
+// V21.4: WwbFileDialog = the same dialog on Qt 5 and Qt 6 (qml/compat)
+WwbFileDialog {
     id: root
     title: "Please choose a file"
-    folder: shortcuts.home
-    selectMultiple: false
-    selectExisting: false
+    saveMode: true
     // The extension is added from the chosen filter (withExtension below),
     // so no defaultSuffix here.
     nameFilters: [
@@ -19,11 +17,11 @@ FileDialog {
     ]
     property var graphData
 
-    Item {
-        Settings {
-            category: 'Folder Preferences'
-            property alias exportFolder: root.folder
-        }
+    // V21.4: a property, not a child item - the wrapped Qt 5 FileDialog has no
+    // default property for children
+    property var folderSettings: WwbSettings {
+        category: 'Folder Preferences'
+        property alias exportFolder: root.folder
     }
 
     // Name typed without our extension -> add the one of the chosen format
@@ -73,7 +71,7 @@ FileDialog {
     }
 
     onAccepted: {
-        doExport(root.fileUrl, root.selectedNameFilter);
+        doExport(root.fileUrl, root.filterText);
         root.close();
     }
 

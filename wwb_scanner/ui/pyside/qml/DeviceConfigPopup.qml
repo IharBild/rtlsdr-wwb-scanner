@@ -1,7 +1,7 @@
 import QtQuick 2.0
 import QtQuick.Layouts 1.11
 import QtQuick.Controls 2.12
-import Qt.labs.settings 1.0
+import WwbCompat 1.0
 import DeviceConfig 1.0
 
 Dialog {
@@ -26,7 +26,7 @@ Dialog {
         }
     }
 
-    Settings {
+    WwbSettings {
         category: 'Device Config'
         property alias deviceIndex: root.deviceIndex
         property alias deviceSerial: root.deviceSerial

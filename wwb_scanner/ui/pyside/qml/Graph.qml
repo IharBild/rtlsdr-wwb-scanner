@@ -1,7 +1,7 @@
 import QtQuick 2.0
 import QtQuick.Controls 2.12
 import QtQuick.Layouts 1.11
-import Qt.labs.settings 1.0
+import WwbCompat 1.0
 import QtCharts 2.13
 import GraphUtils 1.0
 
@@ -63,13 +63,13 @@ Item {
         root.activeSeries = spectrum.series;
     }
 
-    onNewLiveScan: {
+    onNewLiveScan: function(scanner) {
         var scannerArg = scanner;
         var spectrumGraph
         addModel({'scanner':scannerArg, 'isLive':true});
     }
 
-    onSeriesClicked: {
+    onSeriesClicked: function(index) {
         var spectrumGraph = root.spectrumGraphs[index];
         if (spectrumGraph)
             setActiveSpectrum(spectrumGraph);
@@ -134,7 +134,7 @@ Item {
         viewController.setDataExtents(minValue, maxValue);
     }
 
-    onLoadFromFile: {
+    onLoadFromFile: function(fileName) {
         var spectrum = addModel({}, function(obj){
             obj.load_from_file(fileName);
         });
@@ -575,7 +575,7 @@ Item {
                 property point dataPoint: Qt.point(0, 0)
                 property point dataPos: Qt.point(0, 0)
 
-                onPositionChanged: {
+                onPositionChanged: function(mouse) {
                     mouse.accepted = false;
                     if (!mouseArea.containsMouse){
                         return;
@@ -584,9 +584,9 @@ Item {
                     timedMouse.setPoint(pt);
                 }
 
-                onClicked: { mouse.accepted = false }
-                onPressed: { mouse.accepted = false }
-                onReleased: { mouse.accepted = false }
+                onClicked: function(mouse) { mouse.accepted = false }
+                onPressed: function(mouse) { mouse.accepted = false }
+                onReleased: function(mouse) { mouse.accepted = false }
 
                 Timer {
                     id: timedMouse
@@ -631,10 +631,10 @@ Item {
             Layout.topMargin: 5
             activeSpectrum: root.activeSpectrum
 
-            onSelected: {
+            onSelected: function(spectrum, state) {
                 setActiveSpectrum(spectrum);
             }
-            onRemoveRequested: root.removeSpectrum(spectrum)
+            onRemoveRequested: function(spectrum) { root.removeSpectrum(spectrum) }
         }
     }
 }

@@ -184,8 +184,9 @@ def smoke(out):
 
 
 def have_pyside():
+    """V21.4: the window runs on PySide2 or PySide6 (wwb_scanner.ui.pyside.qt)."""
     try:
-        import PySide2  # noqa: F401
+        from wwb_scanner.ui.pyside import qt  # noqa: F401
         return True
     except Exception:
         return False
@@ -193,7 +194,7 @@ def have_pyside():
 
 def smoke_window(out):
     if not have_pyside():
-        R.add('SM5', 'SMOKE', 'SKIP', 'окно программы загружается', 'PySide2 нет')
+        R.add('SM5', 'SMOKE', 'SKIP', 'окно программы загружается', 'нет PySide2 / PySide6')
         return
     env = sub_env()
     env['QA_UI_ONLY_U1'] = '1'
@@ -263,7 +264,7 @@ def sanity(args):
     R.add('SA5', 'SANITY', 'PASS' if lib_off and ui_on else 'WARN', 'настройки по умолчанию V17',
           'в библиотеке очистка/автоусиление выключены: %s; в окне включены: %s' % (lib_off, ui_on))
     deps = []
-    for mod in ('numpy', 'scipy', 'tinydb', 'PySide2', 'jsonfactory'):
+    for mod in ('numpy', 'scipy', 'tinydb', 'PySide2', 'PySide6', 'jsonfactory'):
         try:
             m = __import__(mod)
             deps.append('%s %s' % (mod, getattr(m, '__version__', '?')))
@@ -327,7 +328,7 @@ def run_pytest(out, args, cov_src):
 
 def run_ui(out, cov_src):
     if not have_pyside():
-        R.add('U', 'FUNCTIONAL', 'SKIP', 'окно программы (U1-U28)', 'PySide2 нет')
+        R.add('U', 'FUNCTIONAL', 'SKIP', 'окно программы (U1-U28)', 'нет PySide2 / PySide6')
         return None
     env = sub_env()
     env.setdefault('QT_QPA_PLATFORM', 'offscreen')

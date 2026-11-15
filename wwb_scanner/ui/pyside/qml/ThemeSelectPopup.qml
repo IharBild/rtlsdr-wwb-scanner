@@ -1,7 +1,7 @@
 import QtQuick 2.0
 import QtQuick.Layouts 1.11
 import QtQuick.Controls 2.12
-import Qt.labs.settings 1.0
+import WwbCompat 1.0
 import QtCharts 2.13
 
 
@@ -15,7 +15,7 @@ Dialog {
     property alias tvPlan: settings.tvPlan
     property alias showSpurs: settings.showSpurs
 
-    Settings {
+    WwbSettings {
         id: settings
         category: 'User Interface'
         // new key in V15: 100 = Studio (flat, matched to the window)
@@ -38,7 +38,7 @@ Dialog {
         model: ['Europe (8 MHz, ch 21-69)', 'USA (6 MHz, ch 14-83)', 'Off']
         property var values: ['EU', 'US', 'off']
         currentIndex: Math.max(0, values.indexOf(root.tvPlan))
-        onActivated: root.tvPlan = values[index]
+        onActivated: function(index) { root.tvPlan = values[index] }
     }
     BoxCheck {
         text: "Mark the dongle's own spurs (k x 14.4 MHz)"

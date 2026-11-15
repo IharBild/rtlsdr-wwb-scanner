@@ -89,7 +89,7 @@ Dialog {
                 Layout.preferredWidth: 230
                 model: root.countries
                 textRole: 'text'
-                onActivated: {
+                onActivated: function(index) {
                     root.settings.country = root.countries[index].code;
                     root.fill();
                 }

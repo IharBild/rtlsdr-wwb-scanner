@@ -112,7 +112,7 @@ def _isolated(code):
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=120)
     out = r.stdout.decode('utf-8', 'replace')
     if 'NO_PYSIDE2' in out:
-        pytest.skip('PySide2 not installed')
+        pytest.skip('no Qt binding (PySide2 or PySide6)')
     assert r.returncode == 0 and 'ALL_OK' in out, out[-2000:]
 
 
@@ -120,7 +120,7 @@ def test_A1_4_window_leaves_scanning_state_even_after_an_error():
     _isolated("""
         import types
         try:
-            import PySide2
+            import wwb_scanner.ui.pyside.qt  # V21.4: PySide2 or PySide6
         except ImportError:
             print('NO_PYSIDE2'); raise SystemExit(0)
         from wwb_scanner.ui.pyside.scanner import ScannerInterface
@@ -141,7 +141,7 @@ def test_A1_4_window_leaves_scanning_state_even_after_an_error():
 def test_A1_6_device_list_survives_pulled_or_busy_dongle():
     _isolated("""
         try:
-            import PySide2
+            import wwb_scanner.ui.pyside.qt  # V21.4: PySide2 or PySide6
         except ImportError:
             print('NO_PYSIDE2'); raise SystemExit(0)
         from wwb_scanner.ui.pyside import device_config as DC
@@ -263,7 +263,7 @@ def test_A_window_errors_go_to_the_status_line():
     _isolated("""
         import logging, sys
         try:
-            import PySide2
+            import wwb_scanner.ui.pyside.qt  # V21.4: PySide2 or PySide6
         except ImportError:
             print('NO_PYSIDE2'); raise SystemExit(0)
         from wwb_scanner.ui.pyside import main as M

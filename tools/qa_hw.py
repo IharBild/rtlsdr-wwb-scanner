@@ -133,7 +133,7 @@ def check_environment(args):
         'numpy': numpy.__version__,
         'scipy': scipy.__version__,
     }
-    for mod in ('rtlsdr', 'PySide2', 'tinydb', 'pytest'):
+    for mod in ('rtlsdr', 'PySide2', 'PySide6', 'tinydb', 'pytest'):
         try:
             m = __import__(mod)
             info[mod] = getattr(m, '__version__', 'есть')

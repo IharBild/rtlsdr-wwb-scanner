@@ -114,7 +114,7 @@ def test_version():
     p = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'setup.cfg')
     if not os.path.isfile(p):
         pytest.skip('repository layout only')
-    assert re.search(r'^version = 21\.3\.1$', open(p).read(), re.M)
+    assert re.search(r'^version = 21\.(3\.[1-9]|[4-9]\.\d+)$', open(p).read(), re.M)
 
 
 def test_qa_hw_e2_accepts_pyrtlsdr_04_with_v7(monkeypatch):

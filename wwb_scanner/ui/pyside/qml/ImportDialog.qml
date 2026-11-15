@@ -1,12 +1,10 @@
 import QtQuick 2.0
-import QtQuick.Dialogs 1.0
-import Qt.labs.settings 1.0
+import WwbCompat 1.0
 
-FileDialog {
+// V21.4: WwbFileDialog = the same dialog on Qt 5 and Qt 6 (qml/compat)
+WwbFileDialog {
     id: root
     title: "Please choose a file"
-    folder: shortcuts.home
-    selectMultiple: false
     nameFilters: [
         'Scan Files (*.csv *.sdb2 *.sdb3)',
         'Sennheiser WSM scan (*.csv)',
@@ -14,11 +12,11 @@ FileDialog {
     ]
     signal importFile(var fileName)
 
-    Item {
-        Settings {
-            category: 'Folder Preferences'
-            property alias importFolder: root.folder
-        }
+    // V21.4: a property, not a child item - the wrapped Qt 5 FileDialog has no
+    // default property for children
+    property var folderSettings: WwbSettings {
+        category: 'Folder Preferences'
+        property alias importFolder: root.folder
     }
 
     onAccepted: {

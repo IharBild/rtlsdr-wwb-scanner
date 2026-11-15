@@ -1,7 +1,7 @@
 import QtQuick 2.0
 import QtQuick.Layouts 1.11
 import QtQuick.Controls 2.12
-import Qt.labs.settings 1.0
+import WwbCompat 1.0
 import QtCharts 2.13
 import GraphUtils 1.0
 import ScanTools 1.0
@@ -14,7 +14,7 @@ ApplicationWindow {
     width: 800
     height: 600
 
-    Settings {
+    WwbSettings {
         property alias x: window.x
         property alias y: window.y
         property alias width: window.width
@@ -23,7 +23,7 @@ ApplicationWindow {
 
     // Window theme (View > Theme). Dark: flat, low-contrast greys and one
     // accent colour, in the spirit of Smaart / Open Sound Meter.
-    Settings {
+    WwbSettings {
         id: uiSettings
         category: 'User Interface'
         property bool darkWindow: true
@@ -141,7 +141,7 @@ ApplicationWindow {
             config: scanConfig
             progress: scanner.progress
             onOpenBands: bandsDialog.open()
-            onScannerState: {
+            onScannerState: function(state) {
                 if (state) {
                     // V20.8: a dongle plugged in after the program started
                     if (!device_config.device)
@@ -271,7 +271,7 @@ ApplicationWindow {
 
     ImportDialog {
         id: importDialog
-        onImportFile: {
+        onImportFile: function(fileName) {
             chartWrapper.loadFromFile(fileName);
         }
     }
@@ -288,7 +288,7 @@ ApplicationWindow {
         id: scanControlsDialog
         scanner: scanner
         config: scanConfig
-        onGainSuggested: device_config.setGain(gain)     // V20.6
+        onGainSuggested: function(gain) { device_config.setGain(gain) }     // V20.6
     }
 
     ThemeSelectPopup {
@@ -302,7 +302,7 @@ ApplicationWindow {
     }
 
     // V18: systems and country rules
-    Settings {
+    WwbSettings {
         id: bandSettings
         category: 'Bands'
         property string country: 'PL'
@@ -376,7 +376,7 @@ ApplicationWindow {
     // is tested with, and 30-37 dB less sensitive in UHF. Settings that are
     // still exactly those six values are replaced once by the tested ones;
     // anything the user has changed is left alone.
-    Settings {
+    WwbSettings {
         id: defaultsSettings
         category: 'Defaults'
         property int version: 0

@@ -7,9 +7,8 @@ import sys
 
 import numpy as np
 
-from PySide2 import QtCore, QtQml, QtQuick, QtGui
-from PySide2.QtCore import Signal, Property, Slot
-from PySide2.QtCharts import QtCharts
+from wwb_scanner.ui.pyside.qt import QtCore, QtQml, QtQuick, QtGui, Signal, Property, Slot, load_charts
+QtCharts = load_charts()     # chart types loaded before QML uses them
 
 
 from wwb_scanner.file_handlers import BaseImporter

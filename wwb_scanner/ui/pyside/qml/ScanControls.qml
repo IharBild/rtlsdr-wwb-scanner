@@ -1,7 +1,7 @@
 import QtQuick 2.0
 import QtQuick.Layouts 1.11
 import QtQuick.Controls 2.12
-import Qt.labs.settings 1.0
+import WwbCompat 1.0
 
 RowLayout {
     id: root
@@ -44,7 +44,7 @@ RowLayout {
         name: 'Start Freq'
         Layout.leftMargin: 6
         labelFontSize: 10
-        onSubmit: {
+        onSubmit: function(value) {
             root.config.scanRanges = '';
             root.config.startFreq = startFreqInput.value;
         }
@@ -53,14 +53,14 @@ RowLayout {
         id: endFreqInput
         name: 'End Freq'
         labelFontSize: 10
-        onSubmit: {
+        onSubmit: function(value) {
             root.config.scanRanges = '';
             root.config.endFreq = endFreqInput.value;
         }
     }
 
     // V16: range presets (built-in + your own, remembered between runs)
-    Settings {
+    WwbSettings {
         id: presetSettings
         category: 'Scan Presets'
         property string custom: '[]'
@@ -97,7 +97,7 @@ RowLayout {
         model: presetModel
         textRole: 'text'
         enabled: !root.scanRunning
-        onActivated: {
+        onActivated: function(index) {
             var it = presetModel.get(index);
             if (it.hi > it.lo && root.config) {
                 root.config.scanRanges = '';

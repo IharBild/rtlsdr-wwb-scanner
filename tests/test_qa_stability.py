@@ -204,7 +204,10 @@ def test_S8_S10_many_scans(monkeypatch, tmpdir):
         threads.append(threading.active_count())
     print('S8 %d scans 470-490: time first %.2f last %.2f s; RSS %.0f -> %.0f MB; threads %d -> %d'
           % (n, times[0], times[-1], rss[0], rss[-1], threads[0], threads[-1]))
-    assert times[-1] < 2 * max(times[0], 0.3)
+    # V21.4: medians of 5, not single scans - one 0.7 s scan under heavy CPU load
+    # failed the old check after the scans became 0.25 s (fast Welch, V21.3.1)
+    import statistics
+    assert statistics.median(times[-5:]) < 2 * max(statistics.median(times[:5]), 0.3), times
     assert rss[-1] - rss[2] < 100
     assert threads[-1] <= threads[0] + 2
 

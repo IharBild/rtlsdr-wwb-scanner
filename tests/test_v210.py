@@ -55,7 +55,7 @@ def _isolated(code, timeout=180):
         import sys, types, os, tempfile
         os.environ['HOME'] = os.environ['USERPROFILE'] = tempfile.mkdtemp(prefix='v210_')
         try:
-            import PySide2
+            import wwb_scanner.ui.pyside.qt  # V21.4: PySide2 or PySide6
         except ImportError:
             print('NO_PYSIDE2'); raise SystemExit(0)
         try:
@@ -75,8 +75,8 @@ def _isolated(code, timeout=180):
         scan_dll._cache['lib'] = None
         import logging, time
         import numpy as np
-        from PySide2 import QtCore
-        from PySide2.QtWidgets import QApplication
+        from wwb_scanner.ui.pyside.qt import QtCore
+        from wwb_scanner.ui.pyside.qt import QApplication
         import sim
         from wwb_scanner.scanner import sdrwrapper
         from wwb_scanner.utils import dbstore
@@ -120,7 +120,7 @@ def _isolated(code, timeout=180):
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
     out = r.stdout.decode('utf-8', 'replace')
     if 'NO_PYSIDE2' in out:
-        pytest.skip('PySide2 not installed')
+        pytest.skip('no Qt binding (PySide2 or PySide6)')
     assert r.returncode == 0 and 'ALL_OK' in out, 'exit code %s\n%s' % (r.returncode, out[-3000:])
     return out
 

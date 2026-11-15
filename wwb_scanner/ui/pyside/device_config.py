@@ -1,8 +1,7 @@
 import enum
 from rtlsdr import RtlSdr
 
-from PySide2 import QtCore, QtQml
-from PySide2.QtCore import Signal, Property
+from wwb_scanner.ui.pyside.qt import QtCore, QtQml, Signal, Property
 import logging
 logger = logging.getLogger(__name__)
 

@@ -13,8 +13,7 @@ import logging.handlers
 import os
 import sys
 
-from PySide2 import QtCore, QtQml
-from PySide2.QtCore import Signal, Property, Slot
+from wwb_scanner.ui.pyside.qt import QtCore, QtQml, Signal, Property, Slot
 
 STATUS_LOGGER = 'wwb_scanner.status'
 _active = {'hub': None}

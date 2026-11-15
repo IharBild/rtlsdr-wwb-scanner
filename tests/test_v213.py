@@ -120,7 +120,7 @@ def test_dependencies_by_python_version():
 
 
 def test_version_and_marker():
-    assert re.search(r'^version = 21\.3\.\d+$', _read('setup.cfg'), re.M)
+    assert re.search(r'^version = 21\.([3-9])\.\d+$', _read('setup.cfg'), re.M)
 
 
 # --------------------------------------------------------------- end to end
@@ -185,7 +185,7 @@ print('RESULT ' + json.dumps({'pyrtlsdr': md.version('pyrtlsdr'), 'lib': librtls
 
 def test_window_entry_explains_missing_pyside2(monkeypatch, capsys):
     from wwb_scanner.ui import launch
-    monkeypatch.setattr(launch, 'pyside_missing', lambda: True)
+    monkeypatch.setattr(launch, 'qt_problem', lambda: 'No module named PySide6')
     assert launch.run() == 1
     err = capsys.readouterr().err
     assert 'PySide2' in err and '3.7-3.10' in err and 'PySide6' in err

@@ -1,5 +1,5 @@
 import QtQuick 2.0
-import Qt.labs.settings 1.0
+import WwbCompat 1.0
 import ScanTools 1.0
 
 Item {
@@ -47,7 +47,7 @@ Item {
         }
     }
 
-    Settings {
+    WwbSettings {
         id: settings
         category: 'Scan Config'
         property alias startFreq: model.startFreq

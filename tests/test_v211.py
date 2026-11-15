@@ -140,7 +140,7 @@ def test_qml_texts():
 def test_cursor_takes_the_nearest_point_and_rename_reaches_the_scan():
     _isolated("""
     import numpy as np, types
-    from PySide2.QtWidgets import QApplication
+    from wwb_scanner.ui.pyside.qt import QApplication
     from wwb_scanner.ui.pyside import graph as G
     from wwb_scanner.utils import dbstore
     app = QApplication([])

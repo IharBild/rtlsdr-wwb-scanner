@@ -1,7 +1,7 @@
 import QtQuick 2.0
 import QtQuick.Layouts 1.11
 import QtQuick.Controls 2.12
-import QtQuick.Dialogs 1.0 as QD
+import WwbCompat 1.0
 import GraphUtils 1.0
 
 Item {
@@ -48,7 +48,7 @@ Item {
         }
     }
 
-    onAddItem: {
+    onAddItem: function(spectrum) {
         var index = spectrum.index;
         root.spectrumGraphs[index] = spectrum;
         var data = {
@@ -85,7 +85,7 @@ Item {
         ButtonGroup {
             id: btnGroup
 
-            onClicked: {
+            onClicked: function(button) {
                 var spectrum = root.spectrumGraphs[button.itemIndex];
                 if (spectrum.index == root.activeIndex){
                     return;
@@ -103,15 +103,15 @@ Item {
             checked: root.activeIndex == index
             graphVisible: root.spectrumGraphs[itemIndex].graphVisible
             width: listView.contentWidth
-            onColorButtonPressed: {
+            onColorButtonPressed: function(itemIndex) {
                 var spectrum = root.spectrumGraphs[itemIndex];
                 colorDialog.activate(spectrum);
             }
-            onVisibleCheckBoxPressed: {
+            onVisibleCheckBoxPressed: function(itemIndex, state) {
                 root.spectrumGraphs[itemIndex].graphVisible = state;
             }
-            onRenameRequested: renameDialog.ask(itemIndex)
-            onDeleteRequested: deleteDialog.ask(itemIndex)
+            onRenameRequested: function(itemIndex) { renameDialog.ask(itemIndex) }
+            onDeleteRequested: function(itemIndex) { deleteDialog.ask(itemIndex) }
         }
     }
 
@@ -191,7 +191,7 @@ Item {
 
     Loader {
         id: colorDialog
-        sourceComponent: Component { QD.ColorDialog {} }
+        sourceComponent: Component { WwbColorDialog {} }
         property var spectrum
         property color color
         active: false

@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 
-def _install_fake_pyside():
+def _install_fake_pyside(put):
     class Sig(object):
         def __init__(self, *a, **k): self.calls = []
         def emit(self, *a): self.calls.append(a)
@@ -24,7 +24,7 @@ def _install_fake_pyside():
         def endRemoveColumns(self): pass
     mods = {}
     for name in ('PySide2', 'PySide2.QtCore', 'PySide2.QtQml', 'PySide2.QtQuick',
-                 'PySide2.QtGui', 'PySide2.QtCharts'):
+                 'PySide2.QtGui', 'PySide2.QtCharts', 'PySide2.QtWidgets'):   # V21.4: qt.py
         mods[name] = types.ModuleType(name)
         mods[name].__getattr__ = lambda attr, _B=Base: _B
     qc = mods['PySide2.QtCore']
@@ -42,26 +42,54 @@ def _install_fake_pyside():
     mods['PySide2.QtGui'].QColor = Base
     qc.Signal = Sig
     for n, m in mods.items():
-        sys.modules.setdefault(n, m)
+        put(n, m)
     mods['PySide2'].QtCore = qc
-    for sub in ('QtQml', 'QtQuick', 'QtGui', 'QtCharts'):
+    for sub in ('QtQml', 'QtQuick', 'QtGui', 'QtCharts', 'QtWidgets'):
         setattr(mods['PySide2'], sub, mods['PySide2.' + sub])
     pk = types.ModuleType('pkg_resources')
     pk.resource_filename = lambda *a: ''
-    sys.modules.setdefault('pkg_resources', pk)
+    if 'pkg_resources' not in sys.modules:
+        put('pkg_resources', pk)
     utils = types.ModuleType('wwb_scanner.ui.pyside.utils')
     utils.IntervalTimer = Base
     utils.is_pathlike = lambda x: (False, None)
-    sys.modules.setdefault('wwb_scanner.ui.pyside.utils', utils)
+    put('wwb_scanner.ui.pyside.utils', utils)
 
 
 @pytest.fixture
 def model():
+    """graph.py under the fake Qt (it records the model calls).
+    V21.4: only for this test - the real Qt modules and the scanner UI modules
+    are put back afterwards, so later tests in the same run see the real Qt or
+    none (the fake used to stay in sys.modules for the rest of the run)."""
     pytest.importorskip('numpy')
-    if 'PySide2' not in sys.modules:
-        _install_fake_pyside()
+    names = ('PySide2', 'pkg_resources', 'wwb_scanner.ui.pyside.')
+    saved = {k: sys.modules.pop(k) for k in list(sys.modules)
+             if k == 'PySide2' or k.startswith('PySide2.') or k.startswith(names[2])}
+    added = []
+
+    def put(name, mod):
+        if name not in sys.modules:
+            added.append(name)
+        sys.modules[name] = mod
+    _install_fake_pyside(put)
+    import wwb_scanner.ui.pyside as pkg
+    attrs = {a: vars(pkg)[a] for a in ('graph', 'qt', 'utils') if a in vars(pkg)}
+    for a in attrs:
+        delattr(pkg, a)
     from wwb_scanner.ui.pyside import graph
-    return graph.GraphTableModel(), graph
+    try:
+        yield graph.GraphTableModel(), graph
+    finally:
+        for k in list(sys.modules):
+            if k in added or k == 'PySide2' or k.startswith('PySide2.') or k.startswith(names[2]):
+                sys.modules.pop(k, None)
+        sys.modules.update(saved)
+        for a in ('graph', 'qt', 'utils'):
+            if a in vars(pkg):
+                delattr(pkg, a)
+        for a, v in attrs.items():
+            setattr(pkg, a, v)
 
 
 def arr(graph, n, start=0.0, level=-90.):
@@ -149,14 +177,14 @@ def test_group_size_stays_fixed_while_scan_grows(model):
     ('C:/scans/torwar.SDB2', 'Shure WWB CSV (*.csv)', 'C:/scans/torwar.SDB2'),
     ('C:/scans/v1.2 test', 'Shure WWB native (*.sdb2)', 'C:/scans/v1.2 test.sdb2'),
 ])
-def test_export_extension(name, filt, expect):
-    from wwb_scanner.ui.pyside import graph
+def test_export_extension(model, name, filt, expect):
+    graph = model[1]
     assert graph.add_export_extension(name, filt) == expect
 
 
-def test_export_sdb2_via_dialog_slot(tmpdir):
+def test_export_sdb2_via_dialog_slot(model, tmpdir):
     import xml.etree.ElementTree as ET
-    from wwb_scanner.ui.pyside import graph
+    graph = model[1]
     from wwb_scanner.scan_objects import Spectrum
     f = np.round(np.arange(470.0, 471.0001, 0.025), 6)
     sp = Spectrum()

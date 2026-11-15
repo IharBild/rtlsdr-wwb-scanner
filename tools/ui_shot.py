@@ -4,8 +4,8 @@ import os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 os.environ.setdefault('QT_QUICK_BACKEND', 'software')
 import qa_ui                                   # portable QML copy + fake dongle
-from PySide2 import QtCore, QtQml
-from PySide2.QtWidgets import QApplication
+from wwb_scanner.ui.pyside import qt          # V21.4: PySide2 or PySide6
+from wwb_scanner.ui.pyside.qt import QtCore, QtQml, QApplication
 from wwb_scanner.ui.pyside import main as ui_main
 
 
@@ -22,6 +22,7 @@ def main():
     qml_dir = qa_ui.portable_qml_copy()
     engine = QtQml.QQmlApplicationEngine()
     engine.setBaseUrl(str(qml_dir)); engine.addImportPath(str(qml_dir))
+    engine.addImportPath(qt.compat_qml_dir(qml_dir))
     ui_main.register_qml_types()
     engine.load(str(qml_dir / 'main.qml'))
     win = engine.rootObjects()[0]
