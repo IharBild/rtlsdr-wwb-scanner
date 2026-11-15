@@ -656,7 +656,9 @@ def v204_checks(app, win, controls, si):
     cfg = si.scanConfig
     old = (cfg.startFreq, cfg.endFreq, cfg.scanRanges)
     cfg.scanRanges = ''
-    cfg.startFreq, cfg.endFreq = 470.0, 560.0
+    # V21.3.1: 470-1000 (was 470-560): with the fast Welch the simulated
+    # 470-560 scan could end before Export was pressed (CI, 15.11.2026)
+    cfg.startFreq, cfg.endFreq = 470.0, 1000.0
     t0 = time.time()
     controls[0].scannerState.emit(True)
     pump(app, 0.3)
