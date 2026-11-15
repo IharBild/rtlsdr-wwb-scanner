@@ -75,7 +75,6 @@ librtlsdr.rtlsdr_get_build_info = f
 '''
 
 
-@pytest.mark.skipif(sys.platform == 'win32', reason='uses a fake pyrtlsdr (Linux path lookup)')
 def _venv(tmpdir):
     """A venv (sys.prefix of its own), as on the PC: the installer decides by
     sys.prefix whether the loaded DLL belongs to this Python."""
@@ -92,6 +91,7 @@ def _fake_pyrtlsdr(tmpdir):
     return str(tmpdir.join('fake'))
 
 
+@pytest.mark.skipif(sys.platform == 'win32', reason='uses a fake pyrtlsdr (Linux path lookup)')
 def test_install_over_v6_and_rollback(tmpdir):
     venv, py = _venv(tmpdir)
     fake = _fake_pyrtlsdr(tmpdir)
