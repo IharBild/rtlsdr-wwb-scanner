@@ -51,13 +51,14 @@ jobs:
             pins: 'numpy==1.21.6 scipy==1.7.3 tinydb==4.8.0 pyrtlsdr==0.3.0 PySide2==5.15.2.1'
             pytest: 'pytest<8'
             window: false
-          # V21.4: the new stack the maintainer's PC runs in wwb-py313 (window in pytest)
+          # V21.4: the new stack the maintainer's PC runs in wwb-py313; the window
+          # check too (Qt 6 on Windows has its own default style - see qa_ui)
           - name: Windows, Python 3.13, current libraries (PySide6)
             os: windows-2022
             python: '3.13'
             pins: ''
             pytest: 'pytest'
-            window: false
+            window: true
     env:
       QT_QPA_PLATFORM: offscreen
       PYTHONIOENCODING: utf-8

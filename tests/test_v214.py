@@ -104,6 +104,18 @@ def test_message_levels_and_helpers():
     assert qt.load_charts() is not None
 
 
+def test_main_sets_the_style_before_the_engine():
+    """Qt 6 on Windows defaults to the native style, which does not allow our
+    customised controls (warnings in CI). main.run() must set Fusion first,
+    and qa_ui must do the same."""
+    src = _read(UI, 'main.py')
+    body = src[src.index('def run('):]
+    assert body.index('apply_style()') < body.index('QQmlApplicationEngine()')
+    ui = _read(ROOT, 'tools', 'qa_ui.py')
+    m = ui[ui.index('def main('):]
+    assert m.index('ui_main.apply_style()') < m.index('QQmlApplicationEngine()')
+
+
 def test_window_loads_without_qml_warnings():
     """main.qml with the WwbCompat module of this Qt (the full check is
     tools/qa_ui.py U1-U41)."""
@@ -127,6 +139,7 @@ from wwb_scanner import scan_dll
 scan_dll._cache['lib'] = None
 from wwb_scanner.ui.pyside import main as M
 app = qt.QApplication([])
+M.apply_style()          # as main.run(): Fusion (Qt 6 on Windows: native style warns)
 app.setOrganizationName('rtlsdr-wwb-scanner-v214'); app.setApplicationName('wwb_scanner')
 warn = []
 def h(mode, ctx, msg):

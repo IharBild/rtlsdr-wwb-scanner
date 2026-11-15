@@ -130,6 +130,10 @@ def main():
     start = float(sys.argv[1]) if len(sys.argv) > 2 else 0.0
     end = float(sys.argv[2]) if len(sys.argv) > 2 else 1766.0
     app = QApplication(sys.argv[:1])
+    # V21.4: the style of the real window (Fusion). Qt 6 on Windows defaults to
+    # the native "Windows" style, which refuses our customised controls and
+    # warns (CI Windows + PySide6, 15.11.2026); Qt 5 and Linux did not show it.
+    ui_main.apply_style()
     app.setOrganizationName('rtlsdr-wwb-scanner-qa')
     app.setApplicationName('wwb_scanner')
     QtCore.qInstallMessageHandler(handler)
