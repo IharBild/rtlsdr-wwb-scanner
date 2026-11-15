@@ -115,3 +115,24 @@ def test_version():
     if not os.path.isfile(p):
         pytest.skip('repository layout only')
     assert re.search(r'^version = 21\.3\.1$', open(p).read(), re.M)
+
+
+def test_qa_hw_e2_accepts_pyrtlsdr_04_with_v7(monkeypatch):
+    """HW.E2 said 'keep pyrtlsdr<0.4' on Python 3.13 with the v7 DLL (15.11.2026)."""
+    import importlib.util, os, sys, types
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    path = os.path.join(root, 'tools', 'qa_hw.py')
+    if not os.path.isfile(path):
+        path = os.path.join(root, 'qa_hw.py')
+    spec = importlib.util.spec_from_file_location('qa_hw_v2131', path)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    lib = types.SimpleNamespace(rtlsdr_set_dithering=object())
+    pkg = types.ModuleType('rtlsdr')
+    sub = types.ModuleType('rtlsdr.librtlsdr')
+    sub.librtlsdr = lib
+    monkeypatch.setitem(sys.modules, 'rtlsdr', pkg)
+    monkeypatch.setitem(sys.modules, 'rtlsdr.librtlsdr', sub)
+    assert m.dll_has('rtlsdr_set_dithering')
+    del lib.rtlsdr_set_dithering
+    assert not m.dll_has('rtlsdr_set_dithering')

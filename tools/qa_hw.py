@@ -42,6 +42,16 @@ KIT = HERE if os.path.isdir(os.path.join(HERE, 'tests')) else os.path.dirname(HE
 TESTS = os.path.join(KIT, 'tests')
 
 
+def dll_has(name):
+    """True when the rtlsdr library pyrtlsdr loads exports ``name``."""
+    try:
+        from rtlsdr.librtlsdr import librtlsdr
+        getattr(librtlsdr, name)
+        return True
+    except Exception:
+        return False
+
+
 def prepare_dll_search():
     """V21.3: Python 3.8+ on Windows does not search PATH or the Scripts folder
     of a virtual environment for DLLs, so pyrtlsdr 0.4+ would not find the
@@ -147,7 +157,12 @@ def check_environment(args):
     try:
         major_minor = tuple(int(x) for x in v.split('.')[:2])
         if major_minor >= (0, 4):
-            result('E2', 'WARN', 'версия pyrtlsdr', '%s: нужна DLL с rtlsdr_set_dithering; держите pyrtlsdr<0.4' % v)
+            # V21.3.1: fine with DLL scanner-v7+ (it exports rtlsdr_set_dithering)
+            if dll_has('rtlsdr_set_dithering'):
+                result('E2', 'PASS', 'версия pyrtlsdr', '%s, DLL с rtlsdr_set_dithering (scanner-v7+)' % v)
+            else:
+                result('E2', 'WARN', 'версия pyrtlsdr', '%s: нужна DLL с rtlsdr_set_dithering - '
+                       'drivers\\rtlsdr-scanner-v7\\install_dll.py' % v)
         else:
             result('E2', 'PASS', 'версия pyrtlsdr', v)
     except ValueError:
