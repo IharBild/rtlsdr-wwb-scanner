@@ -10,7 +10,7 @@ company in Poland and for sound engineers across Europe. Most of the code in thi
 written with Claude (Anthropic); every release is checked on a real V4 dongle by the
 maintainer.
 
-Current version: **V21.3** in the branch `v4-fixes` (installed by the command below). Last tagged
+Current version: **V21.3.1** in the branch `v4-fixes` (installed by the command below). Last tagged
 release: [v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v18.1)
 (branch `v4-fixes`). The `master` branch is the original upstream code and is not used here.
 
@@ -157,6 +157,18 @@ release: [v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v18
   - Checked: all tests on Python 3.8, 3.10 and 3.13; the window check on 3.8 and 3.10;
     the real pyrtlsdr 0.5 with the v7 driver built for Linux against a USB model (a full
     scan); DLL loading with Windows Python 3.13 in Wine. **Not yet on the real V4.**
+- **V21.3.1** - found on the real V4 (15.11.2026):
+  - **Speed on Python 3.13.** scipy 1.16+ computes `welch` with one FFT call per
+    segment from Python: one tile took 88 ms instead of 11-14 ms on the PC (a full scan
+    would take twice as long). The scanner now has its own Welch with one batched FFT,
+    the same result as scipy (tested to 1e-12). In the simulator: 21.5 -> 2.3 ms per tile
+    on Python 3.13, 2.9 -> 2.6 ms on the old stack.
+  - `install_dll.py` (v7) no longer replaces the DLL of another Python: in a venv of
+    Python 3.13 pyrtlsdr 0.5 had found the `librtlsdr.dll` of Python 3.7 through PATH.
+    The DLL now goes into the venv's `Scripts` folder.
+  - On the V4 with V21.3 + v7 on Python 3.7: full scan 175 s (v6: 177 s), unplugging and
+    plugging back during a scan: the scan goes on and loses nothing. On Python 3.13
+    (pyrtlsdr 0.5): a 470-480 MHz scan with export works.
 - **V21.1** (the small items left from the audit and from the tests on the PC):
   - **Stop** only asks the scan to end: the window no longer freezes while a USB read
     hangs (11 s measured). A stopped scan is finished like any other - cropped to the
@@ -341,6 +353,11 @@ Windows: быстрее, без собственных помех донгла �
   версию Python. Окно пока работает только на Python 3.7–3.10 (PySide2); на 3.11–3.14 —
   ядро, тесты и экспорт, окно появится с переходом на PySide6. Для pyrtlsdr 0.4+
   (Python 3.10+) нужен драйвер `rtlsdr-scanner-v7` — его ставит
-  `drivers\rtlsdr-scanner-v7\install_dll.py`. На реальном V4 v7 ещё не проверен.
+  `drivers\rtlsdr-scanner-v7\install_dll.py`.
+- V21.3.1: на Python 3.13 обработка плитки была в 6–8 раз медленнее (scipy 1.16+ считает
+  welch по одному сегменту за раз); теперь своя функция Welch с тем же результатом.
+  install_dll.py больше не трогает DLL другого Python, а ставит v7 в это окружение.
+  v7 проверен на V4 15.11.2026: скорость как у v6, выдёргивание донгла посреди скана —
+  скан продолжается без потерь.
 
 [osmosdr-wiki]: https://osmocom.org/projects/rtl-sdr/wiki

@@ -3,7 +3,9 @@ import time
 import threading
 import numpy as np
 from scipy.signal.windows import __all__ as WINDOW_TYPES
-from scipy.signal import welch, get_window, hilbert
+from scipy.signal import get_window, hilbert
+# V21.3.1: own Welch (one batched FFT); scipy 1.16+ welch loops in Python
+from wwb_scanner.scanner import psd as _psd
 
 import logging
 logger = logging.getLogger(__name__)
@@ -826,8 +828,7 @@ class SampleSet(JSONMixin):
         samples = np.asarray(samples).ravel()
         win_size = self.window_size
         win = make_window(self.scanner.sampling_config.window_type, win_size)
-        freqs, Pxx = welch(samples, fs=rs, window=win, detrend=False,
-            nperseg=win_size, scaling='density', return_onesided=False)
+        freqs, Pxx = _psd.welch(samples, rs, win, win_size)
 
         # Plain PSD of the tile, centred on fc. (The old irfft -> translate_freq
         # -> rfft chain made the result depend on the centre frequency.)
@@ -938,12 +939,9 @@ class SampleSet(JSONMixin):
         scanner = self.scanner
         rs = scanner.sample_rate
         win_size = self.window_size
-        num_samples = scanner.samples_per_sweep * scanner.sweeps_per_scan
-        overlap_ratio = scanner.sampling_config.sweep_overlap_ratio
-        fake_samples = np.zeros(num_samples, 'complex')
-        f_expected, Pxx = welch(fake_samples.real, fs=rs, nperseg=win_size, return_onesided=False)
-
-        f_expected, Pxx = sort_psd(f_expected, Pxx)
+        # V21.3.1: only the bin frequencies are needed (was a welch of zeros
+        # for every tile: 20+ ms each with scipy 1.18)
+        f_expected = np.fft.fftshift(_psd.welch_freqs(win_size, rs))
 
         f_expected = np.around(f_expected)
         f_expected = f_expected[self.good_bins_mask(f_expected, rs)]

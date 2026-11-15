@@ -126,9 +126,14 @@ class Dongle(object):
 
 def psd(x):
     import numpy as np
-    from scipy.signal import welch
-    f, p = welch(np.asarray(x), fs=FS, window='hann', nperseg=NPERSEG,
-                 return_onesided=False, detrend=False)
+    try:                        # V21.3.1: fast Welch of the scanner (same result)
+        from scipy.signal import get_window
+        from wwb_scanner.scanner import psd as _psd
+        f, p = _psd.welch(np.asarray(x), FS, get_window('hann', NPERSEG), NPERSEG)
+    except ImportError:         # older installed scanner
+        from scipy.signal import welch
+        f, p = welch(np.asarray(x), fs=FS, window='hann', nperseg=NPERSEG,
+                     return_onesided=False, detrend=False)
     keep = (np.abs(f) >= KEEP_HZ[0]) & (np.abs(f) <= KEEP_HZ[1])
     o = np.argsort(f[keep])
     return f[keep][o], p[keep][o]

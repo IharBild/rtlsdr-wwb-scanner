@@ -35,6 +35,8 @@ rtlsdr_set_and_get_tuner_bandwidth — pyrtlsdr считает её необяз
   нужных функций, — ставит <окружение>\Scripts\rtlsdr.dll. Python 3.8+ сам не ищет DLL
   в этой папке; программа V21.3+ (wwb_scanner\dllpath.py) и install_dll.py добавляют
   её в поиск.
+- V21.3.1: DLL другого Python (например, librtlsdr.dll Python 3.7, которую pyrtlsdr 0.5
+  находит через PATH) не заменяется: v7 ставится в Scripts этого окружения.
 Ожидается «OK - scanner-v7 installed».
 
 Проверка на донгле

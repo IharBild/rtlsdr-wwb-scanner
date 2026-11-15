@@ -120,7 +120,7 @@ def test_dependencies_by_python_version():
 
 
 def test_version_and_marker():
-    assert re.search(r'^version = 21\.3\.0$', _read('setup.cfg'), re.M)
+    assert re.search(r'^version = 21\.3\.\d+$', _read('setup.cfg'), re.M)
 
 
 # --------------------------------------------------------------- end to end

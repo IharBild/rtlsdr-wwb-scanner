@@ -63,6 +63,7 @@ MARKERS = [
     ('V21.1', 'scanner/main.py', 'def request_stop'),
     ('V21.2', 'scanner/sample_processing.py', 'def verify_peaks'),
     ('V21.3', 'dllpath.py', 'def prepare'),
+    ('V21.3.1', 'scanner/psd.py', 'def welch'),
 ]
 
 

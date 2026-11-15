@@ -6,8 +6,10 @@
     python install_dll.py where      только показать, какая DLL загружается
     python install_dll.py rollback   вернуть предыдущую DLL из резервной копии
 
-Если pyrtlsdr уже загружает какую-то DLL, она заменяется, копия кладётся
-рядом: <имя>.before-v7 (не перезаписывается).
+Если pyrtlsdr уже загружает какую-то DLL из этого Python (его папки), она
+заменяется, копия кладётся рядом: <имя>.before-v7 (не перезаписывается).
+DLL из другого Python (например, librtlsdr.dll Python 3.7, найденная через
+PATH) не трогается: v7 ставится в это окружение (V21.3.1).
 Если не загружает ничего (новое окружение) или загружает старую, без
 функций, которые нужны pyrtlsdr 0.4+, DLL ставится как
 <окружение>\\Scripts\\rtlsdr.dll; программа (V21.3+) добавляет эту папку
@@ -82,6 +84,13 @@ def default_target():
     return os.path.join(sys.prefix, 'Scripts', 'rtlsdr.dll')
 
 
+def inside(path, prefix=None):
+    """True when ``path`` is in the folder of this Python (or its venv)."""
+    prefix = os.path.normcase(os.path.abspath(prefix or sys.prefix))
+    p = os.path.normcase(os.path.abspath(path))
+    return p == prefix or p.startswith(prefix.rstrip('\\/') + os.sep)
+
+
 def why(out):
     if "rtlsdr_set_dithering" in out or "rtlsdr_set_gpio" in out:
         return ('pyrtlsdr found a DLL without the functions pyrtlsdr 0.4+ needs '
@@ -109,12 +118,19 @@ def main():
         print('pyrtlsdr loads: %s\nbuild: %s' % (path, info))
     else:
         print('%s:\n%s' % (why(out), out.strip().splitlines()[-1] if out.strip() else ''))
+    own = bool(path) and inside(path)
+    if path and not own:
+        print('(this DLL is not in this Python: %s)' % sys.prefix)
     if cmd == 'where':
         return 0 if path else 1
-    target = path or default_target()
+    # V21.3.1: never change the DLL of another Python - a venv of 3.13 found
+    # the librtlsdr.dll of Python 3.7 through PATH (find_library)
+    target = path if own else default_target()
     if cmd == 'rollback':
         if not target or not os.path.exists(target + SUFFIX):
             print('no backup %s%s' % (target, SUFFIX))
+            if target and os.path.exists(target) and TAG in (info or ''):
+                print('this DLL was installed as a new file: delete %s to go back' % target)
             return 1
         if not copy(target + SUFFIX, target):
             return 1
@@ -125,13 +141,13 @@ def main():
     if struct.calcsize('P') != 8:
         print('32-bit Python: this kit has only the 64-bit DLL - not installed')
         return 1
-    if path and TAG in (info or ''):
+    if own and TAG in (info or ''):
         print('%s is already installed (%s)' % (TAG, sha(path)))
         return 0
     if not target:
         print('no place to install to: pyrtlsdr loads no DLL and this is not Windows')
         return 1
-    if not path:
+    if not own:
         print('installing as %s' % target)
         d = os.path.dirname(target)
         if not os.path.isdir(d):

@@ -31,7 +31,8 @@ import os
 import time
 
 import numpy as np
-from scipy.signal import welch
+from scipy.signal import get_window
+from wwb_scanner.scanner import psd as _psd   # V21.3.1: fast Welch
 
 logger = logging.getLogger(__name__)
 
@@ -233,9 +234,18 @@ def pick_anchors(collection):
     return out
 
 
+_HANN = {}
+
+
+def _hann(n):
+    w = _HANN.get(n)
+    if w is None:
+        w = _HANN[n] = get_window('hann', n)
+    return w
+
+
 def tile_psd(x, fs):
-    f, p = welch(np.asarray(x), fs=fs, window='hann', nperseg=NPERSEG,
-                 return_onesided=False, detrend=False)
+    f, p = _psd.welch(np.asarray(x), fs, _hann(NPERSEG), NPERSEG)
     keep = (np.abs(f) >= KEEP_HZ[0]) & (np.abs(f) <= KEEP_HZ[1])
     o = np.argsort(f[keep])
     return p[keep][o]

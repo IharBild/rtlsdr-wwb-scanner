@@ -3,6 +3,7 @@ consistent, the installer works, and - where gcc is available - the USB model
 of the driver passes its failure-path scenarios."""
 import hashlib
 import io
+import importlib.util
 import os
 import re
 import shutil
@@ -75,27 +76,72 @@ librtlsdr.rtlsdr_get_build_info = f
 
 
 @pytest.mark.skipif(sys.platform == 'win32', reason='uses a fake pyrtlsdr (Linux path lookup)')
-def test_install_over_v6_and_rollback(tmpdir):
+def _venv(tmpdir):
+    """A venv (sys.prefix of its own), as on the PC: the installer decides by
+    sys.prefix whether the loaded DLL belongs to this Python."""
+    venv = tmpdir.join('venv')
+    subprocess.run([sys.executable, '-m', 'venv', '--without-pip', str(venv)], check=True, timeout=120)
+    py = venv.join('bin', 'python')
+    return venv, str(py) if py.check() else str(venv.join('Scripts', 'python.exe'))
+
+
+def _fake_pyrtlsdr(tmpdir):
     pkg = tmpdir.mkdir('fake').mkdir('rtlsdr')
     pkg.join('__init__.py').write('from .librtlsdr import librtlsdr\n')
     pkg.join('librtlsdr.py').write(FAKE_RTLSDR)
-    dll = tmpdir.join('librtlsdr.dll')
+    return str(tmpdir.join('fake'))
+
+
+def test_install_over_v6_and_rollback(tmpdir):
+    venv, py = _venv(tmpdir)
+    fake = _fake_pyrtlsdr(tmpdir)
+    dll = venv.mkdir('Scripts2').join('librtlsdr.dll')        # inside this Python
     dll.write_binary(b'old dll scanner-v6')
-    env = dict(os.environ, PYTHONPATH=str(tmpdir.join('fake')), FAKE_DLL=str(dll))
+    env = dict(os.environ, PYTHONPATH=fake, FAKE_DLL=str(dll))
     script = os.path.join(V7, 'install_dll.py')
 
     def run(*a):
-        r = subprocess.run([sys.executable, script] + list(a), stdout=subprocess.PIPE,
+        r = subprocess.run([py, script] + list(a), stdout=subprocess.PIPE,
                            stderr=subprocess.STDOUT, env=env, timeout=60)
         return r.returncode, r.stdout.decode('utf-8', 'replace')
     rc, out = run()
     assert rc == 0 and 'OK - scanner-v7 installed' in out, out
     assert dll.read_binary() == open(DLL, 'rb').read()
-    assert tmpdir.join('librtlsdr.dll.before-v7').read_binary() == b'old dll scanner-v6'
+    assert dll.dirpath().join('librtlsdr.dll.before-v7').read_binary() == b'old dll scanner-v6'
     rc, out = run()
     assert rc == 0 and 'already installed' in out, out
     rc, out = run('rollback')
     assert rc == 0 and dll.read_binary() == b'old dll scanner-v6', out
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='uses a fake pyrtlsdr (Linux path lookup)')
+def test_never_changes_the_dll_of_another_python(tmpdir):
+    """15.11.2026 on the PC: in a venv of Python 3.13 pyrtlsdr 0.5 found the
+    librtlsdr.dll of Python 3.7 through PATH. The installer must not replace
+    it (that would change the other Python) - it installs into this venv
+    (Windows) or stops (elsewhere: no default place)."""
+    venv, py = _venv(tmpdir)
+    fake = _fake_pyrtlsdr(tmpdir)
+    other = tmpdir.mkdir('Python37').mkdir('Scripts').join('librtlsdr.dll')
+    other.write_binary(b'old dll scanner-v6')
+    env = dict(os.environ, PYTHONPATH=fake, FAKE_DLL=str(other))
+    r = subprocess.run([py, os.path.join(V7, 'install_dll.py')], stdout=subprocess.PIPE,
+                       stderr=subprocess.STDOUT, env=env, timeout=60)
+    out = r.stdout.decode('utf-8', 'replace')
+    assert 'not in this Python' in out, out
+    assert other.read_binary() == b'old dll scanner-v6', out
+    assert not tmpdir.join('Python37', 'Scripts', 'librtlsdr.dll.before-v7').check()
+    assert r.returncode == 1 and 'no place to install' in out, out     # Linux: no default target
+
+
+def test_inside_prefix_rule():
+    spec = importlib.util.spec_from_file_location('install_dll_v7', os.path.join(V7, 'install_dll.py'))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    root = os.path.abspath(os.sep + 'env')
+    assert m.inside(os.path.join(root, 'Scripts', 'rtlsdr.dll'), root)
+    assert not m.inside(os.path.join(root + '-other', 'rtlsdr.dll'), root)
+    assert not m.inside(os.path.join(os.path.dirname(root), 'Python37', 'Scripts', 'librtlsdr.dll'), root)
 
 
 def _driver_sources():
