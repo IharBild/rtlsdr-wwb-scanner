@@ -1,5 +1,4 @@
-// V21.4: colour dialog with one API for Qt 5 and Qt 6: property "color"
-// (Qt 6 calls it selectedColor).
+// V21.4: colour dialog with property "color" (Qt 6 calls it selectedColor).
 import QtQuick
 import QtQuick.Dialogs as D
 

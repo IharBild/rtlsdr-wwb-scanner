@@ -1,7 +1,8 @@
 """Time measurement of a scan (plan step V1).
 
 Records, for every tile, when the stages started and finished, and writes a
-short report to ``~/wwb_scan_timing.txt`` at the end of the scan. It never
+short report to ``wwb_scan_timing.txt`` in the data folder (V22.0; was the
+home folder) at the end of the scan. It never
 raises: a problem with the measurement must not break a scan.
 """
 import os
@@ -73,8 +74,9 @@ class ScanTiming(object):
             report = self.build_report()
             logger.info(report)
             if path is None:
-                path = os.path.join(os.path.expanduser('~'), REPORT_FILENAME)
-            with open(path, 'w') as f:
+                from wwb_scanner import paths
+                path = paths.timing_report_file(create_dir=True)
+            with open(path, 'w', encoding='utf-8') as f:
                 f.write(report + '\n')
             return path
         except Exception:

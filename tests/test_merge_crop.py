@@ -58,7 +58,6 @@ def test_crop_keeps_range_inclusive_and_samples_in_sync():
     f = s.sample_data['frequency']
     assert f[0] == 470.0 and f[-1] == 471.0
     assert f.size == 41
-    assert sorted(s.samples.keys()) == list(f)
 
 
 def fake_rtlsdr():

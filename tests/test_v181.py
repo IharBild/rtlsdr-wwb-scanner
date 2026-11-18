@@ -12,7 +12,6 @@ import pytest
 
 import sim
 from wwb_scanner.scan_objects.spectrum import Spectrum
-from wwb_scanner.scan_objects.samplearray import SampleArray
 
 
 def _spectrum(n, level=-90.0, noise=1.0, seed=1):
@@ -60,30 +59,8 @@ def test_A1_2_hung_usb_call_blocks_the_next_scan(monkeypatch, tmpdir):
     assert sdr is not None and scanner.error is None
 
 
-# ------------------------------------------------------------------ 1.3 / 1.4
-
-def test_A1_3_scale_empty_or_flat():
-    assert Spectrum().scale(-120, -20) is False
-    flat = _spectrum(50, noise=0.0)
-    assert flat.scale(-120, -20) is False
-    assert np.all(flat.sample_data['dbFS'] == -90)
-    sp = _spectrum(200)
-    assert sp.scale(-120, -20) is True
-    y = sp.sample_data['dbFS']
-    assert np.isfinite(y).all() and abs(y.min() + 120) < 1e-6 and abs(y.max() + 20) < 1e-6
-
-
-@pytest.mark.parametrize('n,N,ok', [(81, 0, False), (81, 1, False), (81, 2, False), (81, 3, True),
-                                    (50, 60, False), (3, 4, False), (200, 4, True), (13200, 132, True)])
-def test_A1_4_smooth_short_scans(n, N, ok):
-    sp = _spectrum(n)
-    before = sp.sample_data['dbFS'].copy()
-    assert sp.smooth(N) is ok
-    y = sp.sample_data['dbFS']
-    assert y.size == n and np.isfinite(y).all()
-    if not ok:
-        assert np.array_equal(y, before)
-
+# ------------------------------------------------------------------ 1.4
+# (1.3 scale and 1.4 smooth: removed in V22.0 with the features themselves)
 
 def _isolated(code):
     """Run ``code`` in a fresh Python: an earlier test (test_graph_model) puts
@@ -175,18 +152,8 @@ def test_A1_6_device_list_survives_pulled_or_busy_dongle():
     """)
 
 
-# ------------------------------------------------------------------ 2.1 / 2.4 / 2.5
-
-def test_A2_1_sample_without_frequency_does_not_touch_the_spectrum():
-    from wwb_scanner.scan_objects import Sample
-    sp = _spectrum(20)
-    before = sp.sample_data.data.copy()
-    s = Sample(spectrum=sp, frequency=999.0, init_complete=False)
-    s.magnitude = 1.0
-    s.dbFS = -10.0
-    s.iq = (1.0, 0.0)
-    assert np.array_equal(sp.sample_data.data, before)
-
+# ------------------------------------------------------------------ 2.4
+# (2.1 Sample objects and 2.5 interpolate: removed in V22.0)
 
 def test_A2_4_points_file_name_must_be_plain(tmpdir):
     from wwb_scanner.utils.dbstore import DBStore
@@ -209,13 +176,6 @@ def test_A2_4_scan_index_with_bad_path_is_not_read(monkeypatch, tmpdir, caplog):
         rec = dbstore.db_store.get_scan(eid)
     assert 'sample_data' not in rec
     assert 'not a plain file name' in caplog.text
-
-
-def test_A2_5_interpolate_whole_number_spacing():
-    pytest.importorskip('scipy')
-    sa = SampleArray.create(frequency=np.arange(470.0, 480.0, 0.5), dbFS=-90 + np.zeros(20))
-    sa.interpolate(spacing=1)
-    assert sa.frequency.size >= 9
 
 
 # ------------------------------------------------------------------ 1.5 / 3.2 / 3.3

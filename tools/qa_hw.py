@@ -19,7 +19,7 @@
     report.md (итог), console.txt, pytest.txt, CSV и sdb2 сканов, отчёты времени.
 Заархивируйте папку и пришлите.
 
-Python 3.7+. Код сканера берётся из установленного пакета (site-packages),
+Python 3.11+. Код сканера берётся из установленного пакета (site-packages),
 тесты - из папки tests рядом со скриптом.
 """
 from __future__ import print_function
@@ -133,18 +133,14 @@ def check_environment(args):
         'numpy': numpy.__version__,
         'scipy': scipy.__version__,
     }
-    for mod in ('rtlsdr', 'PySide2', 'PySide6', 'tinydb', 'pytest'):
+    for mod in ('rtlsdr', 'PySide6', 'pytest'):
         try:
             m = __import__(mod)
             info[mod] = getattr(m, '__version__', 'есть')
         except Exception as exc:
             info[mod] = 'нет (%s)' % type(exc).__name__
     try:
-        try:
-            from importlib.metadata import version as _v  # novm
-        except ImportError:                               # Python 3.7
-            from pkg_resources import get_distribution
-            _v = lambda n: get_distribution(n).version
+        from importlib.metadata import version as _v
         info['pyrtlsdr'] = _v('pyrtlsdr')
     except Exception:
         info['pyrtlsdr'] = '?'
@@ -181,15 +177,10 @@ def check_environment(args):
     result('E3', 'FAIL' if missing else 'PASS', 'установлены файлы V9/V10',
            ('нет: ' + ', '.join(missing)) if missing else 'все отметки найдены')
     qml = os.path.join(base, 'ui', 'pyside', 'qml')
-    m13 = 'TINYDB4' in read(os.path.join(base, 'utils', 'dbstore.py'))
-    try:
-        import tinydb
-        tdb = getattr(tinydb, '__version__', '?')
-    except Exception:
-        tdb = '?'
-    result('E3d', 'PASS' if m13 or not tdb.startswith('4') else 'FAIL', 'база сканов работает с вашей tinydb (V13)',
-           'tinydb %s; %s' % (tdb, 'dbstore.py V13 установлен' if m13 else
-                              'dbstore.py старый: с tinydb 4 не работают повторное сохранение и чтение сканов из базы - поставьте fix-V13'))
+    # V22.0: the scan history no longer uses tinydb (utils/dbstore.py JsonDB)
+    m22 = 'class JsonDB' in read(os.path.join(base, 'utils', 'dbstore.py'))
+    result('E3d', 'PASS' if m22 else 'FAIL', 'база сканов без tinydb (V22.0)',
+           'utils/dbstore.py: JsonDB' if m22 else 'utils/dbstore.py старый (нужен V22.0)')
     m11 = {
         'график без анимации': 'NoAnimation' in read(os.path.join(qml, 'Graph.qml'))
                                and 'SeriesAnimations' not in read(os.path.join(qml, 'Graph.qml')),
@@ -360,8 +351,13 @@ class Lab(object):
             sdrwrapper.RtlSdr = factory
         from wwb_scanner.scan_objects import spectrum as spmod
         # do not fill the user's scan database with test scans
-        spmod.Spectrum.save_to_dbstore = lambda self: None
-        self.home_report = os.path.join(os.path.expanduser('~'), 'wwb_scan_timing.txt')
+        spmod.Spectrum.save_to_dbstore = lambda self, *a, **k: None
+        # V22.0: the time report is in the data folder (paths.py); before: home
+        try:
+            from wwb_scanner import paths as _paths
+            self.home_report = _paths.timing_report_file()
+        except ImportError:
+            self.home_report = os.path.join(os.path.expanduser('~'), 'wwb_scan_timing.txt')
 
     def config(self, start, end, window_type='hann', overlap=0.65, sweeps=40, auto_gain=False, clean=False,
                ranges=None):
@@ -370,12 +366,13 @@ class Lab(object):
             'device': {'gain': 33.8},
             'sampling': {'sample_rate': 2.4e6, 'sweep_overlap_ratio': overlap,
                          'sweeps_per_scan': sweeps, 'samples_per_sweep': 2048,
-                         'window_size': 96, 'window_type': window_type},
+                         'window_size': 96, 'window_type': window_type,
+                         # V22.0: the core defaults are the window's (all on);
+                         # the H checks measure with exactly these switches
+                         'auto_gain': bool(auto_gain), 'verify_peaks': False},
+            'processing': {'clean_ripple': bool(clean), 'clean_spurs': bool(clean),
+                           'clean_floor': bool(clean), 'clean_images': False},
         }
-        if auto_gain:
-            c['sampling']['auto_gain'] = True          # V17
-        if clean:
-            c['processing'] = {'clean_ripple': True, 'clean_spurs': True, 'clean_floor': True}
         if ranges:
             c['scan_ranges'] = [list(r) for r in ranges]   # V18
         return c
@@ -384,7 +381,7 @@ class Lab(object):
         from wwb_scanner.scanner import main
         import numpy as np
         print('\n--- скан %s: %.1f-%.1f МГц %s' % (name, start, end, kw or ''), flush=True)
-        sc = main.Scanner(config=self.config(start, end, **kw))
+        sc = main.Scanner(config=self.config(start, end, **kw), history=None)
         buf = io.StringIO()
         old = sys.stdout
         sys.stdout = Tee(old, buf)

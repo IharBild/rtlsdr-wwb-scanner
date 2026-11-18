@@ -1,167 +1,91 @@
+"""SampleArray and Spectrum (V22.0: points have frequency, magnitude, dbFS;
+no iq field and no Sample object per point)."""
 import numpy as np
+
+
+def _power(random_samples, **kw):
+    freqs, sig, ff = random_samples(**kw)
+    return freqs, np.abs(ff)
+
 
 def test_sample_array(random_samples):
     from wwb_scanner.scan_objects import SampleArray
 
-    rs = 2.048e6
-    fc = 600e6
-
+    freqs, p = _power(random_samples, rs=2.048e6, fc=600e6)
     a = SampleArray()
-
-    freqs, sig, ff = random_samples(rs=rs, fc=fc)
-
-    b = SampleArray.create(frequency=freqs, iq=ff)
+    b = SampleArray.create(frequency=freqs, magnitude=p)
     a.insert_sorted(b)
-
     assert np.array_equal(a.data, b.data)
-
+    assert a.dtype.names == ('frequency', 'magnitude', 'dbFS')
+    assert a.dtype.itemsize == 24
     assert np.array_equal(a.frequency, freqs)
-    assert np.array_equal(a.iq, ff)
-    assert np.array_equal(a.magnitude, np.abs(ff))
-    assert np.array_equal(a.dbFS, 10 * np.log10(np.abs(ff)))
-
-    assert np.array_equal(a.frequency, a['frequency'])
-    assert np.array_equal(a.iq, a['iq'])
-    assert np.array_equal(a.magnitude, a['magnitude'])
+    assert np.array_equal(a.magnitude, p)
+    assert np.array_equal(a.dbFS, 10 * np.log10(p))
     assert np.array_equal(a.dbFS, a['dbFS'])
 
-    fc = 900e6
-
-    freqs, sig, ff = random_samples(rs=rs, fc=fc)
-
-    a.set_fields(frequency=freqs, iq=ff)
-    c = SampleArray.create(frequency=freqs, iq=ff)
-
+    freqs2, p2 = _power(random_samples, rs=2.048e6, fc=900e6)
+    a.set_fields(frequency=freqs2, magnitude=p2)
+    c = SampleArray.create(frequency=freqs2, magnitude=p2)
     ix = np.flatnonzero(np.isin(a.frequency, c.frequency))
     assert np.array_equal(a.data[ix], c.data)
 
-def test_spectrum(random_samples):
+
+def test_dbfs_only_gives_magnitude():
+    from wwb_scanner.scan_objects import SampleArray
+    a = SampleArray.create(frequency=np.array([470., 470.025]), dbFS=np.array([-90., -60.]))
+    assert np.allclose(a.magnitude, [1e-9, 1e-6])
+
+
+def test_old_points_with_iq_are_converted():
+    """Arrays saved before V22.0 (history npz, npz exports) have an iq field."""
+    from wwb_scanner.scan_objects import SampleArray, Spectrum
+    old_dtype = np.dtype([('frequency', np.float64), ('iq', np.complex128),
+                          ('magnitude', np.float64), ('dbFS', np.float64)])
+    old = np.zeros(3, dtype=old_dtype)
+    old['frequency'] = [470.05, 470.0, 470.025]
+    old['magnitude'] = [1e-9, 1e-8, 1e-7]
+    old['dbFS'] = [-90., -80., -70.]
+    a = SampleArray(old)
+    assert a.data.dtype == SampleArray.dtype
+    assert list(a.frequency) == [470.0, 470.025, 470.05]
+    assert list(a.dbFS) == [-80., -70., -90.]
+    s = Spectrum()
+    s.add_sample_set(data=old)
+    assert s.sample_data.data.dtype == SampleArray.dtype and s.sample_data.size == 3
+
+
+def test_spectrum_points(random_samples):
     from wwb_scanner.scan_objects import Spectrum
-
-    rs = 2.048e6
-    fc = 600e6
-
+    freqs, p = _power(random_samples, rs=2.048e6, fc=600e6)
     spectrum = Spectrum()
-    freqs, sig, ff = random_samples(rs=rs, fc=fc)
-
-    for freq, val in zip(freqs, ff):
-        spectrum.add_sample(frequency=freq, iq=val)
-
+    spectrum.add_sample_set(frequency=freqs, magnitude=p)
     assert np.array_equal(spectrum.sample_data['frequency'], freqs)
-    assert np.array_equal(spectrum.sample_data['iq'], ff)
-    assert np.array_equal(spectrum.sample_data['magnitude'], np.abs(ff))
-    assert np.array_equal(spectrum.sample_data['dbFS'], 10 * np.log10(np.abs(ff)))
+    assert np.array_equal(spectrum.sample_data['magnitude'], p)
+    assert np.array_equal(spectrum.sample_data['dbFS'], 10 * np.log10(p))
+    assert not hasattr(spectrum, 'samples')
+
 
 def test_add_sample_set(random_samples):
+    """Overlapping tiles: shared points are averaged as linear power."""
     from wwb_scanner.scan_objects import Spectrum
-    from wwb_scanner.scan_objects import SampleArray
 
-    rs = 2.000e6
-
-    def build_data(fc):
-        freqs, sig, Pxx = random_samples(n=256, rs=rs, fc=fc)
-
-        return freqs, Pxx
-
-    def build_struct_data(freqs, ff):
-        data = np.zeros(freqs.size, dtype=SampleArray.dtype)
-        data['frequency'] = freqs
-        data['iq'] = ff
-        data['magnitude'] = np.abs(ff)
-        data['dbFS'] = 10 * np.log10(np.abs(ff))
-        return data
-
-    def get_overlap_arrays(data1, data2):
-        freqs1 = data1['frequency']
-        freqs2 = data2['frequency']
-        overlap_data1 = data1[np.flatnonzero(np.isin(freqs1, freqs2))]
-        overlap_data2 = data2[np.flatnonzero(np.isin(freqs2, freqs1))]
-        avg_data = np.zeros(overlap_data1.size, dtype=overlap_data1.dtype)
-        avg_data['frequency'] = overlap_data1['frequency']
-        for key in ['iq', 'magnitude']:
-            avg_data[key] = np.mean([overlap_data1[key], overlap_data2[key]], axis=0)
-        # overlapping points are averaged as linear power, dB is derived from it
-        avg_data['dbFS'] = 10 * np.log10(avg_data['magnitude'])
-        non_overlap_data2 = data2[np.flatnonzero(np.isin(freqs2, freqs1, invert=True))]
-        assert np.array_equal(overlap_data1['frequency'], overlap_data2['frequency'])
-
-        return avg_data, non_overlap_data2
-
-    fc = 600e6
+    def build(fc):
+        return _power(random_samples, n=256, rs=2.000e6, fc=fc)
 
     spectrum = Spectrum()
-
-    freqs, ff = build_data(fc)
-    data1 = build_struct_data(freqs, ff)
-
-    spectrum.add_sample_set(frequency=freqs, iq=ff, center_frequency=fc, force_lower_freq=True)
-
-    assert np.array_equal(spectrum.sample_data['frequency'], freqs)
-    assert np.array_equal(spectrum.sample_data['iq'], ff)
-    assert np.array_equal(spectrum.sample_data['magnitude'], np.abs(ff))
-    assert np.array_equal(spectrum.sample_data['dbFS'], 10 * np.log10(np.abs(ff)))
-
-    fc += 1e6
-
-    freqs2, ff2 = build_data(fc)
-    assert np.any(np.isin(freqs, freqs2))
-
-    print('in1d: ', np.nonzero(np.isin(spectrum.sample_data['frequency'], freqs2)))
-    print('spectrum size: ', spectrum.sample_data['frequency'].size)
-
-    spectrum.add_sample_set(frequency=freqs2, iq=ff2, center_frequency=fc, force_lower_freq=True)
-    print('spectrum size: ', spectrum.sample_data['frequency'].size)
-
-    assert np.unique(spectrum.sample_data['frequency']).size == spectrum.sample_data['frequency'].size
-
-    data2 = build_struct_data(freqs2, ff2)
-    avg_data, non_overlap_data2 = get_overlap_arrays(data1, data2)
-    assert data2.size == avg_data.size + non_overlap_data2.size
-    assert spectrum.sample_data.size == data1.size + non_overlap_data2.size
-
-    for freq in freqs2:
-        mask = np.isin([freq], avg_data['frequency'])
-        if np.any(mask):
-            val = avg_data[np.searchsorted(avg_data['frequency'], freq)]
-        else:
-            val = non_overlap_data2[np.searchsorted(non_overlap_data2['frequency'], freq)]
-        sample = spectrum.samples[freq]
-        ix = sample.spectrum_index
-        iq = spectrum.sample_data['iq'][ix]
-        m = spectrum.sample_data['magnitude'][ix]
-        dB = spectrum.sample_data['dbFS'][ix]
-        assert iq == val['iq'] == sample.iq
-        assert m == val['magnitude'] == sample.magnitude
-        assert dB == val['dbFS'] == sample.dbFS
-
-
-    fc = 800e6
-    freqs3, ff3 = build_data(fc)
-    assert not np.any(np.isin(spectrum.sample_data['frequency'], freqs3))
-
-    spectrum.add_sample_set(frequency=freqs3, iq=ff3, center_frequency=fc, force_lower_freq=True)
-    print('spectrum size: ', spectrum.sample_data['frequency'].size)
-
-    assert np.unique(spectrum.sample_data['frequency']).size == spectrum.sample_data['frequency'].size
-    assert spectrum.sample_data['frequency'].size == spectrum.sample_data['iq'].size
-    assert spectrum.sample_data['frequency'].size == spectrum.sample_data['magnitude'].size
-
-    data3 = build_struct_data(freqs3, ff3)
-    avg_data2, non_overlap_data3 = get_overlap_arrays(data2, data3)
-    assert data3.size == avg_data2.size + non_overlap_data3.size
-    assert spectrum.sample_data.size == data1.size + non_overlap_data2.size + non_overlap_data3.size
-
-    for freq in freqs3:
-        mask = np.isin([freq], avg_data2['frequency'])
-        if np.any(mask):
-            val = avg_data2[np.searchsorted(avg_data2['frequency'], freq)]
-        else:
-            val = non_overlap_data3[np.searchsorted(non_overlap_data3['frequency'], freq)]
-        sample = spectrum.samples[freq]
-        ix = sample.spectrum_index
-        iq = spectrum.sample_data['iq'][ix]
-        m = spectrum.sample_data['magnitude'][ix]
-        dB = spectrum.sample_data['dbFS'][ix]
-        assert iq == val['iq'] == sample.iq
-        assert m == val['magnitude'] == sample.magnitude
-        assert dB == val['dbFS'] == sample.dbFS
+    f1, p1 = build(600e6)
+    spectrum.add_sample_set(frequency=f1, magnitude=p1, center_frequency=600e6, force_lower_freq=True)
+    f2, p2 = build(601e6)
+    assert np.any(np.isin(f1, f2))
+    spectrum.add_sample_set(frequency=f2, magnitude=p2, center_frequency=601e6, force_lower_freq=True)
+    sd = spectrum.sample_data
+    assert np.unique(sd['frequency']).size == sd['frequency'].size
+    assert sd.size == np.union1d(f1, f2).size
+    for f in np.intersect1d(f1, f2):
+        i = np.searchsorted(sd['frequency'], f)
+        want = (p1[np.searchsorted(f1, f)] + p2[np.searchsorted(f2, f)]) / 2.
+        assert np.isclose(sd['magnitude'][i], want)
+        assert np.isclose(sd['dbFS'][i], 10 * np.log10(want))
+    for f in np.setdiff1d(f2, f1):
+        i = np.searchsorted(sd['frequency'], f)
+        assert sd['magnitude'][i] == p2[np.searchsorted(f2, f)]

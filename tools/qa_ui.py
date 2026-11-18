@@ -63,7 +63,11 @@ if not REAL:
     fake_mod.RtlSdr = UIFakeRtlSdr
     sys.modules['rtlsdr'] = fake_mod
 
-from wwb_scanner.ui.pyside import qt       # noqa: E402  (V21.4: PySide2 or PySide6)
+# V22.0: everything the window writes (history, logs, settings.ini) goes
+# into the temporary folder, also on Windows (where HOME is not the home)
+from wwb_scanner import paths              # noqa: E402
+paths.set_data_dir(TMP)
+from wwb_scanner.ui.pyside import qt       # noqa: E402
 from wwb_scanner.ui.pyside.qt import QtCore, QtQml, QApplication  # noqa: E402
 
 from wwb_scanner.ui.pyside import main as ui_main   # noqa: E402
@@ -137,13 +141,17 @@ def main():
     app.setOrganizationName('rtlsdr-wwb-scanner-qa')
     app.setApplicationName('wwb_scanner')
     QtCore.qInstallMessageHandler(handler)
+    # V22.0: settings in an INI file in the (temporary) data folder, as the
+    # window does (main.setup_settings)
+    settings_path = ui_main.setup_settings('rtlsdr-wwb-scanner-qa', 'wwb_scanner')
+    print('settings file: %s' % settings_path, flush=True)
     # V20.8 (U29): are these the settings of a first start?
-    fresh = not QtCore.QSettings('rtlsdr-wwb-scanner-qa', 'wwb_scanner').contains('Scan Config/windowSize')
+    fresh = not QtCore.QSettings().contains('Scan Config/windowSize')
     qml_dir = portable_qml_copy()
     engine = QtQml.QQmlApplicationEngine()
     engine.setBaseUrl(str(qml_dir))
     engine.addImportPath(str(qml_dir))
-    engine.addImportPath(qt.compat_qml_dir(qml_dir))      # V21.4: WwbCompat for Qt 5 / Qt 6
+    engine.addImportPath(qt.compat_qml_dir(qml_dir))      # WwbCompat module
     print('Qt: %s' % qt.version_text(), flush=True)
     ui_main.register_qml_types()
     t0 = time.time()

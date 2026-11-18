@@ -1,4 +1,3 @@
-import sys
 import base64
 import io
 import json
@@ -6,9 +5,34 @@ import pickle
 
 import numpy as np
 
-PY3 = sys.version_info.major >= 3
+# V22.0: the JSON encoders and decoders of the program are registered here
+# (was the package json-object-factory 0.0.2 of 2016). register() takes a
+# class or object with encode(o) -> dict or None and decode(d) -> object or d,
+# like before, so the files written by earlier versions read the same.
+_CODECS = []
 
-import jsonfactory
+
+def register(obj):
+    inst = obj() if isinstance(obj, type) else obj
+    _CODECS.append(inst)
+    return obj
+
+
+class Encoder(json.JSONEncoder):
+    def default(self, o):
+        for c in _CODECS:
+            r = c.encode(o)
+            if r is not None:
+                return r
+        return super(Encoder, self).default(o)
+
+
+def obj_hook(d):
+    for c in _CODECS:
+        d = c.decode(d)
+        if not isinstance(d, dict):
+            return d
+    return d
 
 ## From http://stackoverflow.com/questions/27909658/
 ##
@@ -43,12 +67,10 @@ class _SafeUnpickler(pickle.Unpickler):
 
 
 def safe_array_loads(data):
-    if PY3:
-        return _SafeUnpickler(io.BytesIO(data), encoding='bytes').load()
-    return _SafeUnpickler(io.BytesIO(data)).load()
+    return _SafeUnpickler(io.BytesIO(data), encoding='bytes').load()
 
 
-@jsonfactory.register
+@register
 class NumpyEncoder(object):
     def encode(self, obj):
         if isinstance(obj, np.ndarray):
@@ -67,21 +89,21 @@ class NumpyEncoder(object):
             return np.load(io.BytesIO(data), allow_pickle=False)
         if '__ndarray__' in d:
             data = base64.b64decode(d['__ndarray__'])
-            if PY3 and not isinstance(data, bytes):
-                data = bytes(data, 'UTF-8')
             return safe_array_loads(data)
         return d
 
 def dumps(obj, **kwargs):
-    return jsonfactory.dumps(obj, **kwargs)
+    kwargs.setdefault('cls', Encoder)
+    return json.dumps(obj, **kwargs)
 
 def loads(s, **kwargs):
-    return jsonfactory.loads(s, **kwargs)
+    kwargs.setdefault('object_hook', obj_hook)
+    return json.loads(s, **kwargs)
 
 def dump(*args, **kwargs):
-    kwargs.setdefault('cls', jsonfactory.Encoder)
+    kwargs.setdefault('cls', Encoder)
     return json.dump(*args, **kwargs)
 
 def load(*args, **kwargs):
-    kwargs.setdefault('object_hook', jsonfactory.obj_hook)
+    kwargs.setdefault('object_hook', obj_hook)
     return json.load(*args, **kwargs)

@@ -454,7 +454,9 @@ CALIBRATION_RANGE_MHZ = (31.0, 1766.0)
 
 
 def calibration_dir():
-    return os.path.join(os.path.expanduser('~'), 'wwb_scanner_data', 'calibration')
+    # V22.0: the data folder is set in one place (wwb_scanner/paths.py)
+    from wwb_scanner import paths
+    return paths.calibration_dir()
 
 
 def profile_path(gain, sample_rate):

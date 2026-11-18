@@ -9,8 +9,7 @@ adds that folder (and the folder of the environment itself) when it holds
 the DLL. It is called by ``wwb_scanner/__init__.py``, before anything
 imports ``rtlsdr``.
 
-Nothing happens on other systems, on Python 3.7 (the user's installation
-loads ``librtlsdr.dll`` through PATH as before) or when no DLL is there.
+Nothing happens on other systems or when no DLL is there.
 """
 import os
 import sys
@@ -45,7 +44,7 @@ def prepare():
     if any(p == d for p, _ in _added):
         return d
     try:
-        _added.append((d, os.add_dll_directory(d)))   # novm (guarded above)
+        _added.append((d, os.add_dll_directory(d)))
     except OSError:
         return None
     return d

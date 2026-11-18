@@ -1,5 +1,5 @@
-// V21.4: file dialog with one API for Qt 5 (compat/qt5) and Qt 6 (this file).
-// See compat/qt5/WwbCompat/WwbFileDialog.qml for the properties.
+// V21.4: file dialog with the API the rest of the QML uses (V22.0: Qt 6 only):
+// saveMode, folder, fileUrl, filterText (text of the chosen name filter).
 import QtQuick
 import QtCore
 import QtQuick.Dialogs as D

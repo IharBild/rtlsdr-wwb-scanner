@@ -3,7 +3,7 @@ import time
 import threading
 import numpy as np
 from scipy.signal.windows import __all__ as WINDOW_TYPES
-from scipy.signal import get_window, hilbert
+from scipy.signal import get_window
 # V21.3.1: own Welch (one batched FFT); scipy 1.16+ welch loops in Python
 from wwb_scanner.scanner import psd as _psd
 
@@ -49,8 +49,6 @@ def make_window(name, size):
 
 NPERSEG = 128
 
-# Read every tile with one blocking call (True) or with the old async reader (False)
-USE_SYNC_READ = True
 # Samples thrown away after retuning (about 7 ms at 2.4 MS/s)
 NUM_SAMPLES_DISCARDED = 16384
 
@@ -59,6 +57,17 @@ NUM_SAMPLES_DISCARDED = 16384
 DEFAULT_TILE_KEEP_RATIO = 0.39
 # Bins closer than this to the centre are dropped (RTL DC spike), in Hz.
 DEFAULT_TILE_CENTER_GAP_HZ = 30000.
+
+
+def tile_keep(sampling_config):
+    """(keep ratio, centre gap Hz) of the tiles: the settings, or the
+    defaults above when they are not set (V22.0: one place for both the
+    tile step and the bins kept)."""
+    get = getattr(sampling_config, 'get', None)
+    half = get('tile_keep_ratio') if get else None
+    gap = get('tile_center_gap_hz') if get else None
+    return (DEFAULT_TILE_KEEP_RATIO if half is None else float(half),
+            DEFAULT_TILE_CENTER_GAP_HZ if gap is None else float(gap))
 
 def next_2_to_pow(val):
     val -= 1
@@ -449,8 +458,8 @@ class SampleSet(JSONMixin):
     product_bins = None         # V20.1: bins found to be a product of this tile
     powers_orig = None          # V20.1: powers before the deafness was added back
     tile_t0 = None              # V20.4: when reading this tile started (TILE_BUDGET_S)
-    __slots__ = ('scanner', 'center_frequency', 'raw', 'current_sweep', 'complete',
-                 '_frequencies', 'powers', 'collection', 'process_thread', 'samples_discarded')
+    __slots__ = ('scanner', 'center_frequency', 'raw', 'complete',
+                 '_frequencies', 'powers', 'collection')
     _serialize_attrs = ('center_frequency', '_frequencies', 'powers')
     def __init__(self, **kwargs):
         for key in self.__slots__:
@@ -458,7 +467,6 @@ class SampleSet(JSONMixin):
                 key = 'frequencies'
             setattr(self, key, kwargs.get(key))
         self.complete = threading.Event()
-        self.samples_discarded = False
         if self.scanner is None and self.collection is not None:
             self.scanner = self.collection.scanner
     @property
@@ -566,10 +574,7 @@ class SampleSet(JSONMixin):
         self._tick('tuned')
         self.raw = np.zeros((sweeps_per_scan, samples_per_sweep), 'complex')
         self.powers = np.zeros((sweeps_per_scan, samples_per_sweep), 'float64')
-        if USE_SYNC_READ and hasattr(sdr, 'read_samples'):
-            self.read_samples_sync(sdr, sweeps_per_scan * samples_per_sweep)
-        else:
-            sdr.read_samples_async(self.samples_callback, num_samples=samples_per_sweep)
+        self.read_samples_sync(sdr, sweeps_per_scan * samples_per_sweep)
         self._tick('returned')
     def read_samples_sync(self, sdr, num_samples):
         """One blocking read per tile. Starting and cancelling the async
@@ -779,48 +784,6 @@ class SampleSet(JSONMixin):
             if g < g0 and g not in steps and (not steps or g < steps[-1]):
                 steps.append(g)
         return steps
-    def samples_callback(self, iq, context):
-        samples_per_sweep = self.scanner.samples_per_sweep
-        if not self.samples_discarded:
-            self.samples_discarded = True
-            return
-        current_sweep = getattr(self, 'current_sweep', None)
-        if current_sweep is None:
-            current_sweep = self.current_sweep = 0
-        if current_sweep >= self.raw.shape[0]:
-            self.on_sample_read_complete()
-            return
-        self.raw[current_sweep] = iq
-        self.clip_ratio = max(self.clip_ratio, clip_ratio(iq))
-        self.current_sweep += 1
-        if current_sweep > self.raw.shape[0]:
-            self.on_sample_read_complete()
-    def on_sample_read_complete(self):
-        sdr = self.scanner.sdr
-        if not sdr.read_async_canceling:
-            sdr.cancel_read_async()
-        self.process_samples()
-    # not used (old tile layout), kept for reference
-    def translate_freq(self, samples, freq, rs):
-        # Adapted from https://github.com/vsergeev/luaradio/blob/master/radio/blocks/signal/frequencytranslator.lua
-        if not np.iscomplexobj(samples):
-            samples = hilbert(samples)
-        omega = 2 * np.pi * (freq / rs)
-        def iter_phase():
-            p = 0
-            i = 0
-            while i < samples.shape[-1]:
-                yield p
-                p += omega
-                p -= 2 * np.pi
-                i += 1
-        phase_rot = np.fromiter(iter_phase(), dtype=np.float64)
-        phase_rot = np.unwrap(phase_rot)
-        xlator = np.zeros(phase_rot.size, dtype=samples.dtype)
-        xlator.real = np.cos(phase_rot)
-        xlator.imag = np.sin(phase_rot)
-        samples *= xlator
-        return samples
     def tile_psd(self, samples):
         """PSD of one reading of the tile, centred on fc. Returns
         (offsets_hz, Pxx, keep): all bins, and the mask of the bins used."""
@@ -925,13 +888,7 @@ class SampleSet(JSONMixin):
         self.complete.set()
     def good_bins_mask(self, offsets_hz, rs):
         """True for FFT bins that are used: not near the tile edge, not at DC."""
-        cfg = self.scanner.sampling_config
-        half = getattr(cfg, 'tile_keep_ratio', None)
-        if half is None:
-            half = DEFAULT_TILE_KEEP_RATIO
-        gap = getattr(cfg, 'tile_center_gap_hz', None)
-        if gap is None:
-            gap = DEFAULT_TILE_CENTER_GAP_HZ
+        half, gap = tile_keep(self.scanner.sampling_config)
         a = np.abs(offsets_hz)
         return (a <= half * rs) & (a > gap)
     def calc_expected_freqs(self):

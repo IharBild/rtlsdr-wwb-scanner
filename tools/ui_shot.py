@@ -4,7 +4,7 @@ import os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 os.environ.setdefault('QT_QUICK_BACKEND', 'software')
 import qa_ui                                   # portable QML copy + fake dongle
-from wwb_scanner.ui.pyside import qt          # V21.4: PySide2 or PySide6
+from wwb_scanner.ui.pyside import qt
 from wwb_scanner.ui.pyside.qt import QtCore, QtQml, QApplication
 from wwb_scanner.ui.pyside import main as ui_main
 
@@ -17,6 +17,7 @@ def main():
     app = QApplication(sys.argv[:1])
     app.setOrganizationName('rtlsdr-wwb-scanner-shot')
     app.setApplicationName('wwb_scanner')
+    ui_main.setup_settings('rtlsdr-wwb-scanner-shot', 'wwb_scanner')    # V22.0: INI in the data folder
     if hasattr(ui_main, 'apply_style'):
         ui_main.apply_style()
     qml_dir = qa_ui.portable_qml_copy()

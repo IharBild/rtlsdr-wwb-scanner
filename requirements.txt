@@ -1,6 +1,7 @@
-numpy>=1.13
-scipy
-pyrtlsdr>=0.2.6,<0.4
-tinydb>=3.13,<5
-json-object-factory
-PySide2>=5.13.1
+numpy>=1.23
+scipy>=1.9
+pyrtlsdr>=0.4
+PySide6-Essentials>=6.8,<6.12; python_version < "3.12"
+PySide6-Addons>=6.8,<6.12; python_version < "3.12"
+PySide6-Essentials>=6.8; python_version >= "3.12"
+PySide6-Addons>=6.8; python_version >= "3.12"

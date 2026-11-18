@@ -3,7 +3,8 @@ import sys
 from pathlib import Path
 
 from wwb_scanner import log_config
-log_config.setup(use_console=True, use_file=True)
+# V22.0: the log file is opened in run() (data folder known then), not on import
+log_config.setup(use_console=True, use_file=False)
 
 import logging
 logger = logging.getLogger()
@@ -36,6 +37,39 @@ def register_qml_types():
 
 QML_PATH = get_resource_filename('qml')
 
+ORG_NAME = 'rtlsdr-wwb-scanner'
+APP_NAME = 'wwb_scanner'
+
+
+def setup_settings(org=ORG_NAME, app_name=APP_NAME):
+    """V22.0 (audit 16.11, item 1): the window settings (scan and device
+    settings, presets, bands, theme, folders) in an INI file in the data
+    folder (wwb_scanner/paths.py), not in the Windows registry: they move
+    with the data folder (portable program on a USB stick, second PC) and
+    the future web interface can read them.
+
+    The first time, everything the earlier versions stored in the registry
+    (Linux: ~/.config) is copied into the file; the registry is not changed,
+    so an earlier version still finds its settings. Call after the
+    organization and application names are set and before QML is loaded.
+    Returns the path of the INI file."""
+    from wwb_scanner import paths
+    S = QtCore.QSettings
+    S.setPath(S.Format.IniFormat, S.Scope.UserScope, paths.data_dir(create=True))
+    S.setDefaultFormat(S.Format.IniFormat)
+    ini = S(S.Format.IniFormat, S.Scope.UserScope, org, app_name)
+    path = ini.fileName()
+    if not ini.allKeys():
+        native = S(S.Format.NativeFormat, S.Scope.UserScope, org, app_name)
+        keys = [k for k in native.allKeys()]
+        if keys:
+            for k in keys:
+                ini.setValue(k, native.value(k))
+            ini.sync()
+            logger.info('window settings copied from %s to %s (%d values)',
+                        native.fileName(), path, len(keys))
+    return path
+
 
 def install_error_hooks():
     """V18.1: an error nobody caught (in a button handler, a file dialog,
@@ -64,7 +98,7 @@ def on_app_quit():
     logger.info('exiting application')
 
 def get_qmsg_levelname(mode):
-    return qt.msg_level_name(mode)          # V21.4: PySide2 and PySide6
+    return qt.msg_level_name(mode)
 
 def qt_message_handler(mode, context, message):
     levelname = get_qmsg_levelname(mode)
@@ -84,18 +118,20 @@ def qt_message_handler(mode, context, message):
 def run(argv=None):
     if argv is None:
         argv = sys.argv
+    log_config.add_file_handler()
     logger.info('starting application (%s)', qt.version_text())
     app = QApplication(argv)
     install_error_hooks()
     apply_style()
-    app.setOrganizationName('rtlsdr-wwb-scanner')
-    app.setApplicationName('wwb_scanner')
+    app.setOrganizationName(ORG_NAME)
+    app.setApplicationName(APP_NAME)
+    logger.info('window settings: %s', setup_settings())
     app.aboutToQuit.connect(on_app_quit)
     QtCore.qInstallMessageHandler(qt_message_handler)
     engine = QtQml.QQmlApplicationEngine()
     engine.setBaseUrl(str(QML_PATH))
     engine.addImportPath(str(QML_PATH))
-    engine.addImportPath(qt.compat_qml_dir(QML_PATH))     # V21.4: WwbDialogs for Qt 5 / Qt 6
+    engine.addImportPath(qt.compat_qml_dir(QML_PATH))     # WwbCompat module
     register_qml_types()
     qml_main = QML_PATH / 'main.qml'
     engine.load(str(qml_main))

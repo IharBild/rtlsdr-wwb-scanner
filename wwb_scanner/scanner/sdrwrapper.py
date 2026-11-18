@@ -1,13 +1,21 @@
 import threading
 import traceback
 
-from rtlsdr import RtlSdr
-
 from wwb_scanner import scan_dll
-try:
-    from rtlsdr import RtlSdrTcpClient
-except ImportError:
-    RtlSdrTcpClient = None
+
+# V22.0: pyrtlsdr (and with it the dongle library) is loaded when a dongle
+# is opened, not when the scanner is imported: the core, its tests and the
+# file tools work on a computer without the library. Tests put a simulated
+# dongle class here.
+RtlSdr = None
+
+
+def rtlsdr_class():
+    global RtlSdr
+    if RtlSdr is None:
+        from rtlsdr import RtlSdr as _RtlSdr
+        RtlSdr = _RtlSdr
+    return RtlSdr
 
 class SdrWrapper(object):
     def __init__(self, **kwargs):
@@ -54,10 +62,7 @@ class SdrWrapper(object):
                 else:
                     self.device_open.wait()
             if self.sdr is None:
-                if self.scanner.device_config.is_remote:
-                    self.sdr = self._open_sdr_remote()
-                else:
-                    self.sdr = self._open_sdr_local()
+                self.sdr = self._open_sdr_local()
                 if self.sdr is not None:
                     # V18.1 (audit 1.1): gain table read here, in the scan thread
                     learn = getattr(self.scanner, 'learn_gains', None)
@@ -69,7 +74,7 @@ class SdrWrapper(object):
     def _open_sdr_local(self):
         serial_number = self.scanner.device_config.serial_number
         try:
-            sdr = RtlSdr(serial_number=serial_number)
+            sdr = rtlsdr_class()(serial_number=serial_number)
         except IOError:
             sdr = None
         if sdr is not None:
@@ -77,17 +82,6 @@ class SdrWrapper(object):
                 scan_dll.configure(sdr)
             except Exception:
                 traceback.print_exc()
-        return sdr
-    def _open_sdr_remote(self):
-        try:
-            if RtlSdrTcpClient is None:
-                raise Exception('Tcp client not available')
-            sdr = RtlSdrTcpClient(hostname=self.scanner.device_config.remote_hostname,
-                                  port=self.scanner.device_config.remote_port)
-            sdr.get_sample_rate()
-        except:
-            traceback.print_exc()
-            sdr = None
         return sdr
     def close_sdr(self):
         with self.device_lock:

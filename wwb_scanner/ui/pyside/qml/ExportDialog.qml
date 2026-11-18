@@ -43,8 +43,7 @@ WwbFileDialog {
     }
 
     // Called on OK. Prints what it does to the console (lines "qml: export ...").
-    // Uses only save_to_file(url): the two-argument slot of V11 is not
-    // visible from QML on the user's PySide2 (V11.1 console, 04.11.2026).
+    // Uses only save_to_file(url) (the format travels in the address).
     function doExport(url, filt) {
         var f = (filt === undefined || filt === null) ? '' : String(filt);
         console.log('export dialog: file ' + url + ', format "' + f + '"');

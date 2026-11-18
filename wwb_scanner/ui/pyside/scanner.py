@@ -23,8 +23,12 @@ from wwb_scanner.ui.pyside.utils import GenericQObject, QObjectThread
 #   gain 33.8 dB: at 0 dB the dongle is 30-37 dB less sensitive in 470-700 MHz
 #     (default_gain_profile.json). "Suggest gain" picks the step for a range.
 # The same values stand in qml/ScanConfig.qml and qml/DeviceConfigPopup.qml.
-FACTORY = dict(sampleRate=2400., gain=33.8, windowSize=96, samplesPerSweep=2048,
-               sweepsPerScan=40, sweepOverlapRatio=0.65)
+# V22.0: taken from the core (scanner/config.py TESTED), the one place of these values
+FACTORY = dict(sampleRate=config.TESTED['sample_rate'] / 1e3, gain=config.TESTED['gain'],
+               windowSize=config.TESTED['window_size'],
+               samplesPerSweep=config.TESTED['samples_per_sweep'],
+               sweepsPerScan=config.TESTED['sweeps_per_scan'],
+               sweepOverlapRatio=config.TESTED['sweep_overlap_ratio'])
 # what a fresh installation had up to V20.7.3 (replaced once, only when all six
 # values are still exactly these - see main.qml)
 FACTORY_OLD = dict(sampleRate=2048., gain=0., windowSize=128, samplesPerSweep=8192,
@@ -55,17 +59,18 @@ class ScanConfigData(GenericQObject):
         self._samplesPerSweep = FACTORY['samplesPerSweep']
         self._sweepsPerScan = FACTORY['sweepsPerScan']
         self._sweepOverlapRatio = FACTORY['sweepOverlapRatio']
-        self._windowType = 'hann'
+        self._windowType = config.TESTED['window_type']
         self._windowSize = FACTORY['windowSize']
         # V21.0: Smoothing and Scaling are gone (audit A4): both changed the
         # levels after the scan was saved, so the graph and the exported
         # files differed from the history. Their saved settings are ignored.
-        self._cleanRipple = True
-        self._cleanSpurs = True
-        self._cleanImages = False     # V20.9: images of strong signals are marked, not hidden
-        self._cleanFloor = True
-        self._autoGain = True
-        self._verifyPeaks = True      # V21.2: second-gain check of peaks next to strong carriers
+        # V22.0: the switches come from the core (scanner/config.py TESTED)
+        self._cleanRipple = config.TESTED['clean_ripple']
+        self._cleanSpurs = config.TESTED['clean_spurs']
+        self._cleanImages = config.TESTED['clean_images']   # V20.9: marked, not hidden
+        self._cleanFloor = config.TESTED['clean_floor']
+        self._autoGain = config.TESTED['auto_gain']
+        self._verifyPeaks = config.TESTED['verify_peaks']   # V21.2: second-gain check
         self._scanRanges = ''
         super().__init__(*args)
 

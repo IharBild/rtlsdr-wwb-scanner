@@ -1,16 +1,43 @@
-from pathlib import Path
+"""Logging of the program.
+
+V22.0: one log file, ``logs/wwb_scanner.log`` in the data folder
+(wwb_scanner/paths.py). Before V22.0 the window wrote two logs: one in
+``~/.config/rtlsdr-wwb-scanner/logs`` (without an encoding: cp1251 on the
+user's Windows) and one in the home folder.
+"""
 import logging
 import logging.handlers
 
-USER_HOME = Path.home()
-LOG_DIR = USER_HOME / '.config' / 'rtlsdr-wwb-scanner' / 'logs'
-LOG_BASE_FILENAME = LOG_DIR / 'wwb_scanner.log'
+from wwb_scanner import paths
+
+_state = {'file_handler': None, 'path': None}
+
+
+def add_file_handler(level=logging.INFO):
+    """The log file handler on the root logger (once per process).
+    Returns the path of the file, or None when it can not be opened."""
+    if _state['file_handler'] is not None:
+        return _state['path']
+    try:
+        path = paths.log_file(create_dir=True)
+        fh = logging.handlers.RotatingFileHandler(path, maxBytes=2000000, backupCount=5,
+                                                  encoding='utf-8')
+    except (IOError, OSError):
+        return None
+    fh.setLevel(level)
+    fh.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(name)s: %(message)s'))
+    logging.getLogger().addHandler(fh)
+    _state['file_handler'] = fh
+    _state['path'] = path
+    return path
+
+
+def log_path():
+    return _state['path']
+
 
 def setup(use_console=True, use_file=False):
     handlers = []
-    if use_file and not LOG_DIR.exists():     # V18.1 (audit 3.6): not at import time
-        LOG_DIR.mkdir(parents=True)
-
     if use_console:
         term_handler = logging.StreamHandler()
         term_handler.setLevel(logging.DEBUG)
@@ -19,20 +46,7 @@ def setup(use_console=True, use_file=False):
             style='{',
         ))
         handlers.append(term_handler)
-
+    logging.basicConfig(level=logging.DEBUG, handlers=handlers)
     if use_file:
-        file_handler = logging.handlers.TimedRotatingFileHandler(
-            LOG_BASE_FILENAME, when='d', interval=1, backupCount=7,
-        )
-        file_handler.setLevel(logging.DEBUG)
-        file_handler.setFormatter(logging.Formatter(
-            '{asctime} {name:40} [{levelname:^10}] : {message}',
-            style='{',
-        ))
-        handlers.append(file_handler)
-
-    logging.basicConfig(
-        level=logging.DEBUG,
-        handlers=handlers,
-    )
+        add_file_handler()
     logging.captureWarnings(True)

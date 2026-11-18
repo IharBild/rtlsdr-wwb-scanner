@@ -1,14 +1,17 @@
 import numpy as np
-from scipy.interpolate import CubicSpline
-import jsonfactory
 
 from wwb_scanner.core import JSONMixin
-from wwb_scanner.utils import dbmath
+from wwb_scanner.utils import dbmath, numpyjson
 
 class SampleArray(JSONMixin):
+    """Points of a scan, sorted by frequency (MHz).
+
+    V22.0: three fields per point (24 bytes). The field ``iq`` of the
+    original project (16 bytes, always zero: a scan stores power, not IQ)
+    is gone; arrays saved by earlier versions are converted when read.
+    ``magnitude`` is the linear power, ``dbFS`` the same in dB."""
     dtype = np.dtype([
         ('frequency', np.float64),
-        ('iq', np.complex128),
         ('magnitude', np.float64),
         ('dbFS', np.float64)
     ])
@@ -16,9 +19,31 @@ class SampleArray(JSONMixin):
         self.keep_sorted = keep_sorted
         if data is None:
             data = np.empty([0], dtype=self.dtype)
-        self.data = data
+        self.data = self.convert(data)
         if keep_sorted:
             self.data = np.sort(self.data, order='frequency')
+    @classmethod
+    def convert(cls, data):
+        """``data`` with this dtype (V22.0: arrays of earlier versions have
+        an extra ``iq`` field)."""
+        data = np.asarray(data)
+        if data.dtype == cls.dtype:
+            return data
+        names = data.dtype.names or ()
+        if 'frequency' not in names:
+            raise ValueError('not scan points: fields %r' % (names,))
+        data = data.reshape(-1)
+        out = np.zeros(data.size, dtype=cls.dtype)
+        out['frequency'] = data['frequency']
+        if 'magnitude' in names:
+            out['magnitude'] = data['magnitude']
+        if 'dbFS' in names:
+            out['dbFS'] = data['dbFS']
+            if 'magnitude' not in names:
+                out['magnitude'] = dbmath.from_dB(out['dbFS'])
+        elif 'magnitude' in names:
+            out['dbFS'] = dbmath.to_dB(out['magnitude'])
+        return out
     @classmethod
     def create(cls, keep_sorted=True, **kwargs):
         data = kwargs.get('data')
@@ -43,15 +68,9 @@ class SampleArray(JSONMixin):
                 val = np.array([val])
             data[key] = val
 
-        if data is None:
-            return
-
-        iq = kwargs.get('iq')
         mag = kwargs.get('magnitude')
         dbFS = kwargs.get('dbFS')
 
-        if iq is not None and mag is None:
-            mag = data['magnitude'] = np.abs(iq)
         if dbFS is not None and mag is None:
             mag = data['magnitude'] = dbmath.from_dB(dbFS)
         if mag is not None and dbFS is None:
@@ -82,13 +101,10 @@ class SampleArray(JSONMixin):
         return self.data.shape
     def _check_obj_type(self, other):
         if isinstance(other, SampleArray):
-            data = other.data
-        else:
-            if isinstance(other, np.ndarray) and other.dtype == self.dtype:
-                data = other
-            else:
-                raise Exception('Cannot extend this object type: {}'.format(other))
-        return data
+            return other.data
+        if isinstance(other, np.ndarray) and other.dtype.names and 'frequency' in other.dtype.names:
+            return self.convert(other)
+        raise Exception('Cannot extend this object type: {}'.format(other))
     def append(self, other):
         if self.keep_sorted:
             self.insert_sorted(other)
@@ -152,10 +168,7 @@ class SampleArray(JSONMixin):
         merged = np.bincount(inverse, minlength=n) > 1
         out = everything[first]
         mag = np.bincount(inverse, weights=weights * everything['magnitude'], minlength=n) / wsum
-        iq_re = np.bincount(inverse, weights=weights * everything['iq'].real, minlength=n) / wsum
-        iq_im = np.bincount(inverse, weights=weights * everything['iq'].imag, minlength=n) / wsum
         out['magnitude'][merged] = mag[merged]
-        out['iq'][merged] = (iq_re + 1j * iq_im)[merged]
         out['dbFS'][merged] = dbmath.to_dB(mag[merged])
         self.data = out
         self._counts = wsum
@@ -178,46 +191,6 @@ class SampleArray(JSONMixin):
         counts = self._get_counts()
         self.data = self.data[ix]
         self._counts = counts[ix]
-    def smooth(self, window_size):
-        x = self.magnitude
-        # V18.1 (audit 1.4): a window under 4 points is all zeros (NaN), a
-        # window longer than the data gives a wrong size
-        window_size = int(window_size)
-        if window_size < 4 or window_size > x.size:
-            return False
-        w = np.hanning(window_size)
-
-        s = np.r_[x[window_size-1:0:-1], x, x[-2:-window_size-1:-1]]
-
-        y = np.convolve(w/w.sum(), s, mode='valid')
-        m = y[(window_size//2-1):-(window_size//2)]
-
-        if m.size != x.size:
-            raise Exception('Smooth result size {} != data size {}'.format(m.size, x.size))
-
-        self.data['magnitude'] = m
-        self.data['dbFS'] = dbmath.to_dB(m)
-        return True
-    def interpolate(self, spacing=0.025):
-        # not used by the window (the call is switched off in ui/pyside/scanner.py)
-        fmin = np.ceil(self.frequency.min())
-        fmax = np.floor(self.frequency.max())
-
-        x = self.frequency
-        y = self.magnitude
-        cs = CubicSpline(x, y)
-        xs = np.arange(fmin, fmax+spacing, spacing)
-        from decimal import Decimal
-        n_dec = max(0, -Decimal(str(spacing)).normalize().as_tuple().exponent)   # V18.1 (audit 2.5)
-        xs = np.around(xs, n_dec)
-
-        ys = cs(xs)
-        data = np.zeros(xs.size, dtype=self.dtype)
-        data['frequency'] = xs
-        data['magnitude'] = ys
-        data['dbFS'] = dbmath.to_dB(ys)
-        self.data = data
-
     def _serialize(self):
         return {'data':self.data, 'keep_sorted':self.keep_sorted}
     def __repr__(self):
@@ -225,7 +198,7 @@ class SampleArray(JSONMixin):
     def __str__(self):
         return str(self.data)
 
-@jsonfactory.register
+@numpyjson.register
 class JSONEncoder(object):
     def encode(self, o):
         if isinstance(o, SampleArray):

@@ -365,8 +365,12 @@ def make_config(start, end, fs=2.4e6, window=96, sweeps=40, per_sweep=2048,
             'verify_peaks': verify_peaks,     # V21.2
         },
     }
+    # V22.0: the core default is the clean scan (scanner/config.py TESTED);
+    # simulator scans stay exactly as measured unless a test asks for cleaning
+    conf['processing'] = {'clean_ripple': False, 'clean_spurs': False,
+                          'clean_images': False, 'clean_floor': False}
     if clean:
-        conf['processing'] = dict(clean)
+        conf['processing'].update(dict(clean))
     if ranges:
         conf['scan_ranges'] = [list(r) for r in ranges]     # V18: several ranges
     if gain_calibration:

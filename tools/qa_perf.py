@@ -109,7 +109,7 @@ def p5_memory():
 
 
 def p6_finalisation(sc):
-    from wwb_scanner.ui.pyside import graph  # needs PySide2 or PySide6 (V21.4)
+    from wwb_scanner.ui.pyside import graph  # needs PySide6
     t0 = time.time(); sc.spectrum.crop(0, 1766); t1 = time.time()
     sc.spectrum.eid = None
     sc.spectrum.save_to_dbstore(); t2 = time.time()
@@ -158,6 +158,6 @@ if __name__ == '__main__':
     try:
         p6_finalisation(sc)
     except ImportError:
-        print('P6/P7 need PySide2 or PySide6')
+        print('P6/P7 need PySide6')
     p10_timing_overhead()
     p11_settling()

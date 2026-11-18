@@ -32,7 +32,7 @@ MARKERS = [
     ('V10', 'scanner/sample_processing.py', 'run_with_timeout'),
     ('V11.2', 'ui/pyside/qml/ExportDialog.qml', 'withExtension'),
     ('V12', 'file_handlers/exporters.py', 'class WWB3Exporter'),
-    ('V13', 'utils/dbstore.py', 'TINYDB4'),
+    ('V13', 'utils/dbstore.py', 'def doc_id'),        # V22.0: TINYDB4 is gone, the helpers stay
     ('V14', 'utils/dbstore.py', 'savez_compressed'),
     ('V15', 'ui/pyside/qml/Graph.qml', 'niceStep'),
     ('V16', 'ui/pyside/status.py', 'class StatusHub'),
@@ -66,6 +66,7 @@ MARKERS = [
     ('V21.3.1', 'scanner/psd.py', 'def welch'),
     ('V21.4', 'ui/pyside/qt.py', 'def compat_qml_dir'),
     ('V21.4.1', 'scanner/sdrwrapper.py', 'def report_i2c_at_close'),
+    ('V22.0', 'paths.py', 'def set_data_dir'),
 ]
 
 

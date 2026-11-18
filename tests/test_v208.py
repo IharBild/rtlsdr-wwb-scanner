@@ -210,13 +210,18 @@ def test_factory_settings_in_qml_are_the_same():
     def qml(name):
         with io.open(os.path.join(QML, name), encoding='utf-8') as fh:
             return fh.read()
+    # V22.0: ScanConfig.qml has no own values any more (ScanConfigData takes
+    # them from the core); the two left in DeviceConfigPopup.qml must equal
+    # scanner/config.py TESTED
+    from wwb_scanner.scanner.config import TESTED
     sc = qml('ScanConfig.qml')
     head = sc[sc.index('ScanConfigData {'):sc.index('onConfigUpdate')]
-    got = dict(re.findall(r'^\s*(samplesPerSweep|sweepsPerScan|sweepOverlapRatio|windowSize):\s*([0-9.]+)', head, re.M))
-    assert got == {'samplesPerSweep': '2048', 'sweepsPerScan': '40', 'sweepOverlapRatio': '0.65', 'windowSize': '96'}
+    assert not re.findall(r'^\s*(samplesPerSweep|sweepsPerScan|sweepOverlapRatio|windowSize|windowType|'
+                          r'clean\w+|autoGain|verifyPeaks):', head, re.M), head
     dc = qml('DeviceConfigPopup.qml')
-    assert re.search(r'property real sampleRate:\s*2400\b', dc)
-    assert re.search(r'property real gain:\s*33\.8\b', dc)
+    rate = float(re.search(r'property real sampleRate:\s*([0-9.]+)', dc).group(1))
+    gain = float(re.search(r'property real gain:\s*([0-9.]+)', dc).group(1))
+    assert rate == TESTED['sample_rate'] / 1e3 and gain == TESTED['gain']
 
 
 def test_tile_step_of_the_factory_settings(monkeypatch, tmpdir):

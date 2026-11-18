@@ -458,8 +458,7 @@ class SpectrumGraphData(QtQuick.QQuickItem):
     @Slot(str)
     def set_export_format(self, fmt):
         """V19: layout of the next .csv export: 'wsm' (Sennheiser WSM) or
-        'khz' (Shure WWB). One-argument slot: a two-argument slot is not
-        visible from QML on the user's PySide2 (V11.1)."""
+        'khz' (Shure WWB)."""
         self._csv_format = str(fmt or '') or None
 
     @Slot(QtCore.QUrl)

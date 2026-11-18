@@ -11,12 +11,10 @@ logger = logging.getLogger(__name__)
 MAX_TUNER_FREQ_HZ = 1766000000
 
 from wwb_scanner.core import JSONMixin
-from wwb_scanner.utils.dbstore import db_store
 from wwb_scanner.scanner.sdrwrapper import SdrWrapper
 from wwb_scanner.scanner.config import ScanConfig
 from wwb_scanner.scanner.sample_processing import (
-    DEFAULT_TILE_KEEP_RATIO,
-    DEFAULT_TILE_CENTER_GAP_HZ,
+    tile_keep,
     SampleCollection,
     calc_num_samples,
     WINDOW_TYPES,
@@ -60,12 +58,18 @@ class ScannerBase(JSONMixin):
         self.stop_requested = False     # V21.1: set by request_stop()
         self._current_freq = None
         self._progress = 0.
+        # V22.0 (audit 16.11, items 1-2): no settings given -> the tested
+        # defaults of scanner/config.py. Before, the settings of the last
+        # scan were read from the history database, so the result of a scan
+        # depended on what had been scanned before.
         ckwargs = kwargs.get('config')
-        if not ckwargs:
-            ckwargs = db_store.get_scan_config()
-        if not ckwargs:
-            ckwargs = {}
-        self.config = ScanConfig(ckwargs)
+        if isinstance(ckwargs, ScanConfig):
+            self.config = ckwargs
+        else:
+            self.config = ScanConfig(ckwargs or {})
+        # V22.0: where a finished scan is saved. 'default' = the history of
+        # the program (utils/dbstore.py); None = not saved (tools, tests).
+        self.history = kwargs.get('history', 'default')
         self.device_config = self.config.device
         self.sampling_config = self.config.sampling
         if 'spectrum' in kwargs:
@@ -223,9 +227,10 @@ class ScannerBase(JSONMixin):
                 clean_note = self.apply_cleanup()
             except Exception:
                 logger.exception('clean scan failed, the scan is kept as measured')
-            print('cropped in %.1f s, saving...' % (time.time() - t0), flush=True)
-            self.save_to_dbstore()
-            print('saved, total %.1f s' % (time.time() - t0), flush=True)
+            if self.history is not None:
+                print('cropped in %.1f s, saving...' % (time.time() - t0), flush=True)
+                self.save_to_dbstore()
+                print('saved, total %.1f s' % (time.time() - t0), flush=True)
             what = self.range_text()
             coll = self.sample_collection
             if stopped_by_user and not getattr(coll, 'aborted', False):
@@ -347,7 +352,9 @@ class ScannerBase(JSONMixin):
             # V18: nothing between the ranges (tile edges reach into the gaps)
             self.spectrum.keep_ranges(segs)
     def save_to_dbstore(self):
-        self.spectrum.save_to_dbstore()
+        if self.history is None:
+            return
+        self.spectrum.save_to_dbstore(None if self.history == 'default' else self.history)
     def _serialize(self):
         d = dict(
             config=self.config._serialize(),
@@ -437,7 +444,8 @@ class Scanner(ScannerBase):
         # the centre (DC spike). The neighbour tile must cover that gap, so
         # the step may not exceed KEEP*rs - GAP (0.9 MHz at 2.4 MS/s);
         # Overlap Ratio 0.8 gave holes next to the tile centres.
-        max_step = ((DEFAULT_TILE_KEEP_RATIO * rs - DEFAULT_TILE_CENTER_GAP_HZ) // resolution) * resolution
+        keep_ratio, center_gap = tile_keep(c)
+        max_step = ((keep_ratio * rs - center_gap) // resolution) * resolution
         if step_size > max_step:
             logger.warning('Overlap Ratio %s gives holes in the scan; step limited to %.3f MHz',
                            overlap, max_step / 1e6)
@@ -543,8 +551,6 @@ class Scanner(ScannerBase):
         """V20.4: just after a USB error the dongle is "not found or busy"
         for a few seconds. Try again for up to REOPEN_WAIT_S before failing."""
         from wwb_scanner.scanner import sample_processing as sp
-        if self.device_config.is_remote:
-            return
         print('dongle not found or busy, waiting up to %.0f s...' % sp.REOPEN_WAIT_S, flush=True)
         deadline = time.monotonic() + sp.REOPEN_WAIT_S
         while self.sdr is None and time.monotonic() < deadline:
@@ -602,58 +608,12 @@ class Scanner(ScannerBase):
         self.spectrum.rebuild(tiles)
         logger.info('spectrum rebuilt from %d tiles in %.2f s', len(tiles), time.time() - t0)
 
-class ThreadedScanner(threading.Thread, Scanner):
-    def __init__(self, **kwargs):
-        threading.Thread.__init__(self)
-        Scanner.__init__(self, **kwargs)
-        self.plot = kwargs.get('plot')
-        self.run_once = kwargs.get('run_once', True)
-        self.scan_wait_timeout = kwargs.get('scan_wait_timeout', 5.)
-        self.scanning = threading.Event()
-        self.waiting = threading.Event()
-        self.stopping = threading.Event()
-        self.stopped = threading.Event()
-        self.need_update = threading.Event()
-        self.need_update_lock = threading.Lock()
-    def on_current_freq(self, value):
-        if self.plot is not None:
-            self.plot.update_plot()
-        with self.need_update_lock:
-            self.need_update.set()
-    def run(self):
-        scanning = self.scanning
-        waiting = self.waiting
-        stopping = self.stopping
-        stopped = self.stopped
-        scan_wait_timeout = self.scan_wait_timeout
-        run_once = self.run_once
-        run_scan = self.run_scan
-        while True:
-            if stopping.is_set():
-                break
-            scanning.set()
-            run_scan()
-            scanning.clear()
-            if run_once:
-                break
-            waiting.wait(scan_wait_timeout)
-        stopped.set()
-    def stop(self):
-        self.stopping.set()
-        self.waiting.set()
-        self.stopped.wait()
-
-def scan_and_plot(**kwargs):
-    # not used by the window (old command line helper)
-    scanner = Scanner(**kwargs)
-    scanner.run_scan()
-    scanner.spectrum.show_plot()
-    return scanner
-
 def scan_and_save(filename=None, frequency_format=None, **kwargs):
-    # not used by the window (command line helper)
+    """Scan and write the result to a file (.csv, .sdb2, .sdb3 or .npz);
+    not saved in the history unless history= is given."""
     if not filename:
         raise ValueError('scan_and_save: give a file name (.csv, .sdb2, .sdb3 or .npz)')
+    kwargs.setdefault('history', None)
     scanner = Scanner(**kwargs)
     scanner.run_scan()
     scanner.spectrum.export_to_file(filename=filename, frequency_format=frequency_format)

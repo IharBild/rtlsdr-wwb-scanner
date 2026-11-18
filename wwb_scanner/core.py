@@ -1,18 +1,11 @@
 import datetime
 
-import jsonfactory
-
 from wwb_scanner.utils import numpyjson as json
-
-try:
-    basestring = basestring
-except NameError:
-    basestring = str
 
 class JSONMixin(object):
     @classmethod
     def from_json(cls, data, **kwargs):
-        if isinstance(data, basestring):
+        if isinstance(data, str):
             data = json.loads(data)
         kwargs.update(data)
         kwargs['__from_json__'] = True
@@ -20,7 +13,7 @@ class JSONMixin(object):
         obj._deserialize(**kwargs)
         return obj
     def instance_from_json(self, data, **kwargs):
-        if isinstance(data, basestring):
+        if isinstance(data, str):
             data = json.loads(data)
         kwargs.update(data)
         self._deserialize(**kwargs)
@@ -32,7 +25,7 @@ class JSONMixin(object):
     def _deserialize(self, **kwargs):
         pass
 
-@jsonfactory.register
+@json.register
 class JSONEncoder(object):
     _dt_fmt = '%Y-%m-%dT%H:%M:%S.%f %z'
     def encode(self, o):

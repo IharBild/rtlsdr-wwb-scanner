@@ -1,6 +1,7 @@
 """V21.1: the small items left from the audit of 11.11.2026 and from the
 user's test series (B4, B5, C3, D2, D3, D5, E, F; the raw error text on
 unplug; the cut status line)."""
+import re
 import io
 import logging
 import os
@@ -107,7 +108,7 @@ def test_window_does_not_need_setuptools_and_the_package_has_a_version():
     cfg = os.path.join(os.path.dirname(PKG), 'setup.cfg')
     if os.path.isfile(cfg):                       # repository layout only
         text = _read(cfg)
-        assert 'version = 0.0.1' not in text and 'version = 21.' in text
+        assert 'version = 0.0.1' not in text and re.search(r'^version = 2[1-9]\.', text, re.M)
 
 
 # ----------------------------------------------------------------------- E

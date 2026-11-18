@@ -73,7 +73,7 @@ def test_io(tmpdir, random_samples):
 
     while True:
         freqs, ff = build_data(fc)
-        spectrum.add_sample_set(frequency=freqs, iq=ff)
+        spectrum.add_sample_set(frequency=freqs, magnitude=np.abs(ff))
         if spectrum.sample_data['frequency'].max() >= freq_range[1] / 1e6:
             break
         fc += step_size

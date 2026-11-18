@@ -153,12 +153,6 @@ def test_graph_and_history_hold_the_same_scan_whatever_old_settings_say():
     """)
 
 
-def test_library_methods_stay_for_scripts():
-    # the window no longer calls them; scripts that do keep working
-    from wwb_scanner.scan_objects import Spectrum
-    assert callable(Spectrum.smooth) and callable(Spectrum.scale)
-
-
 # ------------------------------------------------------------------------ A5
 
 def test_unit_is_named_in_the_window_files():

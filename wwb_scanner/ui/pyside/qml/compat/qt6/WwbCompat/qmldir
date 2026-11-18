@@ -1,4 +1,0 @@
-module WwbCompat
-WwbFileDialog 1.0 WwbFileDialog.qml
-WwbColorDialog 1.0 WwbColorDialog.qml
-WwbSettings 1.0 WwbSettings.qml

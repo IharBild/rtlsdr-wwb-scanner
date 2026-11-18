@@ -7,7 +7,7 @@
              --manifest FILE (file list of a release, default tools/manifest_V17.json),
              --out DIR, --baseline results.json (earlier run: new failures = regression)
 
-Works on the developer machine and on the user's PC (Windows, Python 3.7).
+Works on the developer machine and on the user's PC (Windows, Python 3.11+).
 Never touches the user's data: HOME / USERPROFILE point to a temporary
 folder for the whole run. Report: <out>/report.md (+ results.json, logs).
 Categories: smoke, sanity, unit, integration, functional, system,
@@ -184,7 +184,7 @@ def smoke(out):
 
 
 def have_pyside():
-    """V21.4: the window runs on PySide2 or PySide6 (wwb_scanner.ui.pyside.qt)."""
+    """V22.0: the window runs on PySide6 (wwb_scanner.ui.pyside.qt)."""
     try:
         from wwb_scanner.ui.pyside import qt  # noqa: F401
         return True
@@ -194,7 +194,7 @@ def have_pyside():
 
 def smoke_window(out):
     if not have_pyside():
-        R.add('SM5', 'SMOKE', 'SKIP', 'окно программы загружается', 'нет PySide2 / PySide6')
+        R.add('SM5', 'SMOKE', 'SKIP', 'окно программы загружается', 'нет PySide6')
         return
     env = sub_env()
     env['QA_UI_ONLY_U1'] = '1'
@@ -230,20 +230,20 @@ def sanity(args):
                                                           len(extra), extra[:4]))
     else:
         R.add('SA2', 'SANITY', 'SKIP', 'файлы совпадают с выпуском', 'нет %s' % man)
-    # Python 3.7 syntax (the user's Python)
+    # V22.0: Python 3.11 syntax (the oldest Python the package supports)
     try:
         p = subprocess.run([PY, '-c', 'import sys; from vermin import main; sys.exit(main())',
-                            '-t=3.7-', '--no-tips', '--violations', root],
+                            '-t=3.11-', '--no-tips', '--violations', root],
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=300)
         txt = p.stdout.decode('utf-8', 'replace')
         if 'No module named' in txt and 'vermin' in txt:
             raise ImportError
         viol = [l for l in txt.splitlines() if l.strip() and not l.startswith(
             ('Detecting', 'Analyzing', 'Minimum required', 'Incompatible', 'Tips'))]
-        R.add('SA3', 'SANITY', 'PASS' if p.returncode == 0 else 'FAIL', 'код совместим с Python 3.7 (vermin)',
+        R.add('SA3', 'SANITY', 'PASS' if p.returncode == 0 else 'FAIL', 'код совместим с Python 3.11 (vermin)',
               '; '.join(viol[:4]) or 'нарушений нет')
     except (ImportError, OSError, subprocess.SubprocessError):
-        R.add('SA3', 'SANITY', 'INFO', 'код совместим с Python 3.7', 'vermin не установлен; проверено компиляцией (SM1) на %s'
+        R.add('SA3', 'SANITY', 'INFO', 'код совместим с Python 3.11', 'vermin не установлен; проверено компиляцией (SM1) на %s'
               % sys.version.split()[0])
     try:
         p = subprocess.run([PY, '-m', 'pyflakes', root], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=300)
@@ -257,14 +257,20 @@ def sanity(args):
     except (ImportError, OSError, subprocess.SubprocessError):
         R.add('SA4', 'SANITY', 'SKIP', 'нет неопределённых имён', 'pyflakes не установлен')
     from wwb_scanner.scanner import config
+    # V22.0: one place of the defaults - the core (scanner/config.py TESTED);
+    # the window takes them from there and ScanConfig.qml has no own values
     pc, sc = config.ProcessingConfig(), config.SamplingConfig()
-    lib_off = not any(pc.get(k) for k in ('clean_ripple', 'clean_spurs', 'clean_floor')) and not sc.get('auto_gain')
+    t = getattr(config, 'TESTED', {})
+    lib_ok = bool(t) and all(pc.get(k) == t[k] for k in ('clean_ripple', 'clean_spurs', 'clean_floor',
+                                                         'clean_images')) \
+        and sc.get('auto_gain') == t['auto_gain'] and sc.get('window_size') == t['window_size'] \
+        and sc.get('sample_rate') == t['sample_rate']
     qml = Q.read(os.path.join(root, 'ui', 'pyside', 'qml', 'ScanConfig.qml'))
-    ui_on = all(re.search(r'\b%s: true' % k, qml) for k in ('cleanRipple', 'cleanSpurs', 'cleanFloor', 'autoGain'))
-    R.add('SA5', 'SANITY', 'PASS' if lib_off and ui_on else 'WARN', 'настройки по умолчанию V17',
-          'в библиотеке очистка/автоусиление выключены: %s; в окне включены: %s' % (lib_off, ui_on))
+    qml_own = re.findall(r'^\s*(cleanRipple|cleanSpurs|cleanFloor|autoGain|windowSize):', qml, re.M)
+    R.add('SA5', 'SANITY', 'PASS' if lib_ok and not qml_own else 'WARN', 'настройки по умолчанию (V22.0: из ядра)',
+          'ядро = проверенная конфигурация: %s; свои значения в ScanConfig.qml: %s' % (lib_ok, qml_own or 'нет'))
     deps = []
-    for mod in ('numpy', 'scipy', 'tinydb', 'PySide2', 'PySide6', 'jsonfactory'):
+    for mod in ('numpy', 'scipy', 'PySide6'):
         try:
             m = __import__(mod)
             deps.append('%s %s' % (mod, getattr(m, '__version__', '?')))
@@ -328,7 +334,7 @@ def run_pytest(out, args, cov_src):
 
 def run_ui(out, cov_src):
     if not have_pyside():
-        R.add('U', 'FUNCTIONAL', 'SKIP', 'окно программы (U1-U28)', 'нет PySide2 / PySide6')
+        R.add('U', 'FUNCTIONAL', 'SKIP', 'окно программы (U1-U41)', 'нет PySide6')
         return None
     env = sub_env()
     env.setdefault('QT_QPA_PLATFORM', 'offscreen')
@@ -640,24 +646,16 @@ def security(out):
         loc = list(spec.submodule_search_locations)[0] if spec else None
         ver = '?'
         try:
-            try:
-                from importlib.metadata import version as _v  # novm
-            except ImportError:                       # Python 3.7
-                from pkg_resources import get_distribution
-                _v = lambda n: get_distribution(n).version
+            from importlib.metadata import version as _v
             ver = _v('pyrtlsdr')
         except Exception:
             pass
         vt = tuple(int(x) for x in re.findall(r'\d+', ver)[:2]) if ver != '?' else ()
-        # V21.3: setup.cfg picks pyrtlsdr < 0.4 for Python < 3.10 and 0.4+ for 3.10+
-        # (0.4+ needs rtlsdr_set_dithering: DLL scanner-v7)
-        want_new = sys.version_info >= (3, 10)
-        good = bool(vt) and ((vt >= (0, 4)) == want_new)
+        # V22.0: pyrtlsdr 0.4+ only (needs rtlsdr_set_dithering: DLL scanner-v7)
+        good = bool(vt) and vt >= (0, 4)
         st = 'INFO' if not loc else ('PASS' if good else 'WARN')
-        R.add('SE5', 'SECURITY', st, 'зависимости: pyrtlsdr %s из ожидаемого места' % ('>= 0.4' if want_new else '< 0.4'),
-              'pyrtlsdr %s, %s%s' % (ver, loc, '' if good else
-                                     ('; для Python 3.10+ нужен pyrtlsdr 0.4+ и DLL scanner-v7' if want_new else
-                                      '; 0.4+ требует rtlsdr_set_dithering: только DLL scanner-v7')))
+        R.add('SE5', 'SECURITY', st, 'зависимости: pyrtlsdr >= 0.4 из ожидаемого места',
+              'pyrtlsdr %s, %s%s' % (ver, loc, '' if good else '; нужен pyrtlsdr 0.4+ и DLL scanner-v7'))
     except Exception as exc:
         R.add('SE5', 'SECURITY', 'INFO', 'зависимости: pyrtlsdr', repr(exc))
 

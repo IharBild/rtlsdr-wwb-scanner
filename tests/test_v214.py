@@ -1,4 +1,4 @@
-"""V21.4: the window on PySide6 (Qt 6) as well as PySide2 (Qt 5.15)."""
+"""V21.4: the window on PySide6 (Qt 6). V22.0: PySide6 only (PySide2 removed)."""
 import glob
 import io
 import os
@@ -43,7 +43,7 @@ def test_only_qt_py_imports_a_binding():
 
 
 def test_no_signal_decorator():
-    """@Signal as a decorator works in PySide2 only."""
+    """@Signal as a decorator: PySide6 does not accept it."""
     for p in glob.glob(os.path.join(_installed_ui(), '*.py')):
         assert not re.search(r'^\s*@Signal\b', io.open(p, encoding='utf-8').read(), re.M), p
 
@@ -57,27 +57,11 @@ def _run(code, **env):
     return r.returncode, r.stdout.decode('utf-8', 'replace')
 
 
-def test_shim_picks_a_binding_or_explains():
+def test_shim_is_pyside6():
     rc, out = _run("from wwb_scanner.ui.pyside import qt; print('API', qt.API, qt.QT6, qt.version_text())")
     if rc != 0:
-        assert 'PySide2' in out and 'PySide6' in out, out          # no binding: clear ImportError
         pytest.skip('no Qt binding here')
-    api = re.search(r'API (\w+) (\w+)', out).groups()
-    assert api in (('PySide2', 'False'), ('PySide6', 'True')), out
-
-
-def test_wwb_qt_variable_changes_the_order():
-    code = "from wwb_scanner.ui.pyside import qt; print('API', qt.API)"
-    have = {}
-    for mod in ('PySide2', 'PySide6'):
-        rc, out = _run('import %s' % mod)
-        have[mod] = rc == 0
-    if not any(have.values()):
-        pytest.skip('no Qt binding here')
-    rc, out = _run(code, WWB_QT='pyside6')
-    assert rc == 0 and ('API PySide6' in out if have['PySide6'] else 'API PySide2' in out), out
-    rc, out = _run(code, WWB_QT='')
-    assert rc == 0 and ('API PySide2' in out if have['PySide2'] else 'API PySide6' in out), out
+    assert 'API PySide6 True PySide6 ' in out, out
 
 
 def _qt_or_skip():
@@ -100,7 +84,7 @@ def test_message_levels_and_helpers():
     assert names == ['DEBUG', 'INFO', 'WARNING', 'CRITICAL', 'FATAL']
     assert qt.js_value((5, False)) == 5 and qt.js_value(7) == 7
     d = qt.compat_qml_dir('/x/qml')
-    assert d.replace('\\', '/').endswith('compat/' + ('qt6' if qt.QT6 else 'qt5'))
+    assert d.replace('\\', '/').endswith('/x/qml/compat')
     assert qt.load_charts() is not None
 
 
@@ -170,22 +154,17 @@ def test_qml_uses_only_the_compat_module_for_dialogs_and_settings():
         assert not re.search(r'(?<![\w.])Settings\s*\{', t), p
 
 
-def test_compat_modules_give_the_same_types():
-    types = {}
-    for v in ('qt5', 'qt6'):
-        d = os.path.join(QML, 'compat', v, 'WwbCompat')
-        qmldir = _read(d, 'qmldir')
-        names = sorted(re.findall(r'^(\w+) 1\.0 (\w+)\.qml$', qmldir, re.M))
-        for name, f in names:
-            assert os.path.isfile(os.path.join(d, f + '.qml')), (v, f)
-        types[v] = names
-    assert types['qt5'] == types['qt6'] and len(types['qt5']) == 3
-    assert 'QtQuick.Dialogs 1.0' in _read(QML, 'compat', 'qt5', 'WwbCompat', 'WwbFileDialog.qml')
-    assert 'import QtCore' in _read(QML, 'compat', 'qt6', 'WwbCompat', 'WwbSettings.qml')
-    for v in ('qt5', 'qt6'):
-        fd = _read(QML, 'compat', v, 'WwbCompat', 'WwbFileDialog.qml')
-        for prop in ('saveMode', 'filterText'):
-            assert 'property' in fd and prop in fd, (v, prop)
+def test_compat_module_types():
+    d = os.path.join(QML, 'compat', 'WwbCompat')
+    names = sorted(re.findall(r'^(\w+) 1\.0 (\w+)\.qml$', _read(d, 'qmldir'), re.M))
+    assert [n for n, _ in names] == ['WwbColorDialog', 'WwbFileDialog', 'WwbSettings']
+    for name, f in names:
+        assert os.path.isfile(os.path.join(d, f + '.qml')), f
+    assert 'import QtCore' in _read(d, 'WwbSettings.qml')
+    fd = _read(d, 'WwbFileDialog.qml')
+    for prop in ('saveMode', 'filterText'):
+        assert 'property' in fd and prop in fd, prop
+    assert not os.path.exists(os.path.join(QML, 'compat', 'qt5'))      # V22.0
 
 
 def test_no_injected_signal_parameters():
@@ -240,16 +219,16 @@ def test_pyside6_for_python_311_and_newer():
     cfg = _read(ROOT, 'setup.cfg')
     req = cfg.split('install_requires =', 1)[1].split('\n\n', 1)[0]
     for name in ('PySide6-Essentials', 'PySide6-Addons'):
-        assert re.search(r'^\s*%s>=6\.8;\s*python_version\s*>=\s*"3\.11"' % name, req, re.M), req
+        assert re.search(r'^\s*%s>=6\.8;\s*python_version\s*>=\s*"3\.12"' % name, req, re.M), req
+        assert re.search(r'^\s*%s>=6\.8,<6\.12;\s*python_version\s*<\s*"3\.12"' % name, req, re.M), req
     assert not re.search(r'^\s*PySide6\s*[>=;]', req, re.M), 'the meta package pulls WebEngine'
-    assert 'ui/pyside/qml/compat/*/WwbCompat/*' in cfg
+    assert 'ui/pyside/qml/compat/WwbCompat/*' in cfg
     assert 'compat' in _read(ROOT, 'MANIFEST.in')
-    assert re.search(r'^version = 21\.(4\.\d+|[5-9]\.\d+)$', cfg, re.M)
 
 
-def test_launcher_names_both_bindings(monkeypatch, capsys):
+def test_launcher_names_pyside6(monkeypatch, capsys):
     from wwb_scanner.ui import launch
     monkeypatch.setattr(launch, 'qt_problem', lambda: 'No module named PySide6')
     assert launch.run() == 1
     err = capsys.readouterr().err
-    assert 'PySide2' in err and 'PySide6' in err and 'pip install' in err
+    assert 'PySide6' in err and 'pip install' in err

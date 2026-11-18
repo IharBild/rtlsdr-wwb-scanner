@@ -25,22 +25,9 @@ Item {
 
     ScanConfigData {
         id: model
-        startFreq: 470.
-        endFreq: 536.
-        // V20.8: the tested configuration (see FACTORY in scanner.py);
-        // before: 8192 x 20, overlap 0.5, window 128
-        samplesPerSweep: 2048
-        sweepsPerScan: 40
-        sweepOverlapRatio: 0.65
-        windowType: 'hann'
-        windowSize: 96
-        cleanRipple: true
-        cleanSpurs: true
-        cleanImages: false      // V20.9: images are marked, hidden only on request
-        cleanFloor: true
-        autoGain: true
-        verifyPeaks: true       // V21.2: second-gain check of peaks next to strong carriers
-        scanRanges: ''
+        // V22.0: the starting values (the tested configuration) are set by
+        // ScanConfigData itself from the core (scanner/config.py TESTED);
+        // the settings below replace them with what the user has saved.
 
         onConfigUpdate: {
             root.configUpdate();

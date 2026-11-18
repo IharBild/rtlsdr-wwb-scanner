@@ -232,8 +232,8 @@ def child_smoke_scan(out):
 def have_window_qt():
     try:
         import importlib.util
-        # V21.4: the window runs on PySide2 or PySide6
-        return any(importlib.util.find_spec(m) is not None for m in ('PySide2', 'PySide6'))
+        # V22.0: the window runs on PySide6
+        return importlib.util.find_spec('PySide6') is not None
     except Exception:
         return False
 
@@ -242,7 +242,7 @@ def pc_window(out, real, gain, only_u1=False, start=470, end=600):
     tag = 'окно с донглом' if real else 'окно с имитатором'
     if not have_window_qt():
         R.add('PC8' if only_u1 else 'PW', 'SMOKE' if only_u1 else 'SYSTEM', 'SKIP', tag + ': запуск',
-              'нет PySide2 / PySide6 для Python %d.%d (python -m pip install "PySide6>=6.8"); '
+              'нет PySide6 для Python %d.%d (python -m pip install "PySide6>=6.8"); '
               'ядро и донгл проверяются остальными пунктами' % sys.version_info[:2])
         return
     env = env_utf8(QT_QPA_PLATFORM='offscreen', QA_UI_GAIN=str(gain))

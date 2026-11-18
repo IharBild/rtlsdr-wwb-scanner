@@ -1,5 +1,14 @@
 import enum
-from rtlsdr import RtlSdr
+# V22.0: pyrtlsdr is loaded when the device list is first read, not on import
+RtlSdr = None
+
+
+def _rtlsdr():
+    global RtlSdr
+    if RtlSdr is None:
+        from rtlsdr import RtlSdr as _RtlSdr
+        RtlSdr = _RtlSdr
+    return RtlSdr
 
 from wwb_scanner.ui.pyside.qt import QtCore, QtQml, Signal, Property
 import logging
@@ -61,8 +70,8 @@ class DeviceInfo(GenericQObject):
     def get_info_from_device_index(self, device_index):
         self.device_index = device_index
         if self.device_serial is None:
-            self.device_serial = RtlSdr.get_device_serial_addresses()[device_index]
-        sdr = RtlSdr(device_index)
+            self.device_serial = _rtlsdr().get_device_serial_addresses()[device_index]
+        sdr = _rtlsdr()(device_index)
         try:                       # V18.1 (audit 1.6): always closed
             self._get_info_from_device(sdr)
         finally:
@@ -70,8 +79,8 @@ class DeviceInfo(GenericQObject):
     def get_info_from_device_serial(self, device_serial):
         self.device_serial = device_serial
         if self.device_index is None:
-            self.device_index = RtlSdr.get_device_index_by_serial(device_serial)
-        sdr = RtlSdr(device_serial=device_serial)
+            self.device_index = _rtlsdr().get_device_index_by_serial(device_serial)
+        sdr = _rtlsdr()(device_serial=device_serial)
         try:
             self._get_info_from_device(sdr)
         finally:
@@ -111,7 +120,7 @@ class DeviceInfoList(GenericQObject):
         plugged in leave the list."""
         print('update_devices')
         try:
-            device_serials = list(RtlSdr.get_device_serial_addresses())
+            device_serials = list(_rtlsdr().get_device_serial_addresses())
         except Exception as exc:
             logger.warning('Could not list the RTL-SDR dongles: %s', exc)
             return

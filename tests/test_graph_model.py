@@ -1,4 +1,4 @@
-"""GraphTableModel update logic, with a minimal fake of PySide2."""
+"""GraphTableModel update logic, with a minimal fake of PySide6 (V22.0; was PySide2)."""
 import sys
 import types
 import numpy as np
@@ -23,11 +23,11 @@ def _install_fake_pyside(put):
         def beginRemoveColumns(self, parent, a, b): self.log.append(('rem', a, b))
         def endRemoveColumns(self): pass
     mods = {}
-    for name in ('PySide2', 'PySide2.QtCore', 'PySide2.QtQml', 'PySide2.QtQuick',
-                 'PySide2.QtGui', 'PySide2.QtCharts', 'PySide2.QtWidgets'):   # V21.4: qt.py
+    for name in ('PySide6', 'PySide6.QtCore', 'PySide6.QtQml', 'PySide6.QtQuick',
+                 'PySide6.QtGui', 'PySide6.QtCharts', 'PySide6.QtWidgets'):   # V21.4: qt.py
         mods[name] = types.ModuleType(name)
         mods[name].__getattr__ = lambda attr, _B=Base: _B
-    qc = mods['PySide2.QtCore']
+    qc = mods['PySide6.QtCore']
     qc.QAbstractTableModel = Model
     qc.QModelIndex = lambda: None
     qc.QPointF = Base
@@ -37,15 +37,15 @@ def _install_fake_pyside(put):
     qc.Signal = Sig
     qc.Slot = lambda *a, **k: (lambda f: f)
     qc.Property = lambda *a, **k: property(a[1], a[2] if len(a) > 2 else None)
-    mods['PySide2.QtQuick'].QQuickItem = Base
-    mods['PySide2.QtCharts'].QtCharts = Base
-    mods['PySide2.QtGui'].QColor = Base
+    mods['PySide6.QtQuick'].QQuickItem = Base
+    mods['PySide6.QtCharts'].QtCharts = Base
+    mods['PySide6.QtGui'].QColor = Base
     qc.Signal = Sig
     for n, m in mods.items():
         put(n, m)
-    mods['PySide2'].QtCore = qc
+    mods['PySide6'].QtCore = qc
     for sub in ('QtQml', 'QtQuick', 'QtGui', 'QtCharts', 'QtWidgets'):
-        setattr(mods['PySide2'], sub, mods['PySide2.' + sub])
+        setattr(mods['PySide6'], sub, mods['PySide6.' + sub])
     pk = types.ModuleType('pkg_resources')
     pk.resource_filename = lambda *a: ''
     if 'pkg_resources' not in sys.modules:
@@ -63,9 +63,9 @@ def model():
     are put back afterwards, so later tests in the same run see the real Qt or
     none (the fake used to stay in sys.modules for the rest of the run)."""
     pytest.importorskip('numpy')
-    names = ('PySide2', 'pkg_resources', 'wwb_scanner.ui.pyside.')
+    names = ('PySide6', 'pkg_resources', 'wwb_scanner.ui.pyside.')
     saved = {k: sys.modules.pop(k) for k in list(sys.modules)
-             if k == 'PySide2' or k.startswith('PySide2.') or k.startswith(names[2])}
+             if k == 'PySide6' or k.startswith('PySide6.') or k.startswith(names[2])}
     added = []
 
     def put(name, mod):
@@ -82,7 +82,7 @@ def model():
         yield graph.GraphTableModel(), graph
     finally:
         for k in list(sys.modules):
-            if k in added or k == 'PySide2' or k.startswith('PySide2.') or k.startswith(names[2]):
+            if k in added or k == 'PySide6' or k.startswith('PySide6.') or k.startswith(names[2]):
                 sys.modules.pop(k, None)
         sys.modules.update(saved)
         for a in ('graph', 'qt', 'utils'):

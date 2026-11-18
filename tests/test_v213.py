@@ -67,13 +67,9 @@ def test_nothing_without_a_dll(monkeypatch, tmpdir):
     assert dllpath.prepare() is None and fake.added == []
 
 
-def test_nothing_on_python37_or_other_systems(monkeypatch, tmpdir):
+def test_nothing_on_other_systems(monkeypatch, tmpdir):
     tmpdir.mkdir('Scripts').join('rtlsdr.dll').write_binary(b'x')
     monkeypatch.setattr(dllpath.sys, 'prefix', str(tmpdir))
-    monkeypatch.setattr(dllpath.sys, 'platform', 'win32')
-    monkeypatch.delattr(dllpath.os, 'add_dll_directory', raising=False)     # Python 3.7
-    assert dllpath.prepare() is None
-    monkeypatch.setattr(dllpath.sys, 'platform', 'linux')
     assert dllpath.prepare() is None
 
 
@@ -103,24 +99,23 @@ def test_pyproject_builds_with_setuptools():
     assert 'setuptools' in t and 'wheel' in t
 
 
-def test_dependencies_by_python_version():
+def test_dependencies_one_stack():
+    """V22.0: Python 3.11+, one set of dependencies (no markers)."""
     cfg = _read('setup.cfg')
     req = cfg.split('install_requires', 1)[1].split('\n[', 1)[0]
-    # Python 3.7-3.9 keep the tested stack; 3.10+ get the new one
-    assert re.search(r'pyrtlsdr[^;\n]*<\s*0\.4\s*;\s*python_version\s*<\s*"3\.10"', req), req
-    assert re.search(r'pyrtlsdr\s*>=\s*0\.4\s*;\s*python_version\s*>=\s*"3\.10"', req), req
-    assert re.search(r'PySide2.*;\s*python_version\s*<\s*"3\.11"', req), req
-    # PySide2 5.15 is built against numpy 1.x ("may crash" with numpy 2)
-    assert re.search(r'numpy[^;\n]*<\s*2\s*;\s*python_version\s*<\s*"3\.11"', req), req
-    assert 'tinydb' in req and 'numpy' in req and 'scipy' in req
-    # pyrtlsdr 0.3 imports pkg_resources without declaring setuptools;
-    # setuptools 82 removed pkg_resources (checked 13.11.2026)
-    assert re.search(r'^\s*setuptools\s*<\s*82\s*;\s*python_version\s*<\s*"3\.10"', req, re.M), req
-    assert re.search(r'python_requires\s*=\s*>=\s*3\.7', cfg)
+    # the only marker: PySide6 below 6.12 on Python 3.11 (see setup.cfg)
+    for line in req.splitlines():
+        if 'python_version' in line:
+            assert line.strip().startswith('PySide6-'), line
+    assert re.search(r'^\s*pyrtlsdr\s*>=\s*0\.4\s*$', req, re.M), req
+    assert 'numpy' in req and 'scipy' in req
+    for gone in ('PySide2', 'tinydb', 'json-object-factory', 'setuptools'):
+        assert gone not in req, gone
+    assert re.search(r'python_requires\s*=\s*>=\s*3\.11', cfg)
 
 
 def test_version_and_marker():
-    assert re.search(r'^version = 21\.([3-9])\.\d+$', _read('setup.cfg'), re.M)
+    assert re.search(r'^version = 2[2-9]\.\d+\.\d+$', _read('setup.cfg'), re.M)
 
 
 # --------------------------------------------------------------- end to end
@@ -169,7 +164,8 @@ print('RESULT ' + json.dumps({'pyrtlsdr': md.version('pyrtlsdr'), 'lib': librtls
     'missing': len(getattr(c, 'missing_tiles', []) or []), 'aborted': bool(c.aborted)}))
 '''
     home = tmpdir.mkdir('home')
-    env = dict(os.environ, LD_LIBRARY_PATH=str(tmpdir), HOME=str(home), TESTS=HERE)
+    env = dict(os.environ, LD_LIBRARY_PATH=str(tmpdir), HOME=str(home), TESTS=HERE,
+               PYTHONPATH=os.pathsep.join(p for p in [ROOT, os.environ.get('PYTHONPATH', '')] if p))
     r = subprocess.run([sys.executable, '-c', script], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                        env=env, timeout=600, cwd=str(tmpdir))
     out = r.stdout.decode('utf-8', 'replace')
@@ -183,12 +179,12 @@ print('RESULT ' + json.dumps({'pyrtlsdr': md.version('pyrtlsdr'), 'lib': librtls
 
 # ------------------------------------------------------------ window entry
 
-def test_window_entry_explains_missing_pyside2(monkeypatch, capsys):
+def test_window_entry_explains_missing_pyside6(monkeypatch, capsys):
     from wwb_scanner.ui import launch
     monkeypatch.setattr(launch, 'qt_problem', lambda: 'No module named PySide6')
     assert launch.run() == 1
     err = capsys.readouterr().err
-    assert 'PySide2' in err and '3.7-3.10' in err and 'PySide6' in err
+    assert 'PySide6' in err and 'pip install' in err and 'PySide2' not in err
 
 
 def test_console_script_uses_the_launcher():

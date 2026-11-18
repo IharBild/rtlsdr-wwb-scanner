@@ -1,48 +1,43 @@
+"""A scan: its points (SampleArray) and what is known about it.
+
+V22.0 (audit 16.11, items 2 and 5):
+- no Sample object per point any more (69 441 objects = 13 MB for a full
+  scan, read by nothing but the removed matplotlib plot);
+- the history (utils/dbstore.py) and the file handlers are imported only
+  when used, so the core can work without them;
+- smoothing, scaling and interpolation are gone (switched off in the window
+  since V21.0: they changed the levels after the scan was saved).
+"""
 import threading
 import datetime
 import time
 
 import numpy as np
-from scipy import signal
 
 from wwb_scanner.core import JSONMixin
-from wwb_scanner.utils import dbmath
-from wwb_scanner.utils.dbstore import db_store
 from wwb_scanner.utils.color import Color
-from wwb_scanner.scan_objects import SampleArray, Sample, TimeBasedSample
-try:
-    from wwb_scanner import file_handlers
-except ImportError:
-    file_handlers = None
-try:
-    from wwb_scanner.ui.plots import SpectrumPlot
-except ImportError:
-    SpectrumPlot = None
+from wwb_scanner.scan_objects.samplearray import SampleArray
 
 EPOCH = datetime.datetime(1970, 1, 1)
 
+
 def get_file_handlers():
-    global file_handlers
-    if file_handlers is None:
-        from wwb_scanner import file_handlers as _file_handlers
-        file_handlers = _file_handlers
+    from wwb_scanner import file_handlers
     return file_handlers
 def get_importer():
     return get_file_handlers().BaseImporter
 def get_exporter():
     return get_file_handlers().BaseExporter
 
-def get_spectrum_plot():
-    global SpectrumPlot
-    if SpectrumPlot is None:
-        from wwb_scanner.ui.plots import SpectrumPlot as _SpectrumPlot
-        SpectrumPlot = _SpectrumPlot
-    return SpectrumPlot
+
+def _db_store():
+    from wwb_scanner.utils.dbstore import db_store
+    return db_store
+
 
 class Spectrum(JSONMixin):
     _serialize_attrs = [
-        'name', 'color', 'timestamp_utc', 'step_size',
-        'center_frequencies', 'scan_config_eid',
+        'name', 'color', 'timestamp_utc', 'step_size', 'scan_config_eid',
     ]
     DEFAULT_COLOR = Color({'r':0, 'g':1, 'b':0, 'a':1})
     def __init__(self, **kwargs):
@@ -79,9 +74,7 @@ class Spectrum(JSONMixin):
         self.step_size = kwargs.get('step_size')
         self.data_updated = threading.Event()
         self.data_update_lock = threading.RLock()
-        self.samples = {}
         self.sample_data = SampleArray()
-        self.center_frequencies = kwargs.get('center_frequencies', [])
     @property
     def datetime_utc(self):
         return getattr(self, '_datetime_utc', None)
@@ -139,31 +132,19 @@ class Spectrum(JSONMixin):
             return
         config = self.scan_config
         if config is None:
-            config = self._scan_config = db_store.get_scan_config(eid=value)
+            stored = _db_store().get_scan_config(eid=value)
+            if stored is not None:
+                from wwb_scanner.scanner.config import ScanConfig
+                config = self._scan_config = ScanConfig(dict(stored), eid=value)
         else:
             if config.get('eid') is None:
                 config.eid = value
     def _deserialize(self, **kwargs):
         sample_data = kwargs.get('sample_data')
-        samples = kwargs.get('samples')
         if sample_data is not None:
+            if not isinstance(sample_data, SampleArray):
+                sample_data = SampleArray(sample_data)
             self.sample_data = sample_data
-            self.samples.clear()
-            skwargs = dict(spectrum=self, init_complete=True)
-            for f in sample_data.frequency:
-                skwargs['frequency'] = f
-                sample = self._build_sample(**skwargs)
-                self.samples[f] = sample
-        elif samples is not None:
-            if isinstance(samples, dict):
-                for key, data in samples.items():
-                    if isinstance(data, dict):
-                        self.add_sample(**data)
-                    else:
-                        self.add_sample(frequency=key, dbFS=data)
-            else:
-                for sample_kwargs in samples:
-                    self.add_sample(**sample_kwargs)
     @classmethod
     def import_from_file(cls, filename):
         importer = get_importer()
@@ -172,97 +153,16 @@ class Spectrum(JSONMixin):
         exporter = get_exporter()
         kwargs['spectrum'] = self
         exporter.export_to_file(**kwargs)
-    def show_plot(self):
-        plot_cls = get_spectrum_plot()
-        plot = plot_cls(spectrum=self)
-        plot.build_plot()
-        return plot
-    def smooth(self, N):
-        """Returns False when the scan is too short for this window (V18.1,
-        audit 1.4: it used to fail and leave the window in "scanning")."""
-        N = int(N)
-        if N % 2 != 0:
-            N += 1
-        with self.data_update_lock:
-            done = self.sample_data.smooth(N)
-        if done:
-            self.set_data_updated()
-        return done
-    def interpolate(self, spacing=0.025):
-        with self.data_update_lock:
-            self.sample_data.interpolate(spacing)
-            self.samples.clear()
-            kwargs = {'spectrum':self, 'init_complete':True}
-            for freq in self.sample_data.frequency:
-                kwargs['frequency'] = freq
-                sample = self._build_sample(**kwargs)
-                self.samples[freq] = sample
-            self.step_size = spacing
-        self.set_data_updated()
     def keep_ranges(self, ranges):
         """V18: remove points outside the scanned ranges [(lo, hi)] MHz."""
         with self.data_update_lock:
             self.sample_data.keep_ranges(ranges)
-            self.samples.clear()
-            kwargs = {'spectrum':self, 'init_complete':True}
-            for freq in self.sample_data.frequency:
-                kwargs['frequency'] = freq
-                self._build_sample(**kwargs)
         self.set_data_updated()
     def crop(self, start_freq, end_freq):
         """Remove points outside of ``start_freq`` - ``end_freq`` (MHz, inclusive)."""
         with self.data_update_lock:
             self.sample_data.crop(start_freq, end_freq)
-            self.samples.clear()
-            kwargs = {'spectrum':self, 'init_complete':True}
-            for freq in self.sample_data.frequency:
-                kwargs['frequency'] = freq
-                self._build_sample(**kwargs)
         self.set_data_updated()
-    def scale(self, min_dB, max_dB):
-        """Returns False when there is nothing to scale (V18.1, audit 1.3:
-        an empty or flat scan used to fail or give NaN)."""
-        y = self.sample_data['dbFS']
-        if y.size == 0 or not np.isfinite(y).all() or float(y.max() - y.min()) <= 0:
-            return False
-        with self.data_update_lock:
-            y = self.sample_data['dbFS']
-            ymin = y.min()
-            ymax = y.max()
-            y -= ymin
-            out_scale = max_dB - min_dB
-
-            y /= y.max()
-            y *= out_scale
-            y += min_dB
-            self.sample_data['magnitude'] = dbmath.from_dB(y)
-            self.sample_data['dbFS'] = y
-        self.set_data_updated()
-        return True
-    def add_sample(self, **kwargs):
-        f = kwargs.get('frequency')
-        iq = kwargs.get('iq')
-        if iq is not None and isinstance(iq, list):
-            iq = complex(*(float(v) for v in iq))
-            kwargs['iq'] = iq
-        if kwargs.get('is_center_frequency') and f not in self.center_frequencies:
-            self.center_frequencies.append(f)
-        if f in self.samples:
-            sample = self.samples[f]
-            if kwargs.get('force_magnitude'):
-                self.sample_data.set_fields(**kwargs)
-            return sample
-        if len(self.samples) and f < max(self.samples.keys()):
-            if not kwargs.get('force_lower_freq', True):
-                return
-        with self.data_update_lock:
-            if f not in self.sample_data['frequency']:
-                self.sample_data.set_fields(**kwargs)
-                skwargs = {'spectrum':self, 'init_complete':True, 'frequency':f}
-                sample = self._build_sample(**skwargs)
-                self.samples[f] = sample
-        self.set_data_updated()
-        return sample
     def add_sample_set(self, **kwargs):
         with self.data_update_lock:
             self._add_sample_set(**kwargs)
@@ -270,8 +170,7 @@ class Spectrum(JSONMixin):
     def rebuild(self, tiles):
         """V20: build the points again from ``tiles`` (keyword dicts as for
         add_sample_set, in frequency order). The new points are made first
-        and swapped in at the end, so the window is not held up meanwhile.
-        The Sample objects are kept."""
+        and swapped in at the end, so the window is not held up meanwhile."""
         tiles = [dict(kw) for kw in tiles]
         sd = SampleArray()
         if tiles and all(kw.get('force_lower_freq') for kw in tiles):
@@ -300,11 +199,6 @@ class Spectrum(JSONMixin):
             sd = tmp
         with self.data_update_lock:
             self.sample_data = sd
-            skwargs = {'spectrum': self, 'init_complete': True}
-            for f in sd['frequency']:
-                if f not in self.samples:
-                    skwargs['frequency'] = f
-                    self.samples[f] = self._build_sample(**skwargs)
         self.set_data_updated()
     def _add_sample_set(self, **kwargs):
         weight = kwargs.pop('weight', 1.0)
@@ -319,93 +213,34 @@ class Spectrum(JSONMixin):
             if np.ndim(weight):
                 weight = np.asarray(weight)[r_ix]      # V20: one weight per point
         self.sample_data.insert_sorted(a, weight)
-
-        skwargs = {'spectrum':self, 'init_complete':True}
-        for f in a['frequency']:
-            if f in self.samples:
-                continue
-            skwargs['frequency'] = f
-            sample = self._build_sample(**skwargs)
-            self.samples[f] = sample
-    def _build_sample(self, **kwargs):
-        sample = Sample(**kwargs)
-        self.samples[sample.frequency] = sample
-        return sample
-    def iter_frequencies(self):
-        for key in sorted(self.samples.keys()):
-            yield key
-    def iter_samples(self):
-        for key in self.iter_frequencies():
-            yield self.samples[key]
-    def on_sample_change(self, **kwargs):
-        sample = kwargs.get('sample')
-        if sample.frequency not in self.samples:
-            return
-        self.set_data_updated()
     def set_data_updated(self):
         with self.data_update_lock:
             self.data_updated.set()
-    def save_to_dbstore(self):
-        db_store.add_scan(self)
+    def save_to_dbstore(self, store=None):
+        (store or _db_store()).add_scan(self)
     def update_dbstore(self, *attrs):
         if self.eid is None:
             return
         if not len(attrs):
             attrs = self._serialize_attrs
         d = {attr:getattr(self, attr) for attr in attrs}
-        db_store.update_scan(self.eid, **d)
+        _db_store().update_scan(self.eid, **d)
     @classmethod
     def from_dbstore(cls, dbdata=None, eid=None):
         if dbdata is None:
             assert eid is not None
-            dbdata = db_store.get_scan(eid)
+            dbdata = _db_store().get_scan(eid)
         else:
             from wwb_scanner.utils.dbstore import doc_id
             eid = doc_id(dbdata)
             if dbdata.get('sample_data') is None and dbdata.get('sample_data_file'):
-                dbdata = db_store.get_scan(eid)       # V14: points in scans/*.npz
+                dbdata = _db_store().get_scan(eid)    # V14: points in scans/*.npz
         dbdata = dict(dbdata)
         dbdata.pop('sample_data_file', None)
+        dbdata.pop('center_frequencies', None)       # written before V22.0
+        dbdata.pop('samples', None)
         return cls.from_json(dbdata, eid=eid)
     def _serialize(self):
         d = {attr: getattr(self, attr) for attr in self._serialize_attrs}
         d['sample_data'] = self.sample_data
         return d
-
-class TimeBasedSpectrum(Spectrum):
-    def _build_sample(self, **kwargs):
-        sample = TimeBasedSample(**kwargs)
-        if sample.frequency not in self.samples:
-            self.samples[sample.frequency] = {}
-        self.samples[sample.frequency][sample.timestamp] = sample
-        return sample
-    def iter_samples(self):
-        samples = self.samples
-        last_ts = None
-        for key in self.iter_frequencies():
-            if last_ts is None:
-                last_ts = min(samples[key])
-                sample = samples[key][last_ts]
-            else:
-                if last_ts in samples[key]:
-                    sample = samples[key][last_ts]
-                else:
-                    l = [ts for ts in samples[key] if last_ts < ts]
-                    if not len(l):
-                        sample = None
-                    else:
-                        last_ts = min(l)
-                        sample = samples[key][last_ts]
-            if sample is None:
-                break
-            yield sample
-
-def compare_spectra(spec1, spec2):
-    diff_spec = Spectrum()
-    for sample in spec1.iter_samples():
-        other_sample = spec2.samples.get(sample.frequency)
-        if other_sample is None:
-            continue
-        magnitude = sample.magnitude - other_sample.magnitude
-        diff_spec.add_sample(frequency=sample.frequency, magnitude=magnitude)
-    return diff_spec

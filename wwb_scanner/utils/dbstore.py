@@ -1,134 +1,202 @@
+"""History of scans and the settings of past scans (V22.0: without tinydb).
+
+Two JSON files in the data folder (wwb_scanner/paths.py):
+
+- ``db.json``: table ``scan_configs`` (settings of every scan);
+- ``scan_index.json``: table ``scans_performed`` (description of every scan;
+  its points are in ``scans/*.npz``, V14).
+
+The files keep the layout TinyDB used before V22.0 (``{"table": {"1":
+{...}}}``), so the files of earlier versions are read as they are and
+earlier versions can still read the new ones. TinyDB re-read and re-wrote
+the whole file on every operation; this store keeps the tables in memory,
+reads the file again only when it changed on disk and writes through a
+temporary file, so a crash while saving leaves the old file whole.
+"""
 import os
 import datetime
 import time
 
 import numpy as np
 
-import tinydb
-from tinydb import TinyDB, where
-
 from wwb_scanner.utils import numpyjson
 
-APP_PATH = os.path.expanduser('~/wwb_scanner_data')
 
-# setup.cfg pins tinydb 3.13, but pip happily installs tinydb 4 (the user
-# has 4.8.0). TinyDB 4 renamed eid -> doc_id, eids= -> doc_ids= and has no
-# Table._last_id. These helpers work with both.
-TINYDB4 = int(getattr(tinydb, '__version__', '3').split('.')[0]) >= 4
+class Document(dict):
+    """A stored record: a dict with its id (``doc_id``)."""
+    def __init__(self, value, doc_id):
+        super(Document, self).__init__(value)
+        self.doc_id = doc_id
 
 
+class Table(object):
+    def __init__(self, db, name):
+        self._db = db
+        self.name = name
+    def _rows(self):
+        return self._db._tables().setdefault(self.name, {})
+    def all(self):
+        return [Document(v, int(k)) for k, v in sorted(self._rows().items(), key=lambda kv: int(kv[0]))]
+    def __len__(self):
+        return len(self._rows())
+    def insert(self, data):
+        rows = self._rows()
+        new_id = max([int(k) for k in rows] or [0]) + 1
+        rows[str(new_id)] = dict(data)
+        self._db._write()
+        return new_id
+    def get(self, doc_id=None, **match):
+        """By id, or the first record whose fields equal ``match``."""
+        rows = self._rows()
+        if doc_id is not None:
+            v = rows.get(str(int(doc_id)))
+            return None if v is None else Document(v, int(doc_id))
+        for d in self.all():
+            if all(k in d and d[k] == v for k, v in match.items()):
+                return d
+        return None
+    def update(self, data, doc_ids):
+        rows = self._rows()
+        for i in doc_ids:
+            key = str(int(i))
+            if key in rows:
+                rows[key].update(data)
+        self._db._write()
+    def remove(self, doc_ids):
+        rows = self._rows()
+        for i in doc_ids:
+            rows.pop(str(int(i)), None)
+        self._db._write()
+    def last_id(self):
+        return max([int(k) for k in self._rows()] or [0])
+
+
+class JsonDB(object):
+    """Tables in one JSON file (the TinyDB layout)."""
+    def __init__(self, path):
+        self.path = str(path)
+        self._data = None
+        self._stamp = None
+    def _file_stamp(self):
+        try:
+            st = os.stat(self.path)
+            return (st.st_mtime_ns, st.st_size)
+        except OSError:
+            return None
+    def _tables(self):
+        stamp = self._file_stamp()
+        if self._data is None or stamp != self._stamp:
+            self._data = self._read()
+            self._stamp = self._file_stamp()
+        return self._data
+    def _read(self):
+        if not os.path.exists(self.path) or os.path.getsize(self.path) == 0:
+            return {}
+        try:
+            with open(self.path, encoding='utf-8') as fh:
+                data = numpyjson.load(fh)
+            if not isinstance(data, dict):
+                raise ValueError('not a table file')
+            return {k: v for k, v in data.items() if isinstance(v, dict)}
+        except (ValueError, UnicodeDecodeError) as exc:
+            # A cut-off file (power loss, crash while saving) used to stop
+            # the program from starting. Keep a copy and start a new one.
+            backup = '%s.broken-%s' % (self.path, datetime.datetime.now().strftime('%Y%m%d-%H%M%S'))
+            try:
+                import shutil
+                shutil.copyfile(self.path, backup)
+            except Exception:
+                backup = None
+            print('!!! database file is damaged (%s), saved as %s, starting a new one'
+                  % (exc, backup), flush=True)
+            return {}
+    def _write(self):
+        d = os.path.dirname(self.path)
+        if d and not os.path.isdir(d):
+            os.makedirs(d, exist_ok=True)
+        tmp = self.path + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as fh:
+            fh.write(numpyjson.dumps(self._tables()))
+        os.replace(tmp, self.path)
+        self._stamp = self._file_stamp()
+    def table(self, name):
+        return Table(self, name)
+    def tables(self):
+        return set(self._tables().keys())
+    def drop_table(self, name):
+        if self._tables().pop(name, None) is not None:
+            self._write()
+
+
+# helpers kept from V13 (tools and tests use them)
 def doc_id(doc):
-    """id of a stored document (Document.doc_id in 4, Element.eid in 3)"""
+    """id of a stored record"""
     if doc is None:
         return None
-    return getattr(doc, 'doc_id', None) if TINYDB4 else doc.eid
+    return getattr(doc, 'doc_id', None)
 
 
 def get_by_id(table, i):
-    return table.get(doc_id=i) if TINYDB4 else table.get(eid=i)
+    return table.get(doc_id=i)
 
 
 def update_ids(table, data, ids):
-    return table.update(data, doc_ids=ids) if TINYDB4 else table.update(data, eids=ids)
+    return table.update(data, doc_ids=ids)
 
 
 def remove_ids(table, ids):
-    return table.remove(doc_ids=ids) if TINYDB4 else table.remove(eids=ids)
+    return table.remove(doc_ids=ids)
 
 
 def last_id(table):
-    if not TINYDB4:
-        return table._last_id
-    ids = [d.doc_id for d in table.all()]
-    return max(ids) if ids else 0
+    return table.last_id()
 
-class JSONStorage(tinydb.JSONStorage):
-    def read(self):
-        # Get the file size
-        self._handle.seek(0, os.SEEK_END)
-        size = self._handle.tell()
-
-        if not size:
-            # File is empty
-            return None
-        self._handle.seek(0)
-        try:
-            return numpyjson.load(self._handle)
-        except ValueError as exc:
-            # A cut-off file (power loss, crash while saving) used to stop
-            # the program from starting. Keep a copy and start a new one.
-            path = getattr(self._handle, 'name', None)
-            backup = None
-            if path:
-                backup = '%s.broken-%s' % (path, datetime.datetime.now().strftime('%Y%m%d-%H%M%S'))
-                try:
-                    import shutil
-                    shutil.copyfile(path, backup)
-                except Exception:
-                    backup = None
-            print('!!! database file is damaged (%s), saved as %s, starting a new one'
-                  % (exc, backup), flush=True)
-            self._handle.seek(0)
-            self._handle.truncate()
-            return None
-    def write(self, data):
-        self._handle.seek(0)
-        serialized = numpyjson.dumps(data)
-        self._handle.write(serialized)
-        self._handle.flush()
-        self._handle.truncate()
 
 class DBStore(object):
-    DB_PATH = os.path.join(APP_PATH, 'db.json')
+    # V22.0: None = the file in the data folder (wwb_scanner/paths.py), found
+    # when first used. Tests and tools may set a path here.
+    DB_PATH = None
     # V14: the scan database holds only the description of each scan; the
     # points are in <folder of this file>/scans/*.npz (File > Import opens
     # them). Before V14 every scan (4.7 MB of JSON for 31-1766 MHz) was inside
-    # scan_db.json and TinyDB re-read and re-wrote the whole file on every
-    # save: 152 scans = 271 MB, ~11 s after each scan. The old file is left
-    # as it is (tools/migrate_scan_db.py moves its scans to the new layout).
-    SCAN_DB_PATH = os.path.join(APP_PATH, 'scan_index.json')
-    LEGACY_SCAN_DB_PATH = os.path.join(APP_PATH, 'scan_db.json')
+    # scan_db.json, re-read and re-written on every save: 152 scans = 271 MB,
+    # ~11 s after each scan. The old file is left as it is
+    # (tools/migrate_scan_db.py moves its scans to the new layout).
+    SCAN_DB_PATH = None
+    LEGACY_SCAN_DB_PATH = None
     TABLES = ['scan_configs', 'scans_performed', 'scans_imported']
     def __init__(self):
-
         self._db = None
         self._scan_db = None
-        #self.migrate_db()
+    @property
+    def db_path(self):
+        if self.DB_PATH:
+            return str(self.DB_PATH)
+        from wwb_scanner import paths
+        return paths.file_path('db.json')
+    @property
+    def scan_db_path(self):
+        if self.SCAN_DB_PATH:
+            return str(self.SCAN_DB_PATH)
+        from wwb_scanner import paths
+        return paths.file_path('scan_index.json')
+    @property
+    def legacy_scan_db_path(self):
+        if self.LEGACY_SCAN_DB_PATH:
+            return str(self.LEGACY_SCAN_DB_PATH)
+        return os.path.join(os.path.dirname(self.scan_db_path), 'scan_db.json')
     @property
     def db(self):
         db = self._db
-        if db is None:
-            self._check_dirs()
-            db = self._db = TinyDB(self.DB_PATH, storage=JSONStorage)
+        if db is None or db.path != self.db_path:
+            db = self._db = JsonDB(self.db_path)
         return db
     @property
     def scan_db(self):
         db = self._scan_db
-        if db is None:
-            self._check_dirs()
-            db = self._scan_db = TinyDB(self.SCAN_DB_PATH, storage=JSONStorage)
+        if db is None or db.path != self.scan_db_path:
+            db = self._scan_db = JsonDB(self.scan_db_path)
         return db
-    def _check_dirs(self):
-        if not os.path.exists(os.path.dirname(self.DB_PATH)):
-            os.makedirs(os.path.dirname(self.DB_PATH))
-        if not os.path.exists(os.path.dirname(self.SCAN_DB_PATH)):
-            os.makedirs(os.path.dirname(self.SCAN_DB_PATH))
-    def migrate_db(self):
-        for table_name in ['scans_performed', 'scans_imported']:
-            if table_name not in self.db.tables():
-                continue
-            print('migrating table "{}"'.format(table_name))
-            old_table = self.db.table(table_name)
-            new_table = self.scan_db.table(table_name)
-            eids = []
-            for item in old_table.all():
-                eids.append(doc_id(item))
-                new_table.insert(item)
-            remove_ids(old_table, eids)
-            if TINYDB4:
-                self.db.drop_table(table_name)
-            else:
-                self.db.purge_table(table_name)
     def add_scan_config(self, config, force_insert=False):
         if config.get('datetime') is None:
             # V21.3: utcnow() is deprecated since Python 3.12; same naive UTC value
@@ -137,7 +205,7 @@ class DBStore(object):
         if config.get('eid') is not None:
             dbconfig = get_by_id(table, config.eid)
         else:
-            dbconfig = table.get(where('datetime') == config['datetime'])
+            dbconfig = table.get(datetime=config['datetime'])
         if dbconfig is not None:
             if force_insert:
                 update_ids(table, config._serialize(), [doc_id(dbconfig)])
@@ -148,11 +216,11 @@ class DBStore(object):
     def get_scan_config(self, **kwargs):
         table = self.db.table('scan_configs')
         if kwargs.get('datetime'):
-            dbconfig = table.get(where('datetime')==kwargs.get('datetime'))
+            dbconfig = table.get(datetime=kwargs.get('datetime'))
         elif kwargs.get('eid'):
             dbconfig = get_by_id(table, kwargs.get('eid'))
         elif kwargs.get('name'):
-            dbconfig = table.get(where('name')==kwargs.get('name'))
+            dbconfig = table.get(name=kwargs.get('name'))
         elif last_id(table) > 0:
             dbconfig = get_by_id(table, last_id(table))
         else:
@@ -160,7 +228,7 @@ class DBStore(object):
         return dbconfig
     @property
     def scans_dir(self):
-        return os.path.join(os.path.dirname(self.SCAN_DB_PATH), 'scans')
+        return os.path.join(os.path.dirname(self.scan_db_path), 'scans')
     def _scan_file_name(self, eid, data, sample_data):
         ts = data.get('timestamp_utc') or time.time()
         stamp = time.strftime('%Y%m%d-%H%M%S', time.localtime(ts))
@@ -184,7 +252,7 @@ class DBStore(object):
         return name
     def _write_points(self, eid, data, sample_data, name=None, raw_dbFS=None):
         if not os.path.isdir(self.scans_dir):
-            os.makedirs(self.scans_dir)
+            os.makedirs(self.scans_dir, exist_ok=True)
         name = self._safe_name(name) or self._scan_file_name(eid, data, sample_data)
         path = os.path.join(self.scans_dir, name)
         tmp = path + '.tmp.npz'

@@ -386,7 +386,7 @@ def test_calibration_made_before_v209_is_corrected_when_it_is_used(tmpdir, monke
 
 def test_new_switch_in_the_settings_files():
     conf = open(os.path.join(QML, 'ScanConfig.qml'), encoding='utf-8').read()
-    assert conf.count('cleanImages') == 5 and 'cleanImages: false' in conf
+    assert conf.count('cleanImages') == 4          # V22.0: the value comes from the core
     dlg = open(os.path.join(QML, 'ScanControlsDialog.qml'), encoding='utf-8').read()
     assert "objectName: 'cleanImagesSwitch'" in dlg and "text: \"Hide dongle's own spurs\"" in dlg
     assert 'config.cleanImages = root.cleanImages;' in dlg and 'root.cleanImages = config.cleanImages;' in dlg
@@ -395,9 +395,11 @@ def test_new_switch_in_the_settings_files():
 
 
 def test_library_defaults():
+    # V22.0: the core defaults are the window's (tested) ones: spurs hidden,
+    # images only marked
     from wwb_scanner.scanner import config
     assert config.ProcessingConfig.DEFAULTS['clean_images'] is False
-    assert config.ProcessingConfig.DEFAULTS['clean_spurs'] is False
+    assert config.ProcessingConfig.DEFAULTS['clean_spurs'] is True
 
 
 def _isolated(code, timeout=180):

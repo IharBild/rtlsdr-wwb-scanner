@@ -60,7 +60,7 @@ class IntervalTimer(QObject):
             self._stop()
             self._start()
         self._interval_ms_changed.emit()
-    _interval_ms_changed = Signal()     # V21.4: @Signal decorator - PySide2 only
+    _interval_ms_changed = Signal()
     interval_ms = Property(float, _get_interval_ms, _set_interval_ms, notify=_interval_ms_changed)
 
     def _get_active(self):
