@@ -80,6 +80,7 @@ jobs:
           path: |
             dist/WWB-Scanner-*-win64-portable.zip
             dist/selftest_build.txt
+            dist/size_report.txt
           retention-days: 30
 
       - name: Attach the zip to the release

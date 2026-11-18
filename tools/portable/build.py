@@ -45,6 +45,34 @@ def run(cmd, **kw):
     return subprocess.run(cmd, **kw)
 
 
+def size_report(app, path):
+    """Where the megabytes are: by part and the biggest files (size_report.txt)."""
+    files = []
+    for d, _, fs in os.walk(app):
+        for f in fs:
+            p = os.path.join(d, f)
+            files.append((os.path.getsize(p), os.path.relpath(p, app).replace('\\', '/')))
+    total = sum(n for n, _ in files)
+    parts = {}
+    for n, rel in files:
+        bits = rel.split('/')
+        if bits[0] == '_internal' and len(bits) > 2:
+            key = '/'.join(bits[:3]) if bits[1] == 'PySide6' and len(bits) > 3 else '/'.join(bits[:2])
+        else:
+            key = '/'.join(bits[:2]) if len(bits) > 1 else bits[0]
+        parts[key] = parts.get(key, 0) + n
+    lines = ['total %.1f MB in %d files' % (total / 1e6, len(files)), '', 'by part:']
+    for k, n in sorted(parts.items(), key=lambda kv: -kv[1])[:30]:
+        lines.append('%8.1f MB  %5.1f %%  %s' % (n / 1e6, 100. * n / total, k))
+    lines += ['', 'biggest files:']
+    for n, rel in sorted(files, reverse=True)[:40]:
+        lines.append('%8.1f MB  %s' % (n / 1e6, rel))
+    text = '\n'.join(lines) + '\n'
+    with open(path, 'w', encoding='utf-8') as fh:
+        fh.write(text)
+    print(text)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument('--out', default=os.path.join(ROOT, 'dist'))
@@ -95,6 +123,7 @@ def main(argv=None):
     selftest_ok = r.returncode == 0
 
     size = sum(os.path.getsize(os.path.join(d, f)) for d, _, fs in os.walk(app) for f in fs)
+    size_report(app, os.path.join(out, 'size_report.txt'))
     print('build: %s, %.0f MB, selftest %s' % (app, size / 1e6, 'passed' if selftest_ok else 'FAILED'))
     if not args.no_zip:
         plat = 'win64' if WIN else '%s-%s' % (sys.platform, platform.machine())
