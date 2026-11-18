@@ -10,7 +10,7 @@ def _rtlsdr():
         RtlSdr = _RtlSdr
     return RtlSdr
 
-from wwb_scanner.ui.pyside.qt import QtCore, QtQml, Signal, Property
+from wwb_scanner.ui.pyside.qt import QtQml, Signal, Property
 import logging
 logger = logging.getLogger(__name__)
 

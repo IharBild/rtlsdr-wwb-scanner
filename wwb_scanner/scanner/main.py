@@ -12,13 +12,13 @@ MAX_TUNER_FREQ_HZ = 1766000000
 
 from wwb_scanner.core import JSONMixin
 from wwb_scanner import events
+from wwb_scanner.receivers import as_receiver
 events.install_log_bridge()       # V22.1: status records -> events
 from wwb_scanner.scanner.sdrwrapper import SdrWrapper
 from wwb_scanner.scanner.config import ScanConfig
 from wwb_scanner.scanner.sample_processing import (
     tile_keep,
     SampleCollection,
-    calc_num_samples,
     WINDOW_TYPES,
 )
 from wwb_scanner.scan_objects import Spectrum
@@ -407,7 +407,13 @@ class Scanner(ScannerBase):
         # read when the scan opens the dongle (SdrWrapper.open_sdr).
     @property
     def sdr(self):
+        """The pyrtlsdr object of the open dongle (or None)."""
         return self.sdr_wrapper.sdr
+    @property
+    def receiver(self):
+        """V22.3: the open receiver (wwb_scanner/receivers), or None. The
+        scanner core talks to the dongle only through it."""
+        return self.sdr_wrapper.receiver
     @property
     def sample_rate(self):
         return self.sampling_config.get('sample_rate')
@@ -439,8 +445,9 @@ class Scanner(ScannerBase):
             return step_size
         c = self.sampling_config
         overlap = c.sweep_overlap_ratio
-        self.sdr.sample_rate = c.sample_rate
-        rs = int(round(self.sdr.sample_rate))
+        rx = self.receiver
+        rx.sample_rate = c.sample_rate
+        rs = int(round(rx.sample_rate))
 
         self.sample_rate = rs
         nfft = self.window_size
@@ -508,7 +515,7 @@ class Scanner(ScannerBase):
     def learn_gains(self, sdr):
         """V18.1: read the gain table of an open dongle and round the gain."""
         try:
-            gains = [g / 10. for g in sdr.get_gains()]
+            gains = [float(g) for g in as_receiver(sdr).gains()]
         except Exception:
             return
         if gains:
@@ -524,14 +531,9 @@ class Scanner(ScannerBase):
     def get_gains(self):
         self.sdr_wrapper.enable_scanner_updates = False
         with self.sdr_wrapper:
-            sdr = self.sdr
-            if sdr is None:
-                gains = None
-            else:
-                gains = self.sdr.get_gains()
+            rx = self.receiver
+            gains = None if rx is None else [float(g) for g in rx.gains()]
         self.sdr_wrapper.enable_scanner_updates = True
-        if gains is not None:
-            gains = [gain / 10. for gain in gains]
         return gains
     def get_nearest_gain(self, gain):
         gains = self.gains

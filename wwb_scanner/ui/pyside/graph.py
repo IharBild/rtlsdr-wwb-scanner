@@ -1,7 +1,6 @@
 import time
 import logging
 logger = logging.getLogger(__name__)
-from bisect import bisect_left
 import os
 import sys
 
@@ -12,7 +11,6 @@ QtCharts = load_charts()     # chart types loaded before QML uses them
 
 
 from wwb_scanner.file_handlers import BaseImporter
-from wwb_scanner.scan_objects.spectrum import Spectrum
 from wwb_scanner.ui.pyside.utils import IntervalTimer, is_pathlike
 
 GRAPH_DTYPE = np.dtype([

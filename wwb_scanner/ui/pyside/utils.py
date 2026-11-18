@@ -1,8 +1,7 @@
-import time
 import threading
 import pathlib
 
-from wwb_scanner.ui.pyside.qt import QtCore, QtQml, QObject, Property, Signal
+from wwb_scanner.ui.pyside.qt import QtCore, QObject, Property, Signal
 import logging
 logger = logging.getLogger(__name__)
 

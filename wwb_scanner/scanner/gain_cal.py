@@ -26,6 +26,7 @@ between the groups, the nearest group outside them); without a table it is
 the nominal difference, as before.
 """
 from wwb_scanner import events
+from wwb_scanner.receivers import as_receiver, receiver_of
 import json
 import logging
 import os
@@ -252,7 +253,7 @@ def tile_psd(x, fs):
     return p[keep][o]
 
 
-def sweep(sdr, fc, gains, fs, run=None, budget_s=None, passes=2):
+def sweep(rx, fc, gains, fs, run=None, budget_s=None, passes=2):
     """Read one tile at every gain: up, then (V20.5.3) down again.
     Returns one list of rows [(gain_set, psd, clip_ratio)] per pass, each in
     the order of ``gains``."""
@@ -260,26 +261,26 @@ def sweep(sdr, fc, gains, fs, run=None, budget_s=None, passes=2):
     t0 = time.monotonic()
     for n in range(passes):
         order = list(gains) if n % 2 == 0 else list(gains)[::-1]
-        rows = _sweep_once(sdr, fc, order, fs, run, budget_s, t0, tune=(n == 0))
+        rows = _sweep_once(rx, fc, order, fs, run, budget_s, t0, tune=(n == 0))
         out.append(rows if n % 2 == 0 else rows[::-1])
     return out
 
 
-def _sweep_once(sdr, fc, gains, fs, run, budget_s, t0, tune=True):
+def _sweep_once(rx, fc, gains, fs, run, budget_s, t0, tune=True):
     from wwb_scanner.scanner.sample_processing import clip_ratio, run_with_timeout, \
         TUNE_TIMEOUT, READ_TIMEOUT
     call = run or (lambda f, *a: run_with_timeout(f, READ_TIMEOUT, *a))
     if tune:
-        run_with_timeout(sdr.set_center_freq, TUNE_TIMEOUT, fc)
+        run_with_timeout(rx.tune, TUNE_TIMEOUT, fc)
     rows = []
     for g in gains:
-        run_with_timeout(setattr, TUNE_TIMEOUT, sdr, 'gain', g)
+        run_with_timeout(setattr, TUNE_TIMEOUT, rx, 'gain', g)
         try:
-            gs = float(sdr.gain)
+            gs = float(rx.gain)
         except Exception:
             gs = float(g)
-        call(sdr.read_samples, DISCARD_SAMPLES)
-        x = call(sdr.read_samples, READ_SAMPLES)
+        call(rx.read, DISCARD_SAMPLES)
+        x = call(rx.read, READ_SAMPLES)
         rows.append((gs, tile_psd(x, fs), float(clip_ratio(x))))
         if budget_s is not None and time.monotonic() - t0 > budget_s:
             raise RuntimeError('the dongle answers too slowly (%.0f s for one tile)' % (time.monotonic() - t0))
@@ -404,11 +405,11 @@ def _reopen(scanner):
     while time.monotonic() < deadline:
         time.sleep(0.5)
         try:
-            sdr = wrapper.open_sdr()
+            rx = as_receiver(wrapper.open_sdr())
         except Exception:
-            sdr = None
-        if sdr is not None:
-            return sdr
+            rx = None
+        if rx is not None:
+            return rx
     return None
 
 
@@ -446,11 +447,11 @@ def calibrate(scanner, running=None):
         g0 = float(scanner.gain)
     except Exception:
         g0 = None
-    sdr = _reopen(scanner) or scanner.sdr
-    if sdr is None or not getattr(sdr, 'device_opened', True):
+    rx = _reopen(scanner) or receiver_of(scanner)
+    if rx is None or not getattr(rx, 'is_open', True):
         return False, 'Gain step calibration not saved: the dongle could not be opened again after the survey'
     if len(gains) < 2:
-        gains = sorted(g / 10. for g in sdr.get_gains())
+        gains = sorted(float(g) for g in rx.gains())
     events.console('measuring the gain steps on %d tile(s): %s MHz' % (
         len(anchors), ', '.join('%.1f' % (k / 1e6) for k in anchors)))
     sweeps, used, skipped = [], [], []
@@ -462,18 +463,18 @@ def calibrate(scanner, running=None):
             break
         rows = None
         for attempt in range(2):
-            if not getattr(sdr, 'device_opened', True):
+            if not getattr(rx, 'is_open', True):
                 # closed by the last error: never call the old handle again
                 if reopens >= MAX_REOPENS:
                     stopped = True
                     break
                 reopens += 1
-                sdr = _reopen(scanner)
-                if sdr is None:
+                rx = _reopen(scanner)
+                if rx is None:
                     stopped = True
                     break
             try:
-                rows = sweep(sdr, k, gains, fs, budget_s=60.)
+                rows = sweep(rx, k, gains, fs, budget_s=60.)
                 break
             except SdrTimeout as exc:
                 logger.error('gain steps at %.3f MHz: %s', k / 1e6, exc)
@@ -489,8 +490,8 @@ def calibrate(scanner, running=None):
         if stopped:
             break
     try:
-        if sdr is not None and getattr(sdr, 'device_opened', True) and g0 is not None:
-            run_with_timeout(setattr, TUNE_TIMEOUT, sdr, 'gain', g0)
+        if rx is not None and getattr(rx, 'is_open', True) and g0 is not None:
+            run_with_timeout(setattr, TUNE_TIMEOUT, rx, 'gain', g0)
     except Exception:
         logger.exception('could not set the gain back to %s dB', g0)
     note = ''

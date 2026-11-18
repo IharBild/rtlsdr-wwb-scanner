@@ -69,6 +69,7 @@ MARKERS = [
     ('V22.0', 'paths.py', 'def set_data_dir'),
     ('V22.1', 'service.py', 'class ScanService'),
     ('V22.2', 'scan_objects/passes.py', 'class ScanPasses'),
+    ('V22.3', 'receivers/__init__.py', 'class Receiver'),
 ]
 
 

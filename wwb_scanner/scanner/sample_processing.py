@@ -1,4 +1,5 @@
 from wwb_scanner import events
+from wwb_scanner.receivers import as_receiver, receiver_of
 import bisect
 import time
 import threading
@@ -12,7 +13,6 @@ import logging
 logger = logging.getLogger(__name__)
 
 from wwb_scanner.core import JSONMixin
-from wwb_scanner import scan_dll
 from wwb_scanner.scanner.scan_timing import ScanTiming
 
 WINDOW_TYPES = [s for s in WINDOW_TYPES if s != 'get_window']
@@ -493,13 +493,14 @@ class SampleSet(JSONMixin):
         timing = getattr(collection, 'timing', None)
         if timing is not None:
             timing.tick(self.center_frequency, stage)
-    def device_closed(self, sdr):
+    def device_closed(self, rx):
         """pyrtlsdr closes the device after any library error. Another call
         on a closed device uses a freed handle (can crash the program), so
         this tile stops. V20.4: the dongle is opened again (a new handle) and
         the scan goes on; the tile is read again at the end. Only when that
         fails does the scan stop."""
-        if getattr(sdr, 'device_opened', True):
+        rx = as_receiver(rx)     # V22.3: a raw pyrtlsdr object is accepted too
+        if getattr(rx, 'is_open', True):
             return False
         coll = self.collection
         reopen = getattr(coll, 'reopen_dongle', None)
@@ -526,19 +527,20 @@ class SampleSet(JSONMixin):
         if coll is not None:
             coll.aborted = True
 
-    def tune(self, sdr, freq):
+    def tune(self, rx, freq):
         """Set the centre frequency. A tuner that cannot lock must not
         kill the whole scan: retry once, then give up on this tile."""
-        if not getattr(sdr, 'device_opened', True):
+        rx = as_receiver(rx)     # V22.3: a raw pyrtlsdr object is accepted too
+        if not getattr(rx, 'is_open', True):
             # V20.4: closed by an error in the last tile: never call it again
-            self.device_closed(sdr)
+            self.device_closed(rx)
             return False
         for attempt in range(2):
             try:
-                run_with_timeout(sdr.set_center_freq, TUNE_TIMEOUT, freq)
+                run_with_timeout(rx.tune, TUNE_TIMEOUT, freq)
                 # scan edition DLL: the stock library says "OK" even when
                 # the tuner PLL did not lock; such a tile would be garbage
-                if scan_dll.tuner_locked(sdr) is False:
+                if rx.tuner_locked() is False:
                     # V21.1: a warning (status line, log); the tile that stays
                     # without data is reported at the end of the scan
                     logger.warning('PLL not locked at %s Hz (attempt %d)', freq, attempt + 1)
@@ -554,7 +556,7 @@ class SampleSet(JSONMixin):
                 # that says what to do ("the dongle stopped answering ...").
                 logger.warning('set_center_freq(%s) failed (attempt %d): %s',
                                freq, attempt + 1, exc)
-                if self.device_closed(sdr):
+                if self.device_closed(rx):
                     return False
         return False
 
@@ -565,8 +567,8 @@ class SampleSet(JSONMixin):
         freq = self.center_frequency
         sweeps_per_scan = scanner.sweeps_per_scan
         samples_per_sweep = scanner.samples_per_sweep
-        sdr = scanner.sdr
-        if not self.tune(sdr, freq):
+        rx = receiver_of(scanner)
+        if not self.tune(rx, freq):
             self._tick('tuned')
             self.raw = None
             self.complete.set()
@@ -575,18 +577,19 @@ class SampleSet(JSONMixin):
         self._tick('tuned')
         self.raw = np.zeros((sweeps_per_scan, samples_per_sweep), 'complex')
         self.powers = np.zeros((sweeps_per_scan, samples_per_sweep), 'float64')
-        self.read_samples_sync(sdr, sweeps_per_scan * samples_per_sweep)
+        self.read_samples_sync(rx, sweeps_per_scan * samples_per_sweep)
         self._tick('returned')
-    def read_samples_sync(self, sdr, num_samples):
+    def read_samples_sync(self, rx, num_samples):
         """One blocking read per tile. Starting and cancelling the async
         reader for every tile cost more time than the reading itself, and
         a cancel that never completes was one source of hangs."""
+        rx = as_receiver(rx)     # V22.3: a raw pyrtlsdr object is accepted too
         num_samples = int(-(-num_samples // 512) * 512)   # multiple of 512
         iq = None
         for attempt in range(2):
             try:
-                run_with_timeout(sdr.read_samples, READ_TIMEOUT, NUM_SAMPLES_DISCARDED)    # old data from before retuning
-                iq = run_with_timeout(sdr.read_samples, READ_TIMEOUT, num_samples)
+                run_with_timeout(rx.read, READ_TIMEOUT, NUM_SAMPLES_DISCARDED)    # old data from before retuning
+                iq = run_with_timeout(rx.read, READ_TIMEOUT, num_samples)
                 self.check_budget()
                 break
             except SdrTimeout as exc:
@@ -595,7 +598,7 @@ class SampleSet(JSONMixin):
                 break
             except Exception:
                 logger.exception('read failed at %s Hz (attempt %s)', self.center_frequency, attempt + 1)
-                if self.device_closed(sdr):
+                if self.device_closed(rx):
                     break
         if iq is None:
             self.raw = None
@@ -606,7 +609,7 @@ class SampleSet(JSONMixin):
         self.raw_normal = None
         if self.clip_ratio >= OVERLOAD_RATIO and self._auto_gain_enabled():
             normal = iq
-            iq = self.remeasure_lower_gain(sdr, num_samples, iq)
+            iq = self.remeasure_lower_gain(rx, num_samples, iq)
             if iq is not normal:
                 # V20: both readings go into the tile (merge_low_gain)
                 self.raw_normal = np.asarray(normal[:sweeps * per_sweep], dtype=np.complex128)
@@ -617,13 +620,14 @@ class SampleSet(JSONMixin):
             return bool(self.scanner.sampling_config.get('auto_gain'))
         except Exception:
             return False
-    def remeasure_lower_gain(self, sdr, num_samples, iq):
+    def remeasure_lower_gain(self, rx, num_samples, iq):
         """The ADC clipped: read the tile again with lower gain and scale the
         samples back by the gain difference, so levels stay comparable.
         The gain is always set back. Returns the samples to use."""
+        rx = as_receiver(rx)     # V22.3: a raw pyrtlsdr object is accepted too
         scanner = self.scanner
         try:
-            g0 = float(sdr.gain)
+            g0 = float(rx.gain)
         except Exception:
             g0 = float(scanner.gain or 0.)
         gains = None
@@ -640,13 +644,13 @@ class SampleSet(JSONMixin):
             for g in self.lower_gain_steps(g0, gains):
                 if best is not None and g >= best[1]:
                     continue
-                run_with_timeout(setattr, TUNE_TIMEOUT, sdr, 'gain', g)
+                run_with_timeout(setattr, TUNE_TIMEOUT, rx, 'gain', g)
                 try:
-                    g_set = float(sdr.gain)
+                    g_set = float(rx.gain)
                 except Exception:
                     g_set = g
-                run_with_timeout(sdr.read_samples, READ_TIMEOUT, NUM_SAMPLES_DISCARDED)
-                x = run_with_timeout(sdr.read_samples, READ_TIMEOUT, num_samples)
+                run_with_timeout(rx.read, READ_TIMEOUT, NUM_SAMPLES_DISCARDED)
+                x = run_with_timeout(rx.read, READ_TIMEOUT, num_samples)
                 self.check_budget()
                 cr = clip_ratio(x)
                 tried.append((x, g_set, cr))
@@ -664,8 +668,8 @@ class SampleSet(JSONMixin):
             logger.exception('auto gain at %s Hz failed, clipped tile kept', self.center_frequency)
         finally:
             try:
-                if getattr(sdr, 'device_opened', True):     # V20.4: never on a closed handle
-                    run_with_timeout(setattr, TUNE_TIMEOUT, sdr, 'gain', g0)
+                if getattr(rx, 'is_open', True):     # V20.4: never on a closed handle
+                    run_with_timeout(setattr, TUNE_TIMEOUT, rx, 'gain', g0)
             except Exception:
                 logger.exception('could not set the gain back to %s dB', g0)
         if best is None:
@@ -690,12 +694,13 @@ class SampleSet(JSONMixin):
             logger.exception('gain step table')
             return float(g_hi) - float(g_lo)
 
-    def read_low_gain(self, sdr, g_low, g0):
+    def read_low_gain(self, rx, g_low, g0):
         """V20: this tile is near a strong carrier: read it again with the
         gain ``g_low`` (the caller has set it) and merge the reading with
         the normal one of the scan. V20.1: also a clipped tile whose own
         low-gain reading was made with more gain than its zone needs.
         The spectrum is rebuilt by the caller."""
+        rx = as_receiver(rx)     # V22.3: a raw pyrtlsdr object is accepted too
         if self.powers is None:
             return False
         was_low = self.powers_low is not None
@@ -703,12 +708,12 @@ class SampleSet(JSONMixin):
         if normal is None:
             return False
         self.tile_t0 = time.monotonic()
-        if not self.tune(sdr, self.center_frequency):
+        if not self.tune(rx, self.center_frequency):
             return False
         sweeps, per_sweep = self.sweeps_per_scan, self.samples_per_sweep
         n = int(-(-(sweeps * per_sweep) // 512) * 512)
-        run_with_timeout(sdr.read_samples, READ_TIMEOUT, NUM_SAMPLES_DISCARDED)
-        x = run_with_timeout(sdr.read_samples, READ_TIMEOUT, n)
+        run_with_timeout(rx.read, READ_TIMEOUT, NUM_SAMPLES_DISCARDED)
+        x = run_with_timeout(rx.read, READ_TIMEOUT, n)
         self.check_budget()
         if x is None:
             return False
@@ -732,19 +737,20 @@ class SampleSet(JSONMixin):
             self.neighbour = True
         return True
 
-    def read_check(self, sdr):
+    def read_check(self, rx):
         """V21.2: one more reading of this tile with the gain that is set
         now, for the second-gain check of its peaks. Linear PSD of the kept
         bins (not scaled), or None (tuning failed, clipped, other shape)."""
+        rx = as_receiver(rx)     # V22.3: a raw pyrtlsdr object is accepted too
         if self.powers is None:
             return None
         self.tile_t0 = time.monotonic()
-        if not self.tune(sdr, self.center_frequency):
+        if not self.tune(rx, self.center_frequency):
             return None
         sweeps, per_sweep = self.sweeps_per_scan, self.samples_per_sweep
         n = int(-(-(sweeps * per_sweep) // 512) * 512)
-        run_with_timeout(sdr.read_samples, READ_TIMEOUT, NUM_SAMPLES_DISCARDED)
-        x = run_with_timeout(sdr.read_samples, READ_TIMEOUT, n)
+        run_with_timeout(rx.read, READ_TIMEOUT, NUM_SAMPLES_DISCARDED)
+        x = run_with_timeout(rx.read, READ_TIMEOUT, n)
         self.check_budget()
         if x is None or clip_ratio(x) >= OVERLOAD_RATIO:
             return None
@@ -1010,10 +1016,10 @@ class SampleCollection(JSONMixin):
         while time.monotonic() < deadline and self.scanning.is_set():
             time.sleep(REOPEN_PAUSE_S)
             try:
-                sdr = wrapper.open_sdr()
+                rx = wrapper.open_sdr()
             except Exception:
-                sdr = None
-            if sdr is not None:
+                rx = None
+            if rx is not None:
                 events.console('dongle opened again after a USB error')
                 return True
         return False
@@ -1121,9 +1127,9 @@ class SampleCollection(JSONMixin):
             self.neighbours_skipped = len(targets) - limit
             targets = dict((k, targets[k]) for k in keep)
         scanner = self.scanner
-        sdr = scanner.sdr
+        rx = receiver_of(scanner)
         try:
-            g0 = float(sdr.gain)
+            g0 = float(rx.gain)
         except Exception:
             g0 = float(scanner.gain or 0.)
         by_gain = {}
@@ -1135,22 +1141,22 @@ class SampleCollection(JSONMixin):
             for g in sorted(by_gain, reverse=True):
                 if self.aborted or not self.scanning.is_set():
                     break
-                run_with_timeout(setattr, TUNE_TIMEOUT, sdr, 'gain', g)
+                run_with_timeout(setattr, TUNE_TIMEOUT, rx, 'gain', g)
                 try:
-                    g_set = float(sdr.gain)
+                    g_set = float(rx.gain)
                 except Exception:
                     g_set = g
                 for k in sorted(by_gain[g]):
                     if self.aborted or not self.scanning.is_set():
                         break
-                    if self.sample_sets[k].read_low_gain(sdr, g_set, g0):
+                    if self.sample_sets[k].read_low_gain(rx, g_set, g0):
                         done.append(k)
-                    if not getattr(sdr, 'device_opened', True):
+                    if not getattr(rx, 'is_open', True):
                         # V20.4: USB error - the old handle must not be used again
                         logger.error('dongle error while reading tiles next to a strong carrier: '
                                      'the rest are kept as measured')
                         break
-                if not getattr(sdr, 'device_opened', True):
+                if not getattr(rx, 'is_open', True):
                     break
         except SdrTimeout as exc:
             logger.error('reading tiles next to a strong carrier: %s', exc)
@@ -1159,8 +1165,8 @@ class SampleCollection(JSONMixin):
             logger.exception('reading tiles next to a strong carrier failed, they are kept as measured')
         finally:
             try:
-                if getattr(sdr, 'device_opened', True):     # V20.4: never on a closed handle
-                    run_with_timeout(setattr, TUNE_TIMEOUT, sdr, 'gain', g0)
+                if getattr(rx, 'is_open', True):     # V20.4: never on a closed handle
+                    run_with_timeout(setattr, TUNE_TIMEOUT, rx, 'gain', g0)
             except Exception:
                 logger.exception('could not set the gain back to %s dB', g0)
         self.neighbours = sorted(k for k in done if self.sample_sets[k].neighbour)
@@ -1463,9 +1469,9 @@ class SampleCollection(JSONMixin):
         if not cl:
             return
         scanner = self.scanner
-        sdr = scanner.sdr
+        rx = receiver_of(scanner)
         try:
-            g0 = float(sdr.gain)
+            g0 = float(rx.gain)
         except Exception:
             g0 = float(scanner.gain or 0.)
         try:
@@ -1489,18 +1495,18 @@ class SampleCollection(JSONMixin):
         stuck = False
         try:
             for name, g in (('l1', g_low), ('n2', g0), ('l2', g_low)):
-                if self.aborted or not self.scanning.is_set() or not getattr(sdr, 'device_opened', True):
+                if self.aborted or not self.scanning.is_set() or not getattr(rx, 'is_open', True):
                     break
-                run_with_timeout(setattr, TUNE_TIMEOUT, sdr, 'gain', g)
+                run_with_timeout(setattr, TUNE_TIMEOUT, rx, 'gain', g)
                 if name != 'n2':
                     try:
-                        g_set_low = float(sdr.gain)
+                        g_set_low = float(rx.gain)
                     except Exception:
                         g_set_low = g
                 for k in keys:
-                    if self.aborted or not self.scanning.is_set() or not getattr(sdr, 'device_opened', True):
+                    if self.aborted or not self.scanning.is_set() or not getattr(rx, 'is_open', True):
                         break
-                    reads[k][name] = self.sample_sets[k].read_check(sdr)
+                    reads[k][name] = self.sample_sets[k].read_check(rx)
         except SdrTimeout as exc:
             logger.error('second-gain check of the peaks: %s', exc)
             stuck = True
@@ -1514,8 +1520,8 @@ class SampleCollection(JSONMixin):
                 self.aborted = False
             try:
                 # never on a closed handle; not on a hanging one either
-                if not stuck and getattr(sdr, 'device_opened', True):
-                    run_with_timeout(setattr, TUNE_TIMEOUT, sdr, 'gain', g0)
+                if not stuck and getattr(rx, 'is_open', True):
+                    run_with_timeout(setattr, TUNE_TIMEOUT, rx, 'gain', g0)
             except Exception:
                 logger.exception('could not set the gain back to %s dB', g0)
         if stuck:
@@ -1927,15 +1933,16 @@ class SampleCollection(JSONMixin):
                        100. * max(r for _, _, r in self.overload))
 
     def report_pll(self):
-        sdr = getattr(getattr(self, 'scanner', None), 'sdr', None)
+        sc = getattr(self, 'scanner', None)
+        rx = receiver_of(sc) if sc is not None else None
         try:
-            stats = scan_dll.pll_stats(sdr) if sdr is not None else None
+            stats = rx.pll_stats() if rx is not None else None
         except Exception:
             stats = None
         if stats is not None:
             events.console('tuner PLL: locked late %d times, not locked %d times' % stats)
         try:
-            i2c = scan_dll.i2c_stats(sdr) if sdr is not None else None
+            i2c = rx.i2c_stats() if rx is not None else None
         except Exception:
             i2c = None
         if i2c is not None:

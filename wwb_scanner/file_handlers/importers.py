@@ -4,7 +4,6 @@ import logging
 import datetime
 import re
 import xml.etree.ElementTree as ET
-import itertools
 
 import numpy as np
 
@@ -207,7 +206,6 @@ class WWB3Importer(BaseImporter):
             return f.read()
     def parse_file_data(self):
         import json
-        import struct
         b = self.file_data
         if not b.startswith(b'//@ShureScan'):
             raise ValueError('%s: not a WWB sdb3 file' % os.path.basename(self.filename))

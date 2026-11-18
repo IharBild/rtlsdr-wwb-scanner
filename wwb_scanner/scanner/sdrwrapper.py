@@ -18,6 +18,12 @@ def rtlsdr_class():
         RtlSdr = _RtlSdr
     return RtlSdr
 
+def _is_open(dev):
+    """pyrtlsdr: device_opened; a Receiver (V22.3): is_open."""
+    v = getattr(dev, 'device_opened', None)
+    return getattr(dev, 'is_open', True) if v is None else v
+
+
 class SdrWrapper(object):
     def __init__(self, **kwargs):
         self.sdr = None
@@ -26,6 +32,7 @@ class SdrWrapper(object):
         self.device_open = threading.Event()
         self.device_wait = threading.Event()
         self.device_lock = threading.RLock()
+        self._rx = (None, None)       # V22.3: (device, its Receiver)
     def set_sdr_values(self):
         if not self.enable_scanner_updates:
             return
@@ -56,7 +63,7 @@ class SdrWrapper(object):
     def open_sdr(self):
         with self.device_lock:
             if self.sdr is not None:
-                if not self.sdr.device_opened:
+                if not _is_open(self.sdr):
                     self.sdr.close()
                     self.sdr = None
                     self.device_open.clear()
@@ -84,6 +91,18 @@ class SdrWrapper(object):
             except Exception:
                 traceback.print_exc()
         return sdr
+    @property
+    def receiver(self):
+        """V22.3: the open dongle as a Receiver (wwb_scanner/receivers)."""
+        dev = self.sdr
+        if dev is None:
+            return None
+        cached_dev, rx = getattr(self, '_rx', (None, None))
+        if cached_dev is not dev:
+            from wwb_scanner.receivers import as_receiver
+            rx = as_receiver(dev)
+            self._rx = (dev, rx)
+        return rx
     def close_sdr(self):
         with self.device_lock:
             if self.sdr is not None:

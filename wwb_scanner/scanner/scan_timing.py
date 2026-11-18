@@ -5,7 +5,6 @@ short report to ``wwb_scan_timing.txt`` in the data folder (V22.0; was the
 home folder) at the end of the scan. It never
 raises: a problem with the measurement must not break a scan.
 """
-import os
 import time
 import threading
 

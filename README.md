@@ -10,7 +10,7 @@ company in Poland and for sound engineers across Europe. Most of the code in thi
 written with Claude (Anthropic); every release is checked on a real V4 dongle by the
 maintainer.
 
-Current version: **V21.4.1** in the branch `v4-fixes` (installed by the command below). Last tagged
+Current version: **V22.3** in the branch `v4-fixes` (installed by the command below). Last tagged
 release: [v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v18.1)
 (branch `v4-fixes`). The `master` branch is the original upstream code and is not used here.
 
@@ -183,6 +183,31 @@ release: [v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v18
   - Checked: the window check U1-U41 passes on PySide2 5.15 (Python 3.8) and PySide6 6.12
     (Python 3.13, also from a clean install with only Essentials + Addons); all tests on
     both. **Not yet on Windows with the dongle.**
+- **V22.0-V22.3** - **New foundation** (audit of the architecture of 16.11.2026). Nothing
+  changes in what a scan measures; the code underneath is ready for the precise mode, the
+  web interface and other receivers.
+  - **Python 3.11 or newer, PySide6 only.** Python 3.7-3.10 and PySide2 are no longer
+    supported (use V21.4.1 there). On Python 3.11 PySide6 stays below 6.12: 6.12.0 aborts
+    there after a few hundred Qt messages (Python 3.12+ is not affected).
+  - **One data folder** `%USERPROFILE%\wwb_scanner_data` (or the variable
+    `WWB_SCANNER_DATA`): history of scans, calibrations, one log file (`logs\`), the time
+    report and now also the **window settings** (an INI file instead of the Windows
+    registry; the first start copies them from the registry, which is left as it is).
+  - **One set of default settings in the core** = the tested configuration (2400 kHz,
+    33.8 dB, Hann 96, 2048 x 40, overlap 0.65); a misspelt setting is an error.
+  - No tinydb and no json-object-factory any more; the history files keep their layout.
+  - Removed: Sample objects per point (13 MB per full scan), the empty `iq` field of the
+    points, the matplotlib plot, the rtl_power scanner, the TCP dongle, the async reader,
+    scaling / smoothing / interpolation.
+  - **Scan service and events** (`wwb_scanner/service.py`, `wwb_scanner/events.py`): what
+    a scan of each kind is (ordinary, floor calibration, gain step calibration), why it
+    can not start, and the result in one object; the floor calibration is saved by the
+    core. Status lines, console lines, progress and every tile are events.
+  - **Several passes** (`scan_objects/passes.py`): a scan can keep N passes on one grid
+    with views max-hold / average / last; the history keeps every pass. The base of the
+    "Precise" mode; not yet in the window.
+  - **Receiver interface** (`wwb_scanner/receivers`): the core reaches the dongle only
+    through it; the RTL-SDR is one implementation.
 - **V21.4.1** - checked on the V4 (16-18.11.2026): the window on PySide6 (Python 3.13,
   41/41 window checks with the dongle, 12 manual checks, export in 4 formats; WSM opens our
   file) and on PySide2 (Python 3.7). Full scan 31-1766 MHz: 154 s on Python 3.13.
@@ -243,21 +268,20 @@ release: [v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v18
 | | |
 |---|---|
 | Hardware | RTL-SDR Blog V4 (R828D tuner) |
-| System | Windows 11, Python 3.7.8 64-bit |
-| Libraries | numpy 1.21.6, scipy 1.7.3, pyrtlsdr 0.3.0, PySide2 5.15.2.1, tinydb 4.8.0 |
+| System | Windows 11, Python 3.13.17 64-bit |
+| Libraries | numpy 2.5.4, scipy 1.18.1, pyrtlsdr 0.5.1, PySide6 6.12.0 |
 | Driver | `rtlsdr-scanner-v7` (checked on the V4 15.11.2026) |
-| Also on the V4 | Windows 11, Python 3.13.17: numpy 2.5.4, scipy 1.18.1, pyrtlsdr 0.5.1 (core; the PySide6 window since V21.4 not yet) |
-| Automatic tests | GitHub Actions: Linux and Windows, Python 3.8 and 3.13; Linux, Python 3.10; simulator instead of the dongle |
+| Automatic tests | GitHub Actions: Linux, Python 3.11, 3.13 and 3.14; Windows, Python 3.13; simulator instead of the dongle |
 
-The window runs on PySide2 5.15 (Python 3.7–3.10) or PySide6 (Python 3.11–3.15, V21.4+);
-pip picks the right one. pyrtlsdr 0.4 and newer (Python 3.10+) need the
-`rtlsdr-scanner-v7` driver.
+Python 3.11 or newer; the window runs on PySide6. pyrtlsdr 0.4 and newer need the
+`rtlsdr-scanner-v7` driver. V22.x is checked on the V4 only after the maintainer's run
+(see the version list above).
 
 ## Installation (Windows)
 
 1. **Dongle driver.** Plug in the V4 and install the WinUSB driver with
    [Zadig](https://zadig.akeo.ie/) (standard RTL-SDR step).
-2. **Python.** Install Python 3.13, 64-bit (or any of 3.7–3.15), then create a virtual
+2. **Python.** Install Python 3.13, 64-bit (or any of 3.11–3.15), then create a virtual
    environment:
 
    ```bat
@@ -275,15 +299,14 @@ pip picks the right one. pyrtlsdr 0.4 and newer (Python 3.10+) need the
      https://github.com/IharBild/rtlsdr-wwb-scanner/archive/refs/heads/v4-fixes.zip
    ```
 
-   pip picks pyrtlsdr, numpy and PySide2 / PySide6 to match the Python version (V21.4+).
+   pip installs numpy, scipy, pyrtlsdr and PySide6 (Essentials + Addons) with it.
 
    For a fixed release use `.../archive/refs/tags/v18.1.zip` instead.
 
 4. **rtlsdr.dll.** Unpack the same source archive, then with the environment active:
    `python drivers\rtlsdr-scanner-v7\install_dll.py` (puts the DLL into
    `C:\wwb-scanner\Scripts`; `... install_dll.py where` shows which DLL is loaded,
-   `... install_dll.py rollback` restores the previous one). With Python 3.7–3.9
-   (pyrtlsdr 0.3) the v6 driver works too: `drivers\rtlsdr-scanner-v6\install_dll.py`.
+   `... install_dll.py rollback` restores the previous one).
 5. **Start:** `C:\wwb-scanner\Scripts\wwb_scanner-ui`. You can make a desktop shortcut to it.
 
 A one-click Windows installer is planned.
@@ -291,7 +314,8 @@ A one-click Windows installer is planned.
 ### Updating
 
 The same command with `--force-reinstall --no-deps` replaces the program files and keeps
-your libraries, scans, calibrations and settings (they live in `%USERPROFILE%\wwb_scanner_data`):
+your libraries, scans, calibrations and settings (they live in `%USERPROFILE%\wwb_scanner_data`,
+or in the folder named by the variable `WWB_SCANNER_DATA`):
 
 ```bat
 python -m pip install --force-reinstall --no-deps ^
@@ -311,7 +335,7 @@ python -m pip freeze > C:\wwb_backup\pip_freeze.txt
 rem 2. remove the old program, then the files pip did not know about
 python -m pip uninstall -y rtlsdr-wwb-scanner
 rmdir /S /Q "<that folder>"
-rem 3. install this fork without touching numpy / scipy / PySide2 / pyrtlsdr
+rem 3. install this fork without touching numpy / scipy / PySide6 / pyrtlsdr
 python -m pip install --no-deps ^
   https://github.com/IharBild/rtlsdr-wwb-scanner/archive/refs/heads/v4-fixes.zip
 ```
@@ -389,5 +413,12 @@ Windows: быстрее, без собственных помех донгла �
   Проверено на V4 16–18.11.2026 (Python 3.13 и 3.7, ручные проверки, экспорт; WSM открыл наш файл).
 - V21.4.1: в консоли — время проверки пиков и список проверенных пиков; счётчики I2C тюнера
   ещё раз перед закрытием донгла, если были повторы.
+- V22.0–V22.3: новый фундамент по аудиту архитектуры 16.11.2026; что и как измеряется, не
+  меняется. Нужен Python 3.11+ и PySide6 (для Python 3.7–3.10 — V21.4.1). Одна папка данных
+  `%USERPROFILE%\wwb_scanner_data` (или переменная `WWB_SCANNER_DATA`): история, калибровки,
+  один журнал, а теперь и настройки окна — INI-файл вместо реестра (при первом запуске они
+  копируются из реестра). Настройки по умолчанию — в ядре; без tinydb. В ядре появились
+  служба скана и события, сканы из нескольких проходов (основа режима «Точный») и
+  интерфейс приёмника (основа для других приёмников).
 
 [osmosdr-wiki]: https://osmocom.org/projects/rtl-sdr/wiki
