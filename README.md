@@ -11,7 +11,7 @@ written with Claude (Anthropic); every release is checked on a real V4 dongle by
 maintainer.
 
 Current version: **V22.3** in the branch `v4-fixes` (installed by the command below). Last tagged
-release: [v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v18.1)
+release: [v22.3](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v22.3)
 (branch `v4-fixes`). The `master` branch is the original upstream code and is not used here.
 
 Русская часть — [в конце страницы](#по-русски).
@@ -208,6 +208,10 @@ release: [v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v18
     "Precise" mode; not yet in the window.
   - **Receiver interface** (`wwb_scanner/receivers`): the core reaches the dongle only
     through it; the RTL-SDR is one implementation.
+  - Checked on the V4 18.11.2026 (Python 3.13.17, PySide6 6.12.0, driver v7): PC checks
+    0 FAIL, 41/41 window checks; by hand: settings moved from the registry to the INI
+    file and kept after a restart, scan 470-700 MHz in 24 s, Stop, export in 4 formats
+    (WSM opens our file), floor calibration without antenna saved by the new core.
 - **V21.4.1** - checked on the V4 (16-18.11.2026): the window on PySide6 (Python 3.13,
   41/41 window checks with the dongle, 12 manual checks, export in 4 formats; WSM opens our
   file) and on PySide2 (Python 3.7). Full scan 31-1766 MHz: 154 s on Python 3.13.
@@ -274,8 +278,8 @@ release: [v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v18
 | Automatic tests | GitHub Actions: Linux, Python 3.11, 3.13 and 3.14; Windows, Python 3.13; simulator instead of the dongle |
 
 Python 3.11 or newer; the window runs on PySide6. pyrtlsdr 0.4 and newer need the
-`rtlsdr-scanner-v7` driver. V22.x is checked on the V4 only after the maintainer's run
-(see the version list above).
+`rtlsdr-scanner-v7` driver. V22.3 is checked on the V4 (18.11.2026, see the version list
+above).
 
 ## Installation (Windows)
 
@@ -301,7 +305,7 @@ Python 3.11 or newer; the window runs on PySide6. pyrtlsdr 0.4 and newer need th
 
    pip installs numpy, scipy, pyrtlsdr and PySide6 (Essentials + Addons) with it.
 
-   For a fixed release use `.../archive/refs/tags/v18.1.zip` instead.
+   For a fixed release use `.../archive/refs/tags/v22.3.zip` instead.
 
 4. **rtlsdr.dll.** Unpack the same source archive, then with the environment active:
    `python drivers\rtlsdr-scanner-v7\install_dll.py` (puts the DLL into
@@ -419,6 +423,6 @@ Windows: быстрее, без собственных помех донгла �
   один журнал, а теперь и настройки окна — INI-файл вместо реестра (при первом запуске они
   копируются из реестра). Настройки по умолчанию — в ядре; без tinydb. В ядре появились
   служба скана и события, сканы из нескольких проходов (основа режима «Точный») и
-  интерфейс приёмника (основа для других приёмников).
+  интерфейс приёмника (основа для других приёмников). Проверено на V4 18.11.2026.
 
 [osmosdr-wiki]: https://osmocom.org/projects/rtl-sdr/wiki
