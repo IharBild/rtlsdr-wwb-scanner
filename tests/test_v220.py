@@ -300,7 +300,9 @@ def test_window_settings_move_from_the_registry_once(tmpdir):
         app.setOrganizationName('wwb-v220-test'); app.setApplicationName('wwb_scanner')
         p = M.setup_settings('wwb-v220-test', 'wwb_scanner')
         s = S()
-        print('FILE', p == paths.settings_file('wwb-v220-test'), s.fileName() == p)
+        import os
+        print('FILE', p == os.path.normpath(paths.settings_file('wwb-v220-test')),
+              os.path.normpath(s.fileName()) == p)
         print('VALUES', s.value('Scan Config/windowSize'), s.value('Scan Presets/presets'),
               str(s.value('User Interface/darkWindow')).lower())
         s.setValue('Scan Config/windowSize', 96); s.sync()

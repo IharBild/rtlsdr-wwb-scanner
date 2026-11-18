@@ -70,6 +70,7 @@ def test_nothing_without_a_dll(monkeypatch, tmpdir):
 def test_nothing_on_other_systems(monkeypatch, tmpdir):
     tmpdir.mkdir('Scripts').join('rtlsdr.dll').write_binary(b'x')
     monkeypatch.setattr(dllpath.sys, 'prefix', str(tmpdir))
+    monkeypatch.setattr(dllpath.sys, 'platform', 'linux')
     assert dllpath.prepare() is None
 
 

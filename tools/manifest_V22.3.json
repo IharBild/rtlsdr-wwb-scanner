@@ -35,7 +35,7 @@
   "ui/pyside/bands_qt.py": "04f76c236953fda05c721968233fb0c577b88f500b49f489489f70177fabb781",
   "ui/pyside/device_config.py": "0931f2db2fd444fb68a911c73c6e0c68c195eb1aa1657f0e43e51304b0e6ce89",
   "ui/pyside/graph.py": "a96cf1642629d30704c54f1dbd494e9ea24a5ba4559ded69551efe7ab5843e69",
-  "ui/pyside/main.py": "a216cefa80fa8987bc91a4c57b6ec0e3503f6f8e425482fc2e55fc11faca0b42",
+  "ui/pyside/main.py": "e9195a4a2816f6d4e222b2018ef7044dd055fd5dcfbe41f2f580f15c353060fc",
   "ui/pyside/qml/BandsDialog.qml": "87a1b542691f54e618efeba6011a0f2c32f15401ca3ce8e6d837a16c63fe3997",
   "ui/pyside/qml/BoxCheck.qml": "ffbbd891d18b9cdd90ef086b9f65dd30f0278fa9ea949a60d982419b5c44b1c4",
   "ui/pyside/qml/ChartSelect.qml": "4fa6aa0105e27ad346949112e5eb12b450a022a02e9dd857e80cb69efe8822a4",

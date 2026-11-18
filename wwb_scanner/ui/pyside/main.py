@@ -58,7 +58,7 @@ def setup_settings(org=ORG_NAME, app_name=APP_NAME):
     S.setPath(S.Format.IniFormat, S.Scope.UserScope, paths.data_dir(create=True))
     S.setDefaultFormat(S.Format.IniFormat)
     ini = S(S.Format.IniFormat, S.Scope.UserScope, org, app_name)
-    path = ini.fileName()
+    path = os.path.normpath(ini.fileName())     # Qt gives / on Windows too
     if not ini.allKeys():
         native = S(S.Format.NativeFormat, S.Scope.UserScope, org, app_name)
         keys = [k for k in native.allKeys()]
@@ -67,7 +67,7 @@ def setup_settings(org=ORG_NAME, app_name=APP_NAME):
                 ini.setValue(k, native.value(k))
             ini.sync()
             logger.info('window settings copied from %s to %s (%d values)',
-                        native.fileName(), path, len(keys))
+                        os.path.normpath(native.fileName()), path, len(keys))
     return path
 
 
