@@ -3,10 +3,11 @@ in the status line at the bottom, errors also in a dialog, and everything
 written to the log file of the program (V22.0: logs/ in the data folder).
 
 StatusHub is a QML type (main.qml creates one). Python code does not need
-to know about it: it logs with the standard logging module, and a handler
-forwards records of the "wwb_scanner" loggers (WARNING and above, plus INFO
-of "wwb_scanner.status") to the hub that exists at that moment. Records can
-come from the scan thread; they reach QML through a queued signal.
+to know about it: it logs with the standard logging module; the core turns
+records of the "wwb_scanner" loggers (WARNING and above, plus INFO of
+"wwb_scanner.status") into status events (V22.1, wwb_scanner/events.py) and
+the hub that exists at that moment shows them. Events can come from the
+scan thread; they reach QML through a queued signal.
 """
 import logging
 import logging.handlers
@@ -63,24 +64,12 @@ class StatusHub(QtCore.QObject):
         self._on_post('info', '')
 
 
-class StatusLogHandler(logging.Handler):
-    def emit(self, record):
-        hub = _active['hub']
-        if hub is None:
-            return
-        try:
-            if record.levelno < logging.WARNING and not record.name.startswith(STATUS_LOGGER):
-                return
-            if record.levelno >= logging.ERROR:
-                level = 'error'
-            elif record.levelno >= logging.WARNING:
-                level = 'warning'
-            else:
-                level = 'info'
-            text = record.getMessage().strip().split('\n')[0][:400]
-            hub.post(level, text)
-        except Exception:
-            pass
+def _on_event(event):
+    """V22.1: status events of the core (wwb_scanner/events.py) -> the hub
+    of the window (any thread; the hub queues them to the window thread)."""
+    hub = _active['hub']
+    if hub is not None:
+        hub.post(event.get('level', 'info'), event.get('text', ''))
 
 
 def setup_logging():
@@ -91,7 +80,11 @@ def setup_logging():
     log = logging.getLogger('wwb_scanner')
     if log.level == logging.NOTSET or log.level > logging.INFO:
         log.setLevel(logging.INFO)
-    log.addHandler(StatusLogHandler(logging.INFO))
+    # V22.1: the core sends status events; the window listens on the bus
+    # (was a logging handler of its own with the same rule)
+    from wwb_scanner import events
+    events.install_log_bridge()
+    events.bus.subscribe(_on_event, kinds=('status',))
     try:
         # V22.0: the one log file of the program (log_config, data folder)
         from wwb_scanner import log_config

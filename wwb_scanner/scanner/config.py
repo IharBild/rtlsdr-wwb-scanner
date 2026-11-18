@@ -64,11 +64,12 @@ class ScanConfig(Config):
         return [(float(lo), float(hi))]
     def check(self):
         """None, or why these settings can not be scanned (text)."""
+        inf = float('inf')
         for lo, hi in self.segments():
-            if not (lo == lo and hi == hi):          # NaN: empty field
-                return 'Start and End must be numbers'
-            if lo >= hi:
-                return 'Start (%g MHz) must be below End (%g MHz)' % (lo, hi)
+            if not (lo == lo and hi == hi) or abs(lo) == inf or abs(hi) == inf:   # NaN: empty field
+                return 'Start Freq and End Freq must be numbers (MHz).'
+            if hi <= lo:
+                return 'End Freq (%g MHz) must be above Start Freq (%g MHz).' % (hi, lo)
         s = self.sampling
         if not (s.sample_rate > 0 and s.samples_per_sweep > 0 and s.sweeps_per_scan > 0):
             return 'sample rate, samples per sweep and sweeps per scan must be above 0'

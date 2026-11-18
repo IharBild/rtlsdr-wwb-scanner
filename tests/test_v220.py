@@ -167,9 +167,9 @@ def test_unknown_key_is_an_error_and_old_keys_are_dropped():
 def test_settings_check():
     from wwb_scanner.scanner.config import ScanConfig
     assert ScanConfig({'scan_range': [470., 480.]}).check() is None
-    assert 'below End' in ScanConfig({'scan_range': [480., 470.]}).check()
+    assert 'must be above Start' in ScanConfig({'scan_range': [480., 470.]}).check()
     assert 'numbers' in ScanConfig({'scan_range': [float('nan'), 470.]}).check()
-    assert 'below End' in ScanConfig({'scan_ranges': [[470., 480.], [500., 500.]]}).check()
+    assert 'must be above Start' in ScanConfig({'scan_ranges': [[470., 480.], [500., 500.]]}).check()
 
 
 # ------------------------------------------------------------------ core without database / library

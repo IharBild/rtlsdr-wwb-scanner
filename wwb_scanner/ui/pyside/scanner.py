@@ -1,16 +1,10 @@
-import threading
-import time
-
-import numpy as np
-
-from wwb_scanner.ui.pyside.qt import QtCore, QtQml, QtQuick, Signal, Property, Slot
+from wwb_scanner.ui.pyside.qt import QtCore, QtQml, Signal, Property, Slot
 import logging
 logger = logging.getLogger(__name__)
 
 from wwb_scanner.scanner import config
 from wwb_scanner.scanner import Scanner
 from wwb_scanner.scanner.main import get_freq_resolution
-from wwb_scanner.scan_objects import Spectrum
 
 from wwb_scanner.ui.pyside.utils import GenericQObject, QObjectThread
 
@@ -242,6 +236,7 @@ class ScannerInterface(GenericQObject):
         self.scanner = None
         self.scan_thread = None
         self.scan_init_thread = None
+        self.last_result = None          # V22.1: service.ScanResult of the last scan
 
     @property
     def startFreq(self): return self.scanConfig.startFreq
@@ -290,37 +285,29 @@ class ScannerInterface(GenericQObject):
     def _s_calibrating(self, value): self._generic_setter('_calibrating', value)
     calibrating = Property(bool, _g_calibrating, _s_calibrating, notify=_n_calibrating)
 
+    def kind(self):
+        """V22.1: kind of the next scan (wwb_scanner/service.py)."""
+        from wwb_scanner import service
+        if self._gain_calibrating:
+            return service.GAIN_CALIBRATION
+        if self.calibrating:
+            return service.FLOOR_CALIBRATION
+        return service.SCAN
+
     def start_problem(self):
         """V20.8: why the scan can not start, as a text for the window, or ''.
-        Before this the window showed a Python error (no dongle: 'NoneType'
-        object has no attribute 'device_serial'; Start above End: a numpy
-        'zero-size array' message)."""
+        V22.1: the rules are in the core (service.start_problem); here only
+        what the window itself must have ready."""
+        from wwb_scanner import service
         if self.deviceInfo is None:
-            return ('No RTL-SDR dongle found. Plug the dongle in (close other SDR programs) '
-                    'and press Start again.')
+            return service.NO_DONGLE_TEXT
         if self.scanConfig is None:
             return 'The scan settings are not ready yet.'
         try:
-            rate = float(self.sampleRate)
+            base = self.user_scan_config()
         except (TypeError, ValueError):
-            rate = float('nan')
-        if not (rate == rate and rate > 0):
             return 'The sample rate is not set: enter it in Device Settings (for example 2400).'
-        try:
-            float(self.gain)
-        except (TypeError, ValueError):
-            return 'The gain is not set: choose it in Device Settings.'
-        if self.calibrating or self._gain_calibrating or self.scan_segments():
-            return ''       # these scans bring their own ranges
-        try:
-            lo, hi = float(self.startFreq), float(self.endFreq)
-        except (TypeError, ValueError):
-            lo = hi = float('nan')
-        if not (lo == lo and hi == hi) or abs(lo) == float('inf') or abs(hi) == float('inf'):
-            return 'Start Freq and End Freq must be numbers (MHz).'
-        if hi <= lo:
-            return 'End Freq (%g MHz) must be above Start Freq (%g MHz).' % (hi, lo)
-        return ''
+        return service.start_problem(base, self.kind())
 
     def _begin(self, calibrating=False, gain_calibrating=False):
         """V20.8: every scan starts here. If it can not start, the reason is
@@ -351,18 +338,19 @@ class ScannerInterface(GenericQObject):
                 self.running = False
         return started
 
-    def build_scan_config(self):
+    def user_scan_config(self):
+        """V22.1: the user's settings from the window, as a core ScanConfig."""
         conf = config.ScanConfig()
         conf.scan_range = [self.startFreq, self.endFreq]
-        conf.device.serial_number = self.deviceInfo.device_serial
+        conf.device.serial_number = self.deviceInfo.device_serial if self.deviceInfo is not None else None
         conf.device.gain = self.gain
-        conf.sampling.sample_rate = self.sampleRate * 1e3
-        conf.sampling.samples_per_sweep = self.scanConfig.samplesPerSweep
-        conf.sampling.sweeps_per_scan = self.scanConfig.sweepsPerScan
-        conf.sampling.sweep_overlap_ratio = self.scanConfig.sweepOverlapRatio
-        conf.sampling.window_size = self.scanConfig.windowSize
-        conf.sampling.window_type = self.scanConfig.windowType
+        conf.sampling.sample_rate = float(self.sampleRate) * 1e3
         sc = self.scanConfig
+        conf.sampling.samples_per_sweep = sc.samplesPerSweep
+        conf.sampling.sweeps_per_scan = sc.sweepsPerScan
+        conf.sampling.sweep_overlap_ratio = sc.sweepOverlapRatio
+        conf.sampling.window_size = sc.windowSize
+        conf.sampling.window_type = sc.windowType
         conf.sampling.auto_gain = bool(getattr(sc, 'autoGain', False))
         conf.sampling.verify_peaks = bool(getattr(sc, 'verifyPeaks', False))
         conf.processing.clean_ripple = bool(getattr(sc, 'cleanRipple', False))
@@ -373,31 +361,13 @@ class ScannerInterface(GenericQObject):
         if len(segs) > 1:
             conf.scan_ranges = [list(s) for s in segs]
             conf.scan_range = [segs[0][0], segs[-1][1]]
-        if self._gain_calibrating:
-            # V20.5: survey tiles for the gain step calibration
-            from wwb_scanner.scanner import gain_cal
-            conf.scan_range = list(gain_cal.GAIN_CAL_RANGE_MHZ)
-            conf.scan_ranges = gain_cal.survey_ranges()
-            conf.gain_calibration = True
-            conf.device.gain = gain_cal.SURVEY_GAIN_DB
-            conf.sampling.auto_gain = False
-            conf.sampling.verify_peaks = False
-            conf.processing.clean_ripple = False
-            conf.processing.clean_spurs = False
-            conf.processing.clean_images = False
-            conf.processing.clean_floor = False
-        if self.calibrating:
-            # calibration: whole range, values exactly as measured
-            from wwb_scanner.scanner import cleanup
-            conf.scan_range = list(cleanup.CALIBRATION_RANGE_MHZ)
-            conf.scan_ranges = None
-            conf.sampling.auto_gain = False
-            conf.sampling.verify_peaks = False
-            conf.processing.clean_ripple = False
-            conf.processing.clean_spurs = False
-            conf.processing.clean_images = False
-            conf.processing.clean_floor = False
         return conf
+
+    def build_scan_config(self):
+        """Settings of the next scan (V22.1: the rules of the calibration
+        scans are in the core, service.prepare)."""
+        from wwb_scanner import service
+        return service.prepare(self.kind(), self.user_scan_config())[0]
 
     def scan_segments(self):
         """V18: [(lo, hi)] of the next scan (several when Bands chose them)."""
@@ -487,31 +457,28 @@ class ScannerInterface(GenericQObject):
         self._stop()
 
     def _start(self):
+        from wwb_scanner import service
         self.scannerInitialized = False
+        kind = self.kind()
         conf = self.build_scan_config()
+        name = service.prepare(kind, self.user_scan_config())[1]
         self.scanner = Scanner(config=conf)
         self.spectrum = self.scanner.spectrum
-        if self.calibrating:
-            self.spectrum.name = 'Calibration without antenna, gain %s dB' % self.gain
-        elif self._gain_calibrating:
-            from wwb_scanner.scanner import gain_cal
-            self.spectrum.name = 'Gain step calibration (survey, gain %s dB)' % gain_cal.SURVEY_GAIN_DB
-        else:
-            # V20.7: the start time in the name (rename in the scan list)
-            segs = self.scan_segments()
-            when = time.strftime('%d.%m %H:%M')
-            if segs:
-                self.spectrum.name = 'Bands %s MHz, %s' % (', '.join('%g-%g' % s for s in segs), when)
-            else:
-                self.spectrum.name = '%g-%g MHz, %s' % (float(self.startFreq), float(self.endFreq), when)
+        self.spectrum.name = name
         self.progress = 0.
         self.running = True
-        self.scan_thread = ScanThread(target=self.scanner.run_scan)
+        scanner = self.scanner
+        serial = getattr(self.deviceInfo, 'device_serial', None)
+        # V22.1: the scan is run and finished by the core (service.run: a
+        # floor calibration is saved there); this thread only carries it
+        self.last_result = None
+        def work():
+            self.last_result = service.run(scanner, kind, serial)
+        self.scan_thread = ScanThread(target=work)
         self.scanner.on_progress = self.scan_thread._on_scanner_progress
         self.scan_thread.complete.connect(self.on_scanner_finished)
         self.scan_thread.scannerProgress.connect(self.on_scanner_progress)
         # V20.8: also ends when the scan never starts (see _wait_scanner_ready)
-        scanner = self.scanner
         self.scan_init_thread = QObjectThread(target=lambda: _wait_scanner_ready(scanner))
         self.scan_init_thread.complete.connect(self.on_scanner_ready)
         self.scan_thread.start()
@@ -568,40 +535,10 @@ class ScannerInterface(GenericQObject):
             logger.exception('scan_init_thread.stop')
 
     def _finish_calibration(self):
-        from wwb_scanner.scanner import cleanup
-        status = logging.getLogger('wwb_scanner.status')
-        scanner = self.scanner
-        try:
-            if scanner is None or getattr(scanner, 'error', None) is not None or \
-                    getattr(scanner.sample_collection, 'aborted', False) or \
-                    getattr(scanner, 'stop_requested', False):
-                # V21.1: also when Stop ended it (a part of the range is no calibration)
-                status.warning('Calibration not saved: the scan did not finish')
-                return
-            sd = scanner.spectrum.sample_data
-            meta = dict(gain=float(scanner.gain), sample_rate=float(scanner.sample_rate),
-                        step_mhz=float(scanner.step_size),
-                        window_size=int(scanner.window_size or 0),
-                        window_type=str(scanner.sampling_config.window_type))
-            try:
-                meta['serial'] = self.deviceInfo.device_serial
-            except Exception:
-                pass
-            try:
-                sets = [x for x in scanner.sample_collection.sample_sets.values()
-                        if not getattr(x, 'neighbour', False)]
-                clipped = (sum(1 for x in sets if getattr(x, 'clip_ratio', 0.) >= 1e-3) / float(len(sets))
-                           if sets else None)
-            except Exception:
-                clipped = None
-            ok, text = cleanup.calibrate(
-                np.asarray(sd['frequency'], dtype=float), np.asarray(sd['dbFS'], dtype=float),
-                float(scanner.config.scan_range[0]), scanner.step_size, meta, clipped_share=clipped)
-            (status.info if ok else status.warning)(text)
-        except Exception as exc:
-            logging.getLogger('wwb_scanner').error('Calibration failed: %s', exc, exc_info=True)
-        finally:
-            self.calibrationChanged.emit()
+        """V22.1: the calibration was saved by the core when the scan ended
+        (service.run -> service.finish_floor_calibration); the window only
+        shows its new state."""
+        self.calibrationChanged.emit()
 
     @Slot()
     def on_scanner_ready(self):

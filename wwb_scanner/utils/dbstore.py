@@ -13,6 +13,7 @@ the whole file on every operation; this store keeps the tables in memory,
 reads the file again only when it changed on disk and writes through a
 temporary file, so a crash while saving leaves the old file whole.
 """
+from wwb_scanner import events
 import os
 import datetime
 import time
@@ -107,8 +108,8 @@ class JsonDB(object):
                 shutil.copyfile(self.path, backup)
             except Exception:
                 backup = None
-            print('!!! database file is damaged (%s), saved as %s, starting a new one'
-                  % (exc, backup), flush=True)
+            events.console('!!! database file is damaged (%s), saved as %s, starting a new one'
+                  % (exc, backup))
             return {}
     def _write(self):
         d = os.path.dirname(self.path)
@@ -250,17 +251,19 @@ class DBStore(object):
         if bad_chars or os.path.basename(name) != name or name in ('.', '..') or os.path.isabs(name):
             return None
         return name
-    def _write_points(self, eid, data, sample_data, name=None, raw_dbFS=None):
+    def _write_points(self, eid, data, sample_data, name=None, raw_dbFS=None, passes=None):
         if not os.path.isdir(self.scans_dir):
             os.makedirs(self.scans_dir, exist_ok=True)
         name = self._safe_name(name) or self._scan_file_name(eid, data, sample_data)
         path = os.path.join(self.scans_dir, name)
         tmp = path + '.tmp.npz'
+        arrays = {'sample_data': sample_data}
         if raw_dbFS is not None:
             # V17: values as measured, before the clean scan corrections
-            np.savez_compressed(tmp, sample_data=sample_data, raw_dbFS=np.asarray(raw_dbFS))
-        else:
-            np.savez_compressed(tmp, sample_data=sample_data)
+            arrays['raw_dbFS'] = np.asarray(raw_dbFS)
+        if passes is not None:
+            arrays.update(passes.to_arrays())       # V22.2: every pass of the scan
+        np.savez_compressed(tmp, **arrays)
         os.replace(tmp, path)
         return name
     def add_scan(self, spectrum, scan_config=None):
@@ -287,7 +290,10 @@ class DBStore(object):
             name = None
         if points is not None:
             data['sample_data_file'] = self._write_points(
-                eid, data, points, name, raw_dbFS=getattr(spectrum, 'raw_dbFS', None))
+                eid, data, points, name, raw_dbFS=getattr(spectrum, 'raw_dbFS', None),
+                passes=getattr(spectrum, 'passes', None))
+            if getattr(spectrum, 'passes', None) is not None:
+                data['passes'] = len(spectrum.passes)
         update_ids(table, data, [eid])
         return eid
     def get_all_scans(self):
@@ -313,8 +319,12 @@ class DBStore(object):
             name = None
         if name:
             from wwb_scanner.scan_objects.samplearray import SampleArray
+            from wwb_scanner.scan_objects.passes import ScanPasses
             with np.load(os.path.join(self.scans_dir, name)) as z:
                 rec['sample_data'] = SampleArray(data=z['sample_data'])
+                p = ScanPasses.from_arrays(z)
+                if p is not None:
+                    rec['passes'] = p              # V22.2
         return rec
     def update_scan(self, eid, **kwargs):
         table = self.scan_db.table('scans_performed')

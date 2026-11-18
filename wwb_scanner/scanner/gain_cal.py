@@ -25,6 +25,7 @@ gives the real gain difference between two gains at a frequency (linear
 between the groups, the nearest group outside them); without a table it is
 the nominal difference, as before.
 """
+from wwb_scanner import events
 import json
 import logging
 import os
@@ -450,8 +451,8 @@ def calibrate(scanner, running=None):
         return False, 'Gain step calibration not saved: the dongle could not be opened again after the survey'
     if len(gains) < 2:
         gains = sorted(g / 10. for g in sdr.get_gains())
-    print('measuring the gain steps on %d tile(s): %s MHz' % (
-        len(anchors), ', '.join('%.1f' % (k / 1e6) for k in anchors)), flush=True)
+    events.console('measuring the gain steps on %d tile(s): %s MHz' % (
+        len(anchors), ', '.join('%.1f' % (k / 1e6) for k in anchors)))
     sweeps, used, skipped = [], [], []
     stopped = False
     reopens = 0

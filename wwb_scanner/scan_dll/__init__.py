@@ -10,6 +10,7 @@ and the scanner works as before.
 * rtlsdr_get_tuner_pll_lock()  - did the tuner PLL lock after the last
   retune (the stock library reports success even when it did not)
 """
+from wwb_scanner import events
 import ctypes
 import logging
 
@@ -70,9 +71,9 @@ def configure(sdr):
     """Report which library is in use. Returns True for the scanner build."""
     info = build_info()
     if info is None:
-        print('rtlsdr library: stock (no PLL lock check)', flush=True)
+        events.console('rtlsdr library: stock (no PLL lock check)')
         return False
-    print('rtlsdr library: %s' % info, flush=True)
+    events.console('rtlsdr library: %s' % info)
     return True
 
 

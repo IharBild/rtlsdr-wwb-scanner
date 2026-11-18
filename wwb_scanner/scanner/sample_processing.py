@@ -1,3 +1,4 @@
+from wwb_scanner import events
 import bisect
 import time
 import threading
@@ -957,7 +958,7 @@ class SampleCollection(JSONMixin):
                              'Unplug and replug it, then start again.')
                 break
             if n % 20 == 0:
-                print('scan tile %d/%d at %.3f MHz' % (n + 1, len(keys), key / 1e6), flush=True)
+                events.console('scan tile %d/%d at %.3f MHz' % (n + 1, len(keys), key / 1e6))
             sample_set = self.sample_sets[key]
             try:
                 sample_set.read_samples()
@@ -1013,7 +1014,7 @@ class SampleCollection(JSONMixin):
             except Exception:
                 sdr = None
             if sdr is not None:
-                print('dongle opened again after a USB error', flush=True)
+                events.console('dongle opened again after a USB error')
                 return True
         return False
 
@@ -1032,7 +1033,7 @@ class SampleCollection(JSONMixin):
             self.missing_tiles = failed
             logger.error('%d of %d tiles have no data: check the dongle', len(failed), len(keys))
             return
-        print('retrying %d tile(s) without data' % len(failed), flush=True)
+        events.console('retrying %d tile(s) without data' % len(failed))
         for key in failed:
             if self.aborted or not self.scanning.is_set():
                 break
@@ -1128,7 +1129,7 @@ class SampleCollection(JSONMixin):
         by_gain = {}
         for k, (g, _) in targets.items():
             by_gain.setdefault(g, []).append(k)
-        print('reading %d tile(s) next to strong carriers again with less gain' % len(targets), flush=True)
+        events.console('reading %d tile(s) next to strong carriers again with less gain' % len(targets))
         done = []
         try:
             for g in sorted(by_gain, reverse=True):
@@ -1479,8 +1480,8 @@ class SampleCollection(JSONMixin):
             logger.info(self.peak_check_info)
             return
         keys = sorted(keep_tiles)
-        print('checking %d peak(s) next to strong carriers with %.1f dB less gain (%d tile(s))'
-              % (len(cl), g0 - g_low, len(keys)), flush=True)
+        events.console('checking %d peak(s) next to strong carriers with %.1f dB less gain (%d tile(s))'
+              % (len(cl), g0 - g_low, len(keys)))
         reads = {k: {} for k in keys}
         g_set_low = g_low
         was_aborted = self.aborted
@@ -1542,14 +1543,14 @@ class SampleCollection(JSONMixin):
         prods = [c for c in out if c['kind'] == 'product']
         n_real = len([c for c in out if c['kind'] == 'real'])
         self.peak_check_seconds = time.monotonic() - t_check
-        print('peak check: %d product(s) of the dongle, %d real, %d not clear (%.1f s)'
-              % (len(prods), n_real, len(out) - len(prods) - n_real, self.peak_check_seconds), flush=True)
+        events.console('peak check: %d product(s) of the dongle, %d real, %d not clear (%.1f s)'
+              % (len(prods), n_real, len(out) - len(prods) - n_real, self.peak_check_seconds))
         # V21.4.1: every checked peak in one line - frequency, level above the
         # floor, verdict and how much more than the gain it fell (dB)
-        print('peaks checked: ' + '; '.join(
+        events.console('peaks checked: ' + '; '.join(
             '%.3f +%.0f dB %s%s' % (c['f'], c['db'], c['kind'],
                                    '' if c['delta'] is None else ' (%+.0f)' % c['delta'])
-            for c in sorted(out, key=lambda c: c['f'])), flush=True)
+            for c in sorted(out, key=lambda c: c['f'])))
         for c in prods:
             logger.info('%.3f MHz (+%.0f dB) is a product of the dongle%s: %.1f dB less gain lowered it '
                         'by %.0f dB or more (a real signal: 0 dB); marked, kept in the scan',
@@ -1932,14 +1933,14 @@ class SampleCollection(JSONMixin):
         except Exception:
             stats = None
         if stats is not None:
-            print('tuner PLL: locked late %d times, not locked %d times' % stats, flush=True)
+            events.console('tuner PLL: locked late %d times, not locked %d times' % stats)
         try:
             i2c = scan_dll.i2c_stats(sdr) if sdr is not None else None
         except Exception:
             i2c = None
         if i2c is not None:
             # V20.6 / DLL scanner-v5: tuner I2C transfers tried again (and lost)
-            print('tuner I2C: %d transfer(s) retried, %d failed after retries' % i2c, flush=True)
+            events.console('tuner I2C: %d transfer(s) retried, %d failed after retries' % i2c)
     def stop(self):
         if self.scanning.is_set():
             self.scanning.clear()

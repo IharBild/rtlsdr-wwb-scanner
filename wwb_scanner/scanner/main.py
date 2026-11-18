@@ -11,6 +11,8 @@ logger = logging.getLogger(__name__)
 MAX_TUNER_FREQ_HZ = 1766000000
 
 from wwb_scanner.core import JSONMixin
+from wwb_scanner import events
+events.install_log_bridge()       # V22.1: status records -> events
 from wwb_scanner.scanner.sdrwrapper import SdrWrapper
 from wwb_scanner.scanner.config import ScanConfig
 from wwb_scanner.scanner.sample_processing import (
@@ -70,6 +72,8 @@ class ScannerBase(JSONMixin):
         # V22.0: where a finished scan is saved. 'default' = the history of
         # the program (utils/dbstore.py); None = not saved (tools, tests).
         self.history = kwargs.get('history', 'default')
+        # V22.1: what happens during the scan (wwb_scanner/events.py)
+        self.events = kwargs.get('events') or events.bus
         self.device_config = self.config.device
         self.sampling_config = self.config.sampling
         if 'spectrum' in kwargs:
@@ -101,6 +105,7 @@ class ScannerBase(JSONMixin):
             return
         self._progress = value
         self.on_progress(value)
+        self.events.emit('progress', value=value)
     def on_progress(self, value):
         pass
     @property
@@ -196,7 +201,7 @@ class ScannerBase(JSONMixin):
             self.error = exc
             # shown in the window (status line + dialog) and in the log file
             logger.error('Scan failed: %s', exc, exc_info=True)
-            print('!!! Scan failed: %r' % (exc,), flush=True)
+            events.console('!!! Scan failed: %r' % (exc,))
         finally:
             running.clear()
             self.sample_collection.stopped.set()
@@ -205,6 +210,8 @@ class ScannerBase(JSONMixin):
         t_start = time.time()
         self.stop_requested = False
         self.build_sample_sets()
+        self.events.emit('scan_started', name=self.spectrum.name, ranges=[list(s) for s in self.segments],
+                         tiles=len(self.sample_collection.sample_sets))
         running.set()
         self.sample_collection.scan_all_freqs()
         self.sample_collection.stopped.wait()
@@ -220,7 +227,7 @@ class ScannerBase(JSONMixin):
             return
         if running.is_set() or stopped_by_user:
             t0 = time.time()
-            print('scan finished, cropping...', flush=True)
+            events.console('scan finished, cropping...')
             self.crop_spectrum()
             clean_note = ''
             try:
@@ -228,9 +235,9 @@ class ScannerBase(JSONMixin):
             except Exception:
                 logger.exception('clean scan failed, the scan is kept as measured')
             if self.history is not None:
-                print('cropped in %.1f s, saving...' % (time.time() - t0), flush=True)
+                events.console('cropped in %.1f s, saving...' % (time.time() - t0))
                 self.save_to_dbstore()
-                print('saved, total %.1f s' % (time.time() - t0), flush=True)
+                events.console('saved, total %.1f s' % (time.time() - t0))
             what = self.range_text()
             coll = self.sample_collection
             if stopped_by_user and not getattr(coll, 'aborted', False):
@@ -551,7 +558,7 @@ class Scanner(ScannerBase):
         """V20.4: just after a USB error the dongle is "not found or busy"
         for a few seconds. Try again for up to REOPEN_WAIT_S before failing."""
         from wwb_scanner.scanner import sample_processing as sp
-        print('dongle not found or busy, waiting up to %.0f s...' % sp.REOPEN_WAIT_S, flush=True)
+        events.console('dongle not found or busy, waiting up to %.0f s...' % sp.REOPEN_WAIT_S)
         deadline = time.monotonic() + sp.REOPEN_WAIT_S
         while self.sdr is None and time.monotonic() < deadline:
             time.sleep(sp.REOPEN_PAUSE_S)
@@ -560,7 +567,7 @@ class Scanner(ScannerBase):
             except Exception:
                 logger.exception('opening the dongle failed')
         if self.sdr is not None:
-            print('dongle found', flush=True)
+            events.console('dongle found')
     def _run_scan(self, running):
         if getattr(self, '_refused', False):
             raise IOError('The dongle stopped answering in the last scan. Unplug it, plug it back '
@@ -595,7 +602,10 @@ class Scanner(ScannerBase):
             weight=weight,
         )
     def on_sample_set_processed(self, sample_set):
-        self.spectrum.add_sample_set(**self._tile_kwargs(sample_set))
+        kw = self._tile_kwargs(sample_set)
+        self.spectrum.add_sample_set(**kw)
+        self.events.emit('tile', center_mhz=sample_set.center_frequency / 1e6,
+                         points=int(np.size(kw['frequency'])))
         self.progress = self.sample_collection.calc_progress()
     def rebuild_spectrum(self):
         """V20: some tiles changed after they were added (read again next to

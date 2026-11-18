@@ -1,3 +1,4 @@
+from wwb_scanner import events
 import threading
 import traceback
 
@@ -107,6 +108,6 @@ def report_i2c_at_close(sdr):
     except Exception:
         return None
     if i2c is not None and (i2c[0] or i2c[1]):
-        print('tuner I2C before close: %d transfer(s) retried, %d failed after retries '
-              '(since the dongle was opened)' % i2c, flush=True)
+        events.console('tuner I2C before close: %d transfer(s) retried, %d failed after retries '
+              '(since the dongle was opened)' % i2c)
     return i2c

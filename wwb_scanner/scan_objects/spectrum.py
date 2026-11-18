@@ -37,7 +37,7 @@ def _db_store():
 
 class Spectrum(JSONMixin):
     _serialize_attrs = [
-        'name', 'color', 'timestamp_utc', 'step_size', 'scan_config_eid',
+        'name', 'color', 'timestamp_utc', 'step_size', 'scan_config_eid', 'pass_view',
     ]
     DEFAULT_COLOR = Color({'r':0, 'g':1, 'b':0, 'a':1})
     def __init__(self, **kwargs):
@@ -75,6 +75,10 @@ class Spectrum(JSONMixin):
         self.data_updated = threading.Event()
         self.data_update_lock = threading.RLock()
         self.sample_data = SampleArray()
+        # V22.2: the passes of a scan of several passes (scan_objects/passes.py)
+        # and which of their views the points are; None: a scan of one pass
+        self.passes = kwargs.get('passes')
+        self.pass_view = kwargs.get('pass_view')
     @property
     def datetime_utc(self):
         return getattr(self, '_datetime_utc', None)
@@ -153,6 +157,21 @@ class Spectrum(JSONMixin):
         exporter = get_exporter()
         kwargs['spectrum'] = self
         exporter.export_to_file(**kwargs)
+    def set_passes(self, passes, view='max_hold'):
+        """V22.2: keep ``passes`` (ScanPasses) and make the points the view
+        ``view`` of them ('max_hold', 'average', 'last')."""
+        f, y = passes.view(view)
+        with self.data_update_lock:
+            self.passes = passes
+            self.pass_view = view
+            self.sample_data = SampleArray.create(frequency=f, dbFS=y)
+        self.set_data_updated()
+    def show_view(self, view):
+        """Points from another view of the same passes (nothing measured is
+        changed: the passes stay as they are)."""
+        if self.passes is None:
+            raise ValueError('a scan of one pass has no views')
+        self.set_passes(self.passes, view)
     def keep_ranges(self, ranges):
         """V18: remove points outside the scanned ranges [(lo, hi)] MHz."""
         with self.data_update_lock:
@@ -239,6 +258,9 @@ class Spectrum(JSONMixin):
         dbdata.pop('sample_data_file', None)
         dbdata.pop('center_frequencies', None)       # written before V22.0
         dbdata.pop('samples', None)
+        from wwb_scanner.scan_objects.passes import ScanPasses
+        if not isinstance(dbdata.get('passes'), ScanPasses):
+            dbdata.pop('passes', None)                 # the index stores only their number
         return cls.from_json(dbdata, eid=eid)
     def _serialize(self):
         d = {attr: getattr(self, attr) for attr in self._serialize_attrs}

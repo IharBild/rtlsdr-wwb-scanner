@@ -67,6 +67,8 @@ MARKERS = [
     ('V21.4', 'ui/pyside/qt.py', 'def compat_qml_dir'),
     ('V21.4.1', 'scanner/sdrwrapper.py', 'def report_i2c_at_close'),
     ('V22.0', 'paths.py', 'def set_data_dir'),
+    ('V22.1', 'service.py', 'class ScanService'),
+    ('V22.2', 'scan_objects/passes.py', 'class ScanPasses'),
 ]
 
 
