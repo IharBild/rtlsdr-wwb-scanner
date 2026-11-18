@@ -71,7 +71,7 @@
   "ui/pyside/scanner.py": "846c8fc8c6285beb7559d54e8fad8c85a01eed3c5685954c36465f1ac9bdbc28",
   "ui/pyside/status.py": "149ee36a42add6652e3687d6c837b325639f01646158bc247340115b3b6a582c",
   "ui/pyside/utils.py": "e519f66f2a5f431b1c095affae4140e379947330bc47d76e7dd8bf92588397a1",
-  "ui/selftest.py": "aaac239aeeb8eb1090f444071e5999f0cdb54badca4fc65ec06f59bde7e633bf",
+  "ui/selftest.py": "c249dfbad1787147e0a04a2fb505f91bdb13977aa7aa2292651d9770b571bc19",
   "utils/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "utils/color.py": "3bfbf4eed90f152ddec7a793f11d7e218497ac200e4704c74526e1e5b393ced6",
   "utils/config.py": "996095ea0834fd2998f5812c445fe6189f8fe3463894769a6a4a4fc9d3522bfd",

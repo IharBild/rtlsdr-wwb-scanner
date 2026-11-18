@@ -38,7 +38,13 @@ def _lines_and_ok(engine, qml_problems):
     except OSError as exc:
         ok = False
         line('FAIL', 'data folder', '%s: %s' % (data, exc))
-    # window
+    # window. Without a screen (QT_QPA_PLATFORM=offscreen: the build machine)
+    # Qt has no fonts and says so; on a desktop it uses the Windows fonts.
+    offscreen = qt.QtGui.QGuiApplication.platformName() == 'offscreen'
+    ignored = [p for p in qml_problems if offscreen and 'QFontDatabase' in p]
+    qml_problems = [p for p in qml_problems if p not in ignored]
+    if ignored:
+        line('INFO', 'without a screen', '%d font warning(s) of Qt not counted' % len(ignored))
     roots = engine.rootObjects()
     if roots and not qml_problems:
         line('OK', 'window', 'loaded, no QML warnings')
