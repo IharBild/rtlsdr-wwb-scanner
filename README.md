@@ -10,7 +10,7 @@ company in Poland and for sound engineers across Europe. Most of the code in thi
 written with Claude (Anthropic); every release is checked on a real V4 dongle by the
 maintainer.
 
-Current version: **V22.4** in the branch `v4-fixes` (installed by the command below). Last tagged
+Current version: **V22.5** in the branch `v4-fixes` (installed by the command below). Last tagged
 release: [v22.3](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v22.3)
 (branch `v4-fixes`). The `master` branch is the original upstream code and is not used here.
 
@@ -183,6 +183,16 @@ release: [v22.3](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v22
   - Checked: the window check U1-U41 passes on PySide2 5.15 (Python 3.8) and PySide6 6.12
     (Python 3.13, also from a clean install with only Essentials + Addons); all tests on
     both. **Not yet on Windows with the dongle.**
+- **V22.5** - **Portable Windows version** (no Python to install): a folder with
+  `wwb_scanner.exe`, built by GitHub Actions (workflow *Portable Windows build*, PyInstaller,
+  `tools/portable`) and attached to each published release as
+  `WWB-Scanner-<version>-win64-portable.zip`. Everything the program writes stays in `data`
+  next to the exe, so a USB stick keeps its scans, calibrations and settings from PC to PC;
+  the settings of the PC are not taken over. `rtl-tools` holds `rtl_test.exe` and
+  `rtl_eeprom.exe` (own serial number for a second dongle). The dongle still needs the WinUSB
+  driver once per PC (Zadig, see `README_PORTABLE.txt`). New for both versions:
+  `--version` and `--selftest` (window, every QML file, dongle library, data folder; report in
+  `logs/selftest.txt`).
 - **V22.4** - **Calibrations of each dongle.** Floor calibrations, the table of the real gain
   steps and the gain profile are kept per dongle, in `calibration\sn-<serial number>`; the
   calibrations of the dongle that is opened (or chosen in Device Settings) are used, and
@@ -433,6 +443,9 @@ Windows: быстрее, без собственных помех донгла �
   копируются из реестра). Настройки по умолчанию — в ядре; без tinydb. В ядре появились
   служба скана и события, сканы из нескольких проходов (основа режима «Точный») и
   интерфейс приёмника (основа для других приёмников). Проверено на V4 18.11.2026.
+- V22.5: портативная версия для Windows без установки Python — папка с `wwb_scanner.exe`
+  (zip в каждом релизе). Все данные — в папке `data` рядом с exe, флешка переносит их между ПК.
+  Драйвер WinUSB (Zadig) нужен один раз на каждом ПК. Проверка без скана: `wwb_scanner.exe --selftest`.
 - V22.4: калибровки у каждого донгла свои — в папке `calibration\sn-<серийный номер>`.
   Используются калибровки открытого (или выбранного в Device Settings) донгла, Scan settings
   показывает, чьи. Калибровки, сделанные до V22.4, достаются первому донглу после обновления

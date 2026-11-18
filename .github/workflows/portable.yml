@@ -1,0 +1,90 @@
+name: Portable Windows build (wwb_scanner.exe)
+
+# V22.5 (plan of 18.11.2026, stage 4): the program as a folder with
+# wwb_scanner.exe that runs without an installed Python (USB stick).
+# Built with PyInstaller on Windows (tools/portable), checked with
+# wwb_scanner.exe --selftest (the window and every QML file load, the dongle
+# library loads, the data folder is made next to the exe). No dongle here.
+#
+# Push to v4-fixes: the zip is an artifact of the run (Actions > this run >
+# Artifacts). A published release: the zip is attached to the release.
+
+on:
+  push:
+    branches: [ v4-fixes ]
+    paths:
+      - 'wwb_scanner/**'
+      - 'tools/portable/**'
+      - 'drivers/rtlsdr-scanner-v7/x64/**'
+      - 'setup.cfg'
+      - 'setup.py'
+      - '.github/workflows/portable.yml'
+  release:
+    types: [ published ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Windows x64, Python 3.13, PySide6 6.12.0
+    runs-on: windows-2022
+    timeout-minutes: 40
+    permissions:
+      contents: write          # attach the zip to a published release
+    env:
+      PYTHONIOENCODING: utf-8
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install the scanner and PyInstaller
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "PySide6-Essentials==6.12.0" "PySide6-Addons==6.12.0"
+          python -m pip install . pyinstaller
+          python -m pip list
+
+      - name: Build (selftest with a temporary data folder)
+        run: python tools/portable/build.py --out dist
+
+      - name: Selftest of the unpacked zip as a user gets it (data next to the exe)
+        shell: bash
+        run: |
+          set -e
+          zip=$(ls dist/WWB-Scanner-*-win64-portable.zip)
+          mkdir -p "$RUNNER_TEMP/user"
+          python -c "import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" "$zip" "$RUNNER_TEMP/user"
+          app="$RUNNER_TEMP/user/WWB-Scanner"
+          test ! -e "$app/data"
+          "$app/wwb_scanner.exe" --version > "$RUNNER_TEMP/version.txt" || true
+          "$app/wwb_scanner.exe" --selftest
+          cat "$app/data/logs/selftest.txt"
+          grep -q "portable build: yes" "$app/data/logs/selftest.txt"
+          grep -q "OK   data folder: .*WWB-Scanner.data" "$app/data/logs/selftest.txt"
+          grep -q "OK   dongle library" "$app/data/logs/selftest.txt"
+          test -f "$app/rtl-tools/rtl_eeprom.exe"
+          ls "$app"
+          du -sh "$app" || true
+
+      - name: Keep the zip (artifact of this run)
+        uses: actions/upload-artifact@v4
+        with:
+          name: WWB-Scanner-portable-win64
+          path: |
+            dist/WWB-Scanner-*-win64-portable.zip
+            dist/selftest_build.txt
+          retention-days: 30
+
+      - name: Attach the zip to the release
+        if: github.event_name == 'release'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" dist/WWB-Scanner-*-win64-portable.zip --clobber

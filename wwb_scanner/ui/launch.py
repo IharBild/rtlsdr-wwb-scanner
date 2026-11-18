@@ -2,6 +2,7 @@
 
 V21.3: a clear message instead of a traceback when there is no Qt binding.
 V22.0: the window runs on PySide6 (Python 3.11+).
+V22.5: --version, --selftest; the portable build (wwb_scanner/portable.py).
 """
 import sys
 
@@ -25,13 +26,51 @@ def qt_problem():
     return None
 
 
-def run():
+def version():
+    try:
+        from importlib import metadata
+        return metadata.version('rtlsdr-wwb-scanner')
+    except Exception:
+        return 'unknown'
+
+
+def _arg_value(argv, name):
+    """``--name value`` or ``--name=value``; '' when given without a value,
+    None when not given."""
+    for i, a in enumerate(argv):
+        if a == name:
+            nxt = argv[i + 1] if i + 1 < len(argv) else ''
+            return '' if nxt.startswith('--') else nxt
+        if a.startswith(name + '='):
+            return a.split('=', 1)[1]
+    return None
+
+
+def run(argv=None):
+    """``wwb_scanner-ui`` / ``wwb_scanner.exe``.
+
+    V22.5:
+      --version            print the version and exit
+      --selftest [FILE]    load the window, check the dongle library, write a
+                           report (default: logs/selftest.txt in the data
+                           folder), close; exit code 0 when all is right
+    """
+    argv = list(sys.argv if argv is None else argv)
+    # V22.5: the portable build keeps its data next to the exe (portable.py)
+    from wwb_scanner import portable
+    portable.setup()
+    if '--version' in argv:
+        print('rtlsdr-wwb-scanner %s' % version())
+        return 0
+    selftest = _arg_value(argv, '--selftest')
     why = qt_problem()
     if why is not None:
         sys.stderr.write(NO_QT % {'py': '%d.%d' % sys.version_info[:2], 'why': why})
         return 1
     from wwb_scanner.ui.pyside import main
-    return main.run()
+    qt_argv = [a for a in argv if a != '--selftest' and not a.startswith('--selftest=')
+               and a != selftest]
+    return main.run(qt_argv, selftest=selftest)
 
 
 if __name__ == '__main__':
