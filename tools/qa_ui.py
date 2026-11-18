@@ -138,12 +138,15 @@ def main():
     # the native "Windows" style, which refuses our customised controls and
     # warns (CI Windows + PySide6, 15.11.2026); Qt 5 and Linux did not show it.
     ui_main.apply_style()
-    app.setOrganizationName('rtlsdr-wwb-scanner-qa')
+    # V22.3.1: an organization name with nothing in the registry - with the
+    # old one setup_settings copied the settings of earlier QA runs into the
+    # temporary INI file and U29 could not check a first start (PC 18.11)
+    app.setOrganizationName('rtlsdr-wwb-scanner-qa-ini')
     app.setApplicationName('wwb_scanner')
     QtCore.qInstallMessageHandler(handler)
     # V22.0: settings in an INI file in the (temporary) data folder, as the
     # window does (main.setup_settings)
-    settings_path = ui_main.setup_settings('rtlsdr-wwb-scanner-qa', 'wwb_scanner')
+    settings_path = ui_main.setup_settings('rtlsdr-wwb-scanner-qa-ini', 'wwb_scanner')
     print('settings file: %s' % settings_path, flush=True)
     # V20.8 (U29): are these the settings of a first start?
     fresh = not QtCore.QSettings().contains('Scan Config/windowSize')
