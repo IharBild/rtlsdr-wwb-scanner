@@ -193,6 +193,9 @@ def test_history_none_saves_nothing(monkeypatch, tmpdir):
     monkeypatch.setattr(dbstore.db_store, '_db', None)
     monkeypatch.setattr(dbstore.db_store, '_scan_db', None)
     monkeypatch.setattr(sdrwrapper, 'RtlSdr', lambda serial_number=None: sim.FakeRtlSdr())
+    # the simulated dongle's device pointer must never reach a real librtlsdr
+    from wwb_scanner import scan_dll
+    monkeypatch.setitem(scan_dll._cache, 'lib', None)
     sc = main.Scanner(config=sim.make_config(470, 472), history=None)
     sc.run_scan()
     assert sc.error is None and sc.spectrum.sample_data.size == 81

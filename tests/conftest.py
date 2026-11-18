@@ -76,3 +76,18 @@ except Exception:
     _stub = types.ModuleType('rtlsdr')
     _stub.RtlSdr = object
     sys.modules['rtlsdr'] = _stub
+
+
+@pytest.fixture(autouse=True)
+def _no_real_dongle_library(monkeypatch):
+    """V22.3: tests use simulated dongles whose device pointer is not a real
+    one. When a real librtlsdr is loadable (the user's PC; LD_LIBRARY_PATH
+    in the sandbox), scan_dll would pass that pointer to it: a crash on
+    Linux, an exception on Windows. Every test starts without the library;
+    a test that wants one sets scan_dll._cache['lib'] itself."""
+    try:
+        from wwb_scanner import scan_dll
+    except Exception:
+        return
+    monkeypatch.setitem(scan_dll._cache, 'lib', None)
+
