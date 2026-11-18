@@ -65,6 +65,7 @@ MARKERS = [
     ('V21.3', 'dllpath.py', 'def prepare'),
     ('V21.3.1', 'scanner/psd.py', 'def welch'),
     ('V21.4', 'ui/pyside/qt.py', 'def compat_qml_dir'),
+    ('V21.4.1', 'scanner/sdrwrapper.py', 'def report_i2c_at_close'),
 ]
 
 

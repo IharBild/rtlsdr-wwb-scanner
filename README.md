@@ -10,7 +10,7 @@ company in Poland and for sound engineers across Europe. Most of the code in thi
 written with Claude (Anthropic); every release is checked on a real V4 dongle by the
 maintainer.
 
-Current version: **V21.4** in the branch `v4-fixes` (installed by the command below). Last tagged
+Current version: **V21.4.1** in the branch `v4-fixes` (installed by the command below). Last tagged
 release: [v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v18.1)
 (branch `v4-fixes`). The `master` branch is the original upstream code and is not used here.
 
@@ -183,6 +183,13 @@ release: [v18.1](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v18
   - Checked: the window check U1-U41 passes on PySide2 5.15 (Python 3.8) and PySide6 6.12
     (Python 3.13, also from a clean install with only Essentials + Addons); all tests on
     both. **Not yet on Windows with the dongle.**
+- **V21.4.1** - checked on the V4 (16-18.11.2026): the window on PySide6 (Python 3.13,
+  41/41 window checks with the dongle, 12 manual checks, export in 4 formats; WSM opens our
+  file) and on PySide2 (Python 3.7). Full scan 31-1766 MHz: 154 s on Python 3.13.
+  - The console now gives the time of the peak check and every checked peak in one line
+    (`peaks checked: 599.600 +19 dB product (+12); 601.500 +16 dB real (-2)`).
+  - Tuner I2C counters are printed once more just before the dongle is closed, when
+    there were retries (calibrations and the peak check are after the scan's report).
 - **V21.1** (the small items left from the audit and from the tests on the PC):
   - **Stop** only asks the scan to end: the window no longer freezes while a USB read
     hangs (11 s measured). A stopped scan is finished like any other - cropped to the
@@ -379,6 +386,8 @@ Windows: быстрее, без собственных помех донгла �
 - V21.4: окно работает и на PySide6 (Qt 6): на Python 3.11–3.15 pip ставит PySide6
   (только Essentials + Addons, около 125 МБ), на 3.7–3.10 остаётся PySide2. Один код для
   обоих; диалоги файлов и цвета и сохранённые настройки — через модуль WwbCompat.
-  Проверено на имитаторе (U1–U41 на обоих Qt); на Windows с донглом ещё нет.
+  Проверено на V4 16–18.11.2026 (Python 3.13 и 3.7, ручные проверки, экспорт; WSM открыл наш файл).
+- V21.4.1: в консоли — время проверки пиков и список проверенных пиков; счётчики I2C тюнера
+  ещё раз перед закрытием донгла, если были повторы.
 
 [osmosdr-wiki]: https://osmocom.org/projects/rtl-sdr/wiki

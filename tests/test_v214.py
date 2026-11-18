@@ -244,7 +244,7 @@ def test_pyside6_for_python_311_and_newer():
     assert not re.search(r'^\s*PySide6\s*[>=;]', req, re.M), 'the meta package pulls WebEngine'
     assert 'ui/pyside/qml/compat/*/WwbCompat/*' in cfg
     assert 'compat' in _read(ROOT, 'MANIFEST.in')
-    assert re.search(r'^version = 21\.4\.\d+$', cfg, re.M)
+    assert re.search(r'^version = 21\.(4\.\d+|[5-9]\.\d+)$', cfg, re.M)
 
 
 def test_launcher_names_both_bindings(monkeypatch, capsys):

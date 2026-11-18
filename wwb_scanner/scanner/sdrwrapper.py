@@ -92,6 +92,7 @@ class SdrWrapper(object):
     def close_sdr(self):
         with self.device_lock:
             if self.sdr is not None:
+                report_i2c_at_close(self.sdr)
                 self.sdr.close()
                 self.sdr = None
                 self.device_open.clear()
@@ -99,3 +100,19 @@ class SdrWrapper(object):
         self.open_sdr()
     def __exit__(self, *args):
         self.close_sdr()
+
+
+def report_i2c_at_close(sdr):
+    """V21.4.1: tuner I2C counters (since open) once more just before close.
+    The scan prints them after its last tile, but the PC showed
+    "r82xx: tuner registers restored" while every scan said "0 retried":
+    the retries happened in calibrations, the peak check or other work
+    after the report. Printed only when there were any."""
+    try:
+        i2c = scan_dll.i2c_stats(sdr)
+    except Exception:
+        return None
+    if i2c is not None and (i2c[0] or i2c[1]):
+        print('tuner I2C before close: %d transfer(s) retried, %d failed after retries '
+              '(since the dongle was opened)' % i2c, flush=True)
+    return i2c

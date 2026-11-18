@@ -1527,6 +1527,7 @@ class SampleCollection(JSONMixin):
         reads = {k: {} for k in keys}
         g_set_low = g_low
         was_aborted = self.aborted
+        t_check = time.monotonic()          # V21.4.1: time of the check in the console
         stuck = False
         try:
             for name, g in (('l1', g_low), ('n2', g0), ('l2', g_low)):
@@ -1583,8 +1584,15 @@ class SampleCollection(JSONMixin):
         self.peak_checks = out
         prods = [c for c in out if c['kind'] == 'product']
         n_real = len([c for c in out if c['kind'] == 'real'])
-        print('peak check: %d product(s) of the dongle, %d real, %d not clear'
-              % (len(prods), n_real, len(out) - len(prods) - n_real), flush=True)
+        self.peak_check_seconds = time.monotonic() - t_check
+        print('peak check: %d product(s) of the dongle, %d real, %d not clear (%.1f s)'
+              % (len(prods), n_real, len(out) - len(prods) - n_real, self.peak_check_seconds), flush=True)
+        # V21.4.1: every checked peak in one line - frequency, level above the
+        # floor, verdict and how much more than the gain it fell (dB)
+        print('peaks checked: ' + '; '.join(
+            '%.3f +%.0f dB %s%s' % (c['f'], c['db'], c['kind'],
+                                   '' if c['delta'] is None else ' (%+.0f)' % c['delta'])
+            for c in sorted(out, key=lambda c: c['f'])), flush=True)
         for c in prods:
             logger.info('%.3f MHz (+%.0f dB) is a product of the dongle%s: %.1f dB less gain lowered it '
                         'by %.0f dB or more (a real signal: 0 dB); marked, kept in the scan',
