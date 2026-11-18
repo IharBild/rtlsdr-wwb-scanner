@@ -175,6 +175,9 @@ def finish_floor_calibration(scanner, serial=None):
                     step_mhz=float(scanner.step_size),
                     window_size=int(scanner.window_size or 0),
                     window_type=str(scanner.sampling_config.window_type))
+        if serial is None:
+            # V22.4: the serial number of the dongle the scanner opened
+            serial = getattr(getattr(scanner, 'sdr_wrapper', None), 'serial', None)
         if serial:
             meta['serial'] = serial
         ok, text = cleanup.calibrate(
@@ -184,6 +187,8 @@ def finish_floor_calibration(scanner, serial=None):
     except Exception as exc:
         logging.getLogger('wwb_scanner').error('Calibration failed: %s', exc, exc_info=True)
         return False, 'Calibration failed: %s' % exc
+    if ok and serial:
+        text += ' - dongle %s' % serial          # V22.4: calibrations are kept per dongle
     (status.info if ok else status.warning)(text)
     return ok, text
 

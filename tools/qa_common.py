@@ -70,6 +70,7 @@ MARKERS = [
     ('V22.1', 'service.py', 'class ScanService'),
     ('V22.2', 'scan_objects/passes.py', 'class ScanPasses'),
     ('V22.3', 'receivers/__init__.py', 'class Receiver'),
+    ('V22.4', 'dongles.py', 'def _bind_legacy'),
 ]
 
 

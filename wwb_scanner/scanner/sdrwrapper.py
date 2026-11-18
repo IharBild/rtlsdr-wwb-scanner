@@ -33,6 +33,7 @@ class SdrWrapper(object):
         self.device_wait = threading.Event()
         self.device_lock = threading.RLock()
         self._rx = (None, None)       # V22.3: (device, its Receiver)
+        self.serial = None            # V22.4: serial number of the open dongle (None: unknown)
     def set_sdr_values(self):
         if not self.enable_scanner_updates:
             return
@@ -80,12 +81,21 @@ class SdrWrapper(object):
                     self.device_open.set()
         return self.sdr
     def _open_sdr_local(self):
-        serial_number = self.scanner.device_config.serial_number
+        from wwb_scanner import dongles
+        dc = self.scanner.device_config
+        serial_number = dc.serial_number
+        cls = rtlsdr_class()
+        # V22.4: which dongle this opens (its calibrations are used); two
+        # dongles with one serial number are opened by the chosen index
+        serial, kwargs = dongles.resolve(cls, serial_number, dc.get('device_index'))
         try:
-            sdr = rtlsdr_class()(serial_number=serial_number)
+            sdr = cls(**kwargs)
         except IOError:
             sdr = None
         if sdr is not None:
+            self.serial = serial
+            if serial is not None:
+                dongles.use(serial)
             try:
                 scan_dll.configure(sdr)
             except Exception:
@@ -101,6 +111,11 @@ class SdrWrapper(object):
         if cached_dev is not dev:
             from wwb_scanner.receivers import as_receiver
             rx = as_receiver(dev)
+            if getattr(rx, 'serial', None) is None and self.serial is not None:
+                try:
+                    rx.serial = self.serial
+                except AttributeError:
+                    pass
             self._rx = (dev, rx)
         return rx
     def close_sdr(self):

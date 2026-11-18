@@ -558,7 +558,30 @@ def h1_dongle(lab):
         result('H1b', 'PASS' if v4 else 'WARN', 'DLL scanner-v4 загружена',
                'да (перестройка ~22 мс, уровни выше штатной DLL 2023 г. на ~5,4 дБ)' if v4 else
                'нет: %s. Время и уровни не сравнимы с эталоном V10 + scanner-v4' % s['lib'])
+        h1_calibrations()
     return s
+
+
+def h1_calibrations():
+    """V22.4: which dongle was opened and whose calibrations are used."""
+    try:
+        from wwb_scanner import dongles, paths
+    except ImportError:
+        return
+    try:
+        serial = dongles.active()
+        folder = paths.calibration_dir()
+        files = sorted(n for n in os.listdir(folder) if dongles.CAL_FILE_RE.match(n)) \
+            if os.path.isdir(folder) else []
+        reg = dongles.load_registry()
+        legacy = (reg.get('legacy') or {}).get('state')
+        known = [s for s, _ in dongles.known()]
+        result('H1c', 'INFO', 'калибровки донгла',
+               'серийный номер %r; папка %s; файлов калибровки %d (%s); известные донглы: %s; '
+               'калибровки до V22.4: %s' % (serial, folder, len(files), ', '.join(files[:6]),
+                                            ', '.join(map(repr, known)) or '-', legacy or '-'))
+    except Exception as exc:
+        result('H1c', 'WARN', 'калибровки донгла', 'не прочитаны: %s' % exc)
 
 
 def h0_warmup(lab, seconds=90):

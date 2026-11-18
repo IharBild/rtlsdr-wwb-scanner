@@ -81,6 +81,7 @@ class ScanConfig(Config):
 class DeviceConfig(Config):
     DEFAULTS = dict(
         serial_number=None,
+        device_index=None,      # V22.4: used when two dongles have the same serial number
         gain=TESTED['gain'],
         freq_correction=0,
     )

@@ -17,7 +17,9 @@ Inside it::
     db.json              scan settings of past scans
     scan_index.json      history of scans (description of each scan)
     scans/*.npz          points of every scan in the history
-    calibration/         floor calibrations, gain step table, gain profile
+    calibration/         dongles.json and one folder per dongle (V22.4,
+                         wwb_scanner/dongles.py): floor calibrations, gain
+                         step table, gain profile
     logs/                log files
     rtlsdr-wwb-scanner/wwb_scanner.ini
                          settings of the window (V22.0; was the registry)
@@ -38,6 +40,9 @@ def set_data_dir(path):
     """Use ``path`` as the data folder for this process (None: default)."""
     global _override
     _override = None if path is None else os.path.abspath(os.path.expanduser(str(path)))
+    # V22.4: the active dongle belongs to a data folder
+    from wwb_scanner import dongles
+    dongles.reset()
 
 
 def default_data_dir():
@@ -72,8 +77,17 @@ def scans_dir(create=False):
     return _sub('scans', create)
 
 
-def calibration_dir(create=False):
+def calibration_root(create=False):
+    """The calibration folder itself (all dongles; before V22.4 the files
+    were directly here)."""
     return _sub('calibration', create)
+
+
+def calibration_dir(create=False):
+    """V22.4: the calibration folder of the active dongle (dongles.py);
+    ``calibration_root()`` while no dongle is known."""
+    from wwb_scanner import dongles
+    return dongles.calibration_dir(create)
 
 
 def logs_dir(create=False):

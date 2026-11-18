@@ -319,6 +319,9 @@ class ScannerBase(JSONMixin):
         yc, info = cleanup.clean(f, y, start, period, profile=profile, ripple=want_r,
                                  spurs=want_s, flatten=want_f, default_ripple=default,
                                  spur_profile=spur_profile)
+        serial = getattr(getattr(self, 'sdr_wrapper', None), 'serial', None)
+        if serial is not None:
+            info['dongle'] = serial         # V22.4: whose calibrations were used
         if profile is not None:
             info['calibration'] = profile.get('meta', {}).get('created')
             if profile.get('leaks'):

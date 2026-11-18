@@ -236,7 +236,8 @@ def test_floor_calibration_is_finished_by_the_core(store, monkeypatch):
     svc = service.ScanService(history=None)
     svc.start(ScanConfig({'device': {'gain': 49.6}}), kind=service.FLOOR_CALIBRATION, serial='00000001')
     res = svc.wait(300)
-    assert res.calibration_ok is True and res.calibration_text == 'Calibration saved (test)'
+    assert res.calibration_ok is True
+    assert res.calibration_text == 'Calibration saved (test) - dongle 00000001'   # V22.4
     assert saved['start'] == 31.0 and saved['meta']['serial'] == '00000001' and saved['meta']['gain'] == 49.6
     assert saved['points'] == res.points and saved['clipped'] is not None
 

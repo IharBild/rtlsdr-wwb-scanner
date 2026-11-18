@@ -314,6 +314,7 @@ def main():
     v210_checks(app, win)
     v211_checks(app, win, si)
     v212_checks(app, win, si)
+    v224_checks(app, win, si)
     v209_checks(app, win, si)
     v208_checks(app, win, controls, si, fresh, first_start)
     win.close()
@@ -1085,6 +1086,32 @@ def v212_checks(app, win, si):
               'marks %d, labels %s' % (n, labels))
     except Exception as exc:
         check('U41', False, 'error: %s' % exc)
+
+
+def v224_checks(app, win, si):
+    """V22.4. U42: the calibrations used are those of the chosen dongle
+    (its serial number names the folder and the line in Scan settings), and
+    the scan settings carry the dongle's index."""
+    try:
+        from wwb_scanner import dongles, paths
+    except ImportError:
+        check('U42', False, 'no wwb_scanner/dongles.py (V22.4 not installed)')
+        return
+    try:
+        dev = si.deviceInfo
+        serial = getattr(dev, 'device_serial', None) if dev is not None else None
+        info = si.calibrationInfo()
+        text = str(info.get('dongleText', ''))
+        folder = paths.calibration_dir()
+        lbl = win.findChild(QtCore.QObject, 'calDongleLbl')
+        conf = si.user_scan_config()
+        ok = (serial is not None and dongles.active() == serial and
+              os.path.basename(folder) == dongles.key(serial) and text.endswith(serial) and
+              lbl is not None and conf.device.device_index == dev.device_index)
+        check('U42', ok, 'dongle %r, folder %s, Scan settings %r, index in the scan %r'
+              % (serial, os.path.basename(folder), text, conf.device.device_index))
+    except Exception as exc:
+        check('U42', False, 'error: %s' % exc)
 
 
 def v209_checks(app, win, si):

@@ -10,7 +10,7 @@ company in Poland and for sound engineers across Europe. Most of the code in thi
 written with Claude (Anthropic); every release is checked on a real V4 dongle by the
 maintainer.
 
-Current version: **V22.3** in the branch `v4-fixes` (installed by the command below). Last tagged
+Current version: **V22.4** in the branch `v4-fixes` (installed by the command below). Last tagged
 release: [v22.3](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v22.3)
 (branch `v4-fixes`). The `master` branch is the original upstream code and is not used here.
 
@@ -183,6 +183,15 @@ release: [v22.3](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v22
   - Checked: the window check U1-U41 passes on PySide2 5.15 (Python 3.8) and PySide6 6.12
     (Python 3.13, also from a clean install with only Essentials + Addons); all tests on
     both. **Not yet on Windows with the dongle.**
+- **V22.4** - **Calibrations of each dongle.** Floor calibrations, the table of the real gain
+  steps and the gain profile are kept per dongle, in `calibration\sn-<serial number>`; the
+  calibrations of the dongle that is opened (or chosen in Device Settings) are used, and
+  Scan settings names it. The calibrations made before V22.4 go to the first dongle seen after
+  the update (copied: V22.3 still finds them). A second dongle starts uncalibrated instead of
+  using the first one's floor and gain steps. Many dongles, the V4 too, leave the factory with
+  the serial number 00000001: two such dongles can not be told apart - the program says so;
+  give each its own serial number (`rtl_eeprom -s`). The serial number of the dongle is saved
+  with each scan.
 - **V22.0-V22.3** - **New foundation** (audit of the architecture of 16.11.2026). Nothing
   changes in what a scan measures; the code underneath is ready for the precise mode, the
   web interface and other receivers.
@@ -424,5 +433,11 @@ Windows: быстрее, без собственных помех донгла �
   копируются из реестра). Настройки по умолчанию — в ядре; без tinydb. В ядре появились
   служба скана и события, сканы из нескольких проходов (основа режима «Точный») и
   интерфейс приёмника (основа для других приёмников). Проверено на V4 18.11.2026.
+- V22.4: калибровки у каждого донгла свои — в папке `calibration\sn-<серийный номер>`.
+  Используются калибровки открытого (или выбранного в Device Settings) донгла, Scan settings
+  показывает, чьи. Калибровки, сделанные до V22.4, достаются первому донглу после обновления
+  (копируются: V22.3 их по-прежнему видит). У многих донглов, и у V4, заводской серийный номер
+  00000001: два таких донгла не различить — программа предупредит; дайте каждому свой номер
+  (`rtl_eeprom -s`).
 
 [osmosdr-wiki]: https://osmocom.org/projects/rtl-sdr/wiki

@@ -34,9 +34,11 @@ Dialog {
         if (!root.scanner) {
             calibrationLbl.text = '';
             stepsLbl.text = '';
+            dongleLbl.text = '';
             return;
         }
         var c = root.scanner.calibrationInfo();
+        dongleLbl.text = c.dongleText || '';      // V22.4
         calibrationLbl.text = c.floorText;
         floorDot.state_ = c.floorState;
         floorTip.text = root.floorCalHelp + (c.floorTip ? '\n\nNow: ' + c.floorTip : '');
@@ -282,6 +284,15 @@ Dialog {
                 }
 
                 Rectangle { Layout.fillWidth: true; height: 1; color: root.palette.mid; opacity: 0.5 }
+
+                // V22.4: calibrations are kept per dongle (serial number)
+                Label {
+                    id: dongleLbl
+                    objectName: 'calDongleLbl'
+                    font.pointSize: 9
+                    opacity: 0.8
+                    visible: text.length > 0
+                }
 
                 GridLayout {
                     columns: 4

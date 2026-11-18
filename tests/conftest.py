@@ -20,6 +20,15 @@ def _forget_hung_usb_calls():
     except ImportError:
         pass
 
+@pytest.fixture(autouse=True)
+def _no_active_dongle():
+    """V22.4: the active dongle (wwb_scanner/dongles.py) is process-wide;
+    each test starts without one."""
+    from wwb_scanner import dongles
+    dongles.reset()
+    yield
+    dongles.reset()
+
 @pytest.fixture
 def tmp_db_store(tmpdir, monkeypatch):
     db_root = tmpdir.mkdir('db_root')

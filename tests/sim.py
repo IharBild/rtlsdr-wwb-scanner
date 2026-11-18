@@ -379,17 +379,21 @@ def make_config(start, end, fs=2.4e6, window=96, sweeps=40, per_sweep=2048,
 
 
 def run_scan(monkeypatch, tmpdir, start, end, sdr_kwargs=None, lock_lib=False,
-             timeout=None, **cfg):
+             timeout=None, serials=None, **cfg):
     """Run a real Scanner.run_scan() against FakeRtlSdr. Returns (scanner, sdr, seconds)."""
     from wwb_scanner.scanner import sdrwrapper, main, sample_processing
     from wwb_scanner import scan_dll
     from wwb_scanner.utils import dbstore
     sdr_kwargs = dict(sdr_kwargs or {})
     made = []
-    def factory(serial_number=None):
+    def factory(serial_number=None, device_index=None):
         s = FakeRtlSdr(serial_number=serial_number, **sdr_kwargs)
+        s.opened_with = dict(serial_number=serial_number, device_index=device_index)   # V22.4
         made.append(s)
         return s
+    if serials is not None:
+        # V22.4: the dongles pyrtlsdr lists (their serial numbers)
+        factory.get_device_serial_addresses = lambda: list(serials)
     monkeypatch.setattr(sdrwrapper, 'RtlSdr', factory)
     monkeypatch.setitem(scan_dll._cache, 'lib', FakeLockLib() if lock_lib else None)
     monkeypatch.setattr(dbstore.DBStore, 'DB_PATH', str(tmpdir.join('db.json')))

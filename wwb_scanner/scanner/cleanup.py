@@ -454,7 +454,8 @@ CALIBRATION_RANGE_MHZ = (31.0, 1766.0)
 
 
 def calibration_dir():
-    # V22.0: the data folder is set in one place (wwb_scanner/paths.py)
+    # V22.0: the data folder is set in one place (wwb_scanner/paths.py);
+    # V22.4: the folder of the active dongle (wwb_scanner/dongles.py)
     from wwb_scanner import paths
     return paths.calibration_dir()
 

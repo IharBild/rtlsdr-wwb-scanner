@@ -262,7 +262,19 @@ class ScannerInterface(GenericQObject):
     scanConfig = Property(ScanConfigData, _g_scanConfig, _s_scanConfig, notify=_n_scanConfig)
 
     def _g_deviceInfo(self): return self._deviceInfo
-    def _s_deviceInfo(self, value): self._generic_setter('_deviceInfo', value)
+    def _s_deviceInfo(self, value):
+        changed = value is not self._deviceInfo
+        self._generic_setter('_deviceInfo', value)
+        if changed and value is not None:
+            # V22.4: the calibrations shown and used are those of this dongle
+            serial = getattr(value, 'device_serial', None)
+            if serial is not None and not self.running:
+                try:
+                    from wwb_scanner import dongles
+                    dongles.use(serial, getattr(value, 'tuner_type', None))
+                except Exception:
+                    logger.exception('dongle %r', serial)
+                self.calibrationChanged.emit()
     deviceInfo = Property(QtCore.QObject, _g_deviceInfo, _s_deviceInfo, notify=_n_deviceInfo)
 
     def _g_gain(self): return self._gain
@@ -343,6 +355,9 @@ class ScannerInterface(GenericQObject):
         conf = config.ScanConfig()
         conf.scan_range = [self.startFreq, self.endFreq]
         conf.device.serial_number = self.deviceInfo.device_serial if self.deviceInfo is not None else None
+        # V22.4: opens the chosen one of two dongles with the same serial number
+        idx = getattr(self.deviceInfo, 'device_index', None) if self.deviceInfo is not None else None
+        conf.device.device_index = int(idx) if isinstance(idx, (int, float)) and idx >= 0 else None
         conf.device.gain = self.gain
         conf.sampling.sample_rate = float(self.sampleRate) * 1e3
         sc = self.scanConfig
@@ -395,8 +410,16 @@ class ScannerInterface(GenericQObject):
         """V20.7: the two calibrations for the Scan settings, short:
         {floor,steps}{State: ok|warn|none, Text, Tip}."""
         from wwb_scanner.scanner import cleanup, gain_cal
+        from wwb_scanner import dongles
         sr = (self.sampleRate or 0) * 1e3
         out = {}
+        try:
+            # V22.4: whose calibrations these are
+            serial = dongles.active()
+            out['dongleText'] = ('Calibrations of the dongle %s' % (serial or '(no serial number)')
+                                 if serial is not None else 'No dongle seen yet')
+        except Exception as exc:
+            out['dongleText'] = 'dongle: %s' % exc
         try:
             out.update(_floor_info(cleanup, self.gain, sr))
         except Exception as exc:

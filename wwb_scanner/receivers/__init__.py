@@ -16,6 +16,7 @@ error).
 class Receiver(object):
     """What the scanner needs from a receiver."""
     name = 'receiver'
+    serial = None       # V22.4: serial number (calibrations are kept per serial), None: unknown
     def tune(self, freq_hz):
         """Set the centre frequency."""
         raise NotImplementedError

@@ -125,6 +125,12 @@ class DeviceInfoList(GenericQObject):
             logger.warning('Could not list the RTL-SDR dongles: %s', exc)
             return
         print(device_serials)
+        try:
+            # V22.4: two dongles with one serial number share calibrations
+            from wwb_scanner import dongles
+            dongles.warn_duplicates(device_serials)
+        except Exception:
+            logger.exception('serial numbers')
         gone = [i for i, d in self._devices.items()
                 if i >= len(device_serials) or d.device_serial != device_serials[i]]
         for i in gone:
