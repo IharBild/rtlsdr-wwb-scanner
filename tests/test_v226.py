@@ -28,7 +28,9 @@ def test_same_as_scipy_to_the_bit(name, n):
 
 def test_three_windows_offered():
     assert WINDOW_TYPES == ['hann', 'blackmanharris', 'flattop']
-    qml = open(os.path.join(ROOT, 'wwb_scanner', 'ui', 'pyside', 'qml', 'ScanControlsDialog.qml'),
+    import wwb_scanner          # the installed package (a qa-kit has no wwb_scanner folder)
+    pkg = os.path.dirname(os.path.abspath(wwb_scanner.__file__))
+    qml = open(os.path.join(pkg, 'ui', 'pyside', 'qml', 'ScanControlsDialog.qml'),
                encoding='utf-8').read()
     m = re.search(r"model:\s*\[([^\]]*)\]\s*\n\s*onTextValueChanged: \{ windowCombo", qml)
     assert m, 'window list not found'
