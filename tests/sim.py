@@ -353,7 +353,7 @@ class FakeLockLib(object):
 
 def make_config(start, end, fs=2.4e6, window=96, sweeps=40, per_sweep=2048,
                 overlap=0.65, window_type='hann', gain=33.8, auto_gain=False, clean=None,
-                ranges=None, gain_calibration=False, verify_peaks=False):
+                ranges=None, gain_calibration=False, verify_peaks=False, band_gain=False):
     conf = {
         'scan_range': [float(start), float(end)],
         'device': {'gain': gain},
@@ -363,6 +363,7 @@ def make_config(start, end, fs=2.4e6, window=96, sweeps=40, per_sweep=2048,
             'window_size': window, 'window_type': window_type,
             'auto_gain': auto_gain,
             'verify_peaks': verify_peaks,     # V21.2
+            'band_gain': band_gain,           # V22.7
         },
     }
     # V22.0: the core default is the clean scan (scanner/config.py TESTED);

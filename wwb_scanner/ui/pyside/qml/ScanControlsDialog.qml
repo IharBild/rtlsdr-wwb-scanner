@@ -19,6 +19,7 @@ Dialog {
     property alias cleanFloor: cleanFloorSwitch.checked
     property alias autoGain: autoGainSwitch.checked
     property alias verifyPeaks: verifyPeaksSwitch.checked
+    property alias bandGain: bandGainSwitch.checked
     title: 'Scan settings'
 
     function stateColor(st){
@@ -150,15 +151,15 @@ Dialog {
                 ComboBox {
                     id: windowCombo
                     property string textValue
-                    model: [
-                        'barthann', 'bartlett', 'blackman', 'blackmanharris',
-                        'bohman', 'boxcar', 'cosine', 'flattop', 'general_cosine',
-                        'general_hamming', 'hamming', 'hann', 'hanning',
-                        'nuttall', 'parzen', 'triang',
-                    ]
+                    // V22.6: three windows (wwb_scanner/scanner/windows.py); a
+                    // window of an older version is shown (and used) as hann
+                    model: ['hann', 'blackmanharris', 'flattop']
                     onTextValueChanged: { windowCombo.setFromString(windowCombo.textValue) }
                     function setFromString(wname){
                         var idx = windowCombo.find(wname);
+                        if (idx < 0) {
+                            idx = windowCombo.find('hann');
+                        }
                         windowCombo.currentIndex = idx;
                         return idx;
                     }
@@ -280,6 +281,21 @@ Dialog {
                               '20 dB. Products are marked "dongle product" and named in the status line; ' +
                               'they stay in the scan and in the files. Up to 30 tiles, about 0.2 s each; ' +
                               'nothing is read when there are fewer than two strong carriers.'
+                    }
+                    Switch {
+                        id: bandGainSwitch
+                        objectName: 'bandGainSwitch'
+                        text: 'Own gain per band'
+                    }
+                    InfoTip {
+                        Layout.rightMargin: 18
+                        text: 'V22.7. A short probe before the scan (a few seconds) reads every band and ' +
+                              'raises the gain where the band is quiet enough, e.g. 560-700 MHz at 49.6 dB ' +
+                              'instead of 33.8 dB (up to ~8 dB more sensitive). The gain never goes below the ' +
+                              'gain of the scan. Only gains with a floor calibration are used. Levels are ' +
+                              'given at the gain of the scan (the real gain difference is subtracted), so a ' +
+                              'carrier keeps its level across band edges. The gains used are named in the ' +
+                              'status line and saved with the scan.'
                     }
                 }
 
@@ -496,6 +512,7 @@ Dialog {
         config.cleanFloor = root.cleanFloor;
         config.autoGain = root.autoGain;
         config.verifyPeaks = root.verifyPeaks;
+        config.bandGain = root.bandGain;
     }
 
     function reloadSettings(){
@@ -513,6 +530,7 @@ Dialog {
         root.cleanFloor = config.cleanFloor;
         root.autoGain = config.autoGain;
         root.verifyPeaks = config.verifyPeaks;
+        root.bandGain = config.bandGain;
         root.updateCalibrationText();
     }
 

@@ -315,6 +315,7 @@ def main():
     v211_checks(app, win, si)
     v212_checks(app, win, si)
     v224_checks(app, win, si)
+    v227_checks(app, win, si)
     v209_checks(app, win, si)
     v208_checks(app, win, controls, si, fresh, first_start)
     win.close()
@@ -1112,6 +1113,27 @@ def v224_checks(app, win, si):
               % (serial, os.path.basename(folder), text, conf.device.device_index))
     except Exception as exc:
         check('U42', False, 'error: %s' % exc)
+
+
+def v227_checks(app, win, si):
+    """V22.6 / V22.7. U43: three FFT windows; the switch "Own gain per band"
+    reaches the scan settings (off by default until checked on the PC)."""
+    try:
+        sw = win.findChild(QtCore.QObject, 'bandGainSwitch')
+        sc = si.scanConfig
+        default = bool(sc.bandGain)
+        sc.bandGain = True
+        on = si.user_scan_config().sampling.band_gain
+        sc.bandGain = False
+        off = si.user_scan_config().sampling.band_gain
+        sc.bandGain = default
+        from wwb_scanner.scanner.sample_processing import WINDOW_TYPES
+        ok = sw is not None and on is True and off is False and default is False and \
+            WINDOW_TYPES == ['hann', 'blackmanharris', 'flattop']
+        check('U43', ok, 'switch %s, on -> %r, off -> %r, default %r, windows %s'
+              % ('found' if sw is not None else 'MISSING', on, off, default, WINDOW_TYPES))
+    except Exception as exc:
+        check('U43', False, 'error: %s' % exc)
 
 
 def v209_checks(app, win, si):

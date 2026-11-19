@@ -10,6 +10,7 @@ HERE = os.path.abspath(SPECPATH)
 datas = collect_data_files('wwb_scanner')            # QML, band lists, gain profile
 datas += copy_metadata('rtlsdr-wwb-scanner')         # --version, selftest
 hidden = collect_submodules('wwb_scanner')           # file handlers etc. are imported lazily
+# QtCharts: ui/pyside/graph.py loads the chart types before QML uses them
 hidden += ['rtlsdr', 'PySide6.QtCharts', 'PySide6.QtQuickControls2', 'PySide6.QtQuickDialogs2']
 
 a = Analysis(
@@ -22,7 +23,10 @@ a = Analysis(
     runtime_hooks=[],
     excludes=['tkinter', 'matplotlib', 'IPython', 'pytest', 'PySide6.QtWebEngineCore',
               'PySide6.QtWebEngineWidgets', 'PySide6.QtWebEngineQuick', 'PySide6.Qt3DCore',
-              'PySide6.QtMultimedia', 'PySide6.QtPdf', 'PySide6.QtDesigner'],
+              'PySide6.QtMultimedia', 'PySide6.QtPdf', 'PySide6.QtDesigner',
+              # V22.6: not used by the program (size report of 18.11). PySide6.QtOpenGL
+              # and QtCharts stay: QtQuick and QtCharts need them
+              'scipy', 'PySide6.QtOpenGLWidgets'],
     noarchive=False,
 )
 # PyInstaller takes Qt's whole QML folder and, with it, the libraries of
@@ -46,9 +50,18 @@ UNUSED_LIB = re.compile(r'Qt6(Quick3D|3D|Graphs|DataVisualization|Location|Multi
 UNUSED_QML_RE = re.compile(r'(^|/)qml/(%s)(/|$)' % '|'.join(re.escape(m) for m in UNUSED_QML))
 
 
+# V22.6: software OpenGL (Qt Quick draws with Direct3D 11 on Windows; without
+# a working GPU Windows itself falls back to WARP) and Qt's TLS with its own
+# copy of OpenSSL (Qt does not go to the network here; Python keeps its own
+# libssl-3 / libcrypto-3 for HTTPS): 20.6 + ~8 MB
+UNUSED_FILES = {'opengl32sw.dll', 'libssl-3-x64.dll', 'libcrypto-3-x64.dll'}
+
+
 def used(entry):
     dest = entry[0].replace('\\', '/')
     name = dest.rsplit('/', 1)[-1]
+    if name.lower() in UNUSED_FILES or '/plugins/tls/' in '/' + dest:
+        return False
     if UNUSED_QML_RE.search(dest):
         return False
     if UNUSED_LIB.search(name):

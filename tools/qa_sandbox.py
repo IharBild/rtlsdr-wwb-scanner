@@ -270,7 +270,7 @@ def sanity(args):
     R.add('SA5', 'SANITY', 'PASS' if lib_ok and not qml_own else 'WARN', 'настройки по умолчанию (V22.0: из ядра)',
           'ядро = проверенная конфигурация: %s; свои значения в ScanConfig.qml: %s' % (lib_ok, qml_own or 'нет'))
     deps = []
-    for mod in ('numpy', 'scipy', 'PySide6'):
+    for mod in ('numpy', 'PySide6'):        # V22.6: no scipy
         try:
             m = __import__(mod)
             deps.append('%s %s' % (mod, getattr(m, '__version__', '?')))

@@ -580,7 +580,28 @@ class Scanner(ScannerBase):
         if self.sdr is None:
             raise IOError('RTL-SDR dongle not found or busy (unplug/replug it, '
                           'close other SDR programs)')
-        super(Scanner, self)._run_scan(running)
+        # V22.7: own gain per band (gain_plan.py): a short probe first
+        self.gain_plan = None
+        if self._band_gain_wanted():
+            self.stop_requested = False
+            running.set()               # Stop works during the probe
+            st = logging.getLogger('wwb_scanner.status')
+            st.info('Choosing the gain of every band (short probe)...')
+            try:
+                self.gain_plan = self.make_gain_plan()
+            except Exception:
+                logger.exception('gain plan failed: one gain for the whole scan')
+            if self.stop_requested:
+                st.info('Scan %s stopped during the gain probe: nothing measured', self.range_text())
+                return
+        if self.gain_plan is not None and self.gain_plan.banded:
+            self._run_banded(running, self.gain_plan)
+        else:
+            if self.gain_plan is not None:
+                logging.getLogger('wwb_scanner.status').info(
+                    'Own gain per band: one gain for the whole scan (%s)',
+                    self.gain_plan.note or 'no band is quiet enough for more gain')
+            super(Scanner, self)._run_scan(running)
         if self.config.get('gain_calibration') and running.is_set():
             # V20.5: the survey is done, the dongle is still open
             from wwb_scanner.scanner import gain_cal
@@ -588,6 +609,193 @@ class Scanner(ScannerBase):
             self.gain_cal_result = (ok, text)
             (logging.getLogger('wwb_scanner.status').info if ok else
              logging.getLogger('wwb_scanner.status').warning)(text)
+    # ------------------------------------------------ V22.7: gain per band
+    def _band_gain_wanted(self):
+        try:
+            return (bool(self.sampling_config.get('band_gain')) and
+                    not self.config.get('gain_calibration'))
+        except Exception:
+            return False
+    def make_gain_plan(self):
+        """Probe the bands of this scan with the open dongle (gain_plan.py)."""
+        from wwb_scanner.scanner import gain_plan, gain_cal, cleanup
+        sr = self.sample_rate
+        def floor_calibrated(g):
+            return cleanup.find_profile(g, sr)[0] is not None
+        # only gains that can be levelled, when the floor is levelled
+        has_floor = floor_calibrated if self.config.processing.get('clean_floor') else None
+
+        def drop(g_hi, g_lo, f_hz):
+            return gain_cal.real_drop(g_hi, g_lo, f_hz, sample_rate=sr)
+        rx = self.receiver
+        try:
+            g0 = float(rx.gain)
+        except Exception:
+            g0 = float(self.gain)
+        return gain_plan.make_plan(rx, self.segments, g0, self.gains, sr, has_floor=has_floor,
+                                   drop=drop, should_stop=lambda: bool(self.stop_requested))
+    def _run_banded(self, running, plan):
+        """V22.7: every group of bands of one gain is scanned as a scan of its
+        own (tiles, Overload, peak check, clean scan with the calibration of
+        that gain), then the levels are brought to the gain of the scan and
+        the bands are put together into this scan's spectrum."""
+        from wwb_scanner.scanner import gain_plan, gain_cal
+        from wwb_scanner.scanner.sample_processing import run_with_timeout, TUNE_TIMEOUT
+        t_start = time.time() - plan.seconds
+        st = logging.getLogger('wwb_scanner.status')
+        main = self.spectrum
+        conf = self.config
+        g0 = plan.ref_gain
+        sr = self.sample_rate
+
+        def drop(g_hi, g_lo, f_hz):
+            return gain_cal.real_drop(g_hi, g_lo, f_hz, sample_rate=sr)
+        saved = (list(conf.scan_range), conf.get('scan_ranges'))
+        groups = sorted(plan.groups(), key=lambda gr: gr[1][0][0])
+        step = float(self.step_size) or 1.
+        total = sum(int((hi - lo) / step) + 1 for _, rs in groups for lo, hi in rs)
+        self._banded = {'total': max(total, 1), 'done': 0}
+        self.events.emit('scan_started', name=main.name, ranges=[list(x) for x in self.segments],
+                         tiles=total)
+        st.info('Gain per band: %s (probe %.0f s)', plan.text(), plan.seconds)
+        parts, infos, colls = [], [], []
+        rx = self.receiver
+        try:
+            for gain, ranges in groups:
+                if self.stop_requested:
+                    break
+                run_with_timeout(setattr, TUNE_TIMEOUT, rx, 'gain', gain)
+                self.device_config.gain = gain
+                conf.scan_range = [ranges[0][0], ranges[-1][1]]
+                conf.scan_ranges = [list(r) for r in ranges] if len(ranges) > 1 else None
+                band = Spectrum(name=main.name, step_size=main.step_size)
+                self.spectrum = band
+                self.sample_collection = SampleCollection(scanner=self)
+                self.build_sample_sets()
+                self._live = (main, gain, g0, drop)
+                running.set()
+                if self.stop_requested:
+                    break
+                self.sample_collection.scan_all_freqs()
+                self.sample_collection.stopped.wait()
+                self._live = None
+                colls.append(self.sample_collection)
+                self._banded['done'] += len(self.sample_collection.sample_sets)
+                if not band.sample_data.size:
+                    continue
+                self.crop_spectrum()
+                try:
+                    self.apply_cleanup()
+                except Exception:
+                    logger.exception('clean scan of %s failed, the band is kept as measured', ranges)
+                sd = band.sample_data
+                f = np.asarray(sd['frequency'], dtype=np.float64)
+                y = np.asarray(sd['dbFS'], dtype=np.float64)
+                raw = getattr(band, 'raw_dbFS', None)
+                raw = y.copy() if raw is None or np.size(raw) != y.size else np.asarray(raw, dtype=np.float64)
+                sh = gain_plan.level_shift(f, gain, g0, drop)
+                parts.append((f, y - sh, raw - sh))
+                info = dict(getattr(band, 'cleanup_info', None) or {})
+                info.update(ranges=[list(r) for r in ranges], gain=gain,
+                            level_shift_db=[round(float(sh.min()), 2), round(float(sh.max()), 2)])
+                infos.append(info)
+                self._put_bands(main, parts)
+        finally:
+            self._live = None
+            self.spectrum = main
+            conf.scan_range, conf.scan_ranges = saved
+            self.device_config.gain = g0
+            try:
+                if getattr(rx, 'is_open', True):
+                    run_with_timeout(setattr, TUNE_TIMEOUT, rx, 'gain', g0)
+            except Exception:
+                logger.exception('could not set the gain back to %s dB', g0)
+        self._merge_band_collections(colls)
+        stopped_by_user = bool(self.stop_requested)
+        if not parts:
+            st.info('Scan %s stopped before the first tile: nothing measured', self.range_text())
+            return
+        info = self._put_bands(main, parts, infos, plan)
+        if self.history is not None:
+            self.save_to_dbstore()
+        coll = self.sample_collection
+        what = self.range_text()
+        note = ' (gain per band: %s%s)' % (plan.text(), self._clean_note(info))
+        if stopped_by_user:
+            st.info('Scan %s stopped after %.0f s, measured part kept%s', what, time.time() - t_start, note)
+        elif getattr(coll, 'aborted', False):
+            st.info('Scan %s stopped after %.0f s (dongle error), measured part kept', what,
+                    time.time() - t_start)
+        else:
+            over = getattr(coll, 'overload_note', '')
+            (st.warning if over and getattr(coll, 'overload_warn', False) else st.info)(
+                'Scan %s done in %.0f s%s%s', what, time.time() - t_start, note,
+                ('; ' + over) if over else '')
+    def _put_bands(self, main, parts, infos=None, plan=None):
+        """The finished bands into the scan's spectrum (levels at the gain of
+        the scan). With ``infos``: also the raw values and what the clean
+        scan did (cleanup_info, with the gain of every band)."""
+        from wwb_scanner.scan_objects.samplearray import SampleArray
+        f = np.concatenate([p[0] for p in parts])
+        y = np.concatenate([p[1] for p in parts])
+        raw = np.concatenate([p[2] for p in parts])
+        order = np.argsort(f, kind='stable')
+        f, y, raw = f[order], y[order], raw[order]
+        keep = np.concatenate([[True], np.diff(f) > 1e-9])     # a band edge measured twice
+        f, y, raw = f[keep], y[keep], raw[keep]
+        info = None
+        if infos is not None:
+            info = merge_band_infos(infos, plan)
+            serial = getattr(getattr(self, 'sdr_wrapper', None), 'serial', None)
+            if serial is not None:
+                info['dongle'] = serial
+        with main.data_update_lock:
+            main.sample_data = SampleArray.create(frequency=f, dbFS=y)
+            if info is not None:
+                main.raw_dbFS = raw
+                main.cleanup_info = info
+        main.set_data_updated()
+        return info
+    def _merge_band_collections(self, colls):
+        """ScanResult and the window read the tile collection: the last one
+        gets the tiles and notes of all bands."""
+        if not colls:
+            return
+        last = colls[-1]
+        sets, done = {}, set()
+        notes, missing, images, checks = [], [], [], []
+        warn = False
+        for c in colls:
+            sets.update(c.sample_sets)
+            done |= set(getattr(c, 'processed_keys', ()) or ())
+            n = getattr(c, 'overload_note', '')
+            if n:
+                notes.append(n)
+            warn = warn or bool(getattr(c, 'overload_warn', False))
+            missing += list(getattr(c, 'missing_tiles', []) or [])
+            images += list(getattr(c, 'images', []) or [])
+            checks += list(getattr(c, 'peak_checks', []) or [])
+        last.sample_sets = sets
+        last.processed_keys = done
+        last.overload_note = '; '.join(notes)
+        last.overload_warn = warn
+        last.missing_tiles = missing
+        last.images = images
+        last.peak_checks = checks
+        self.sample_collection = last
+    @staticmethod
+    def _clean_note(info):
+        parts = []
+        if info.get('spurs'):
+            parts.append('%d own spurs hidden' % len(info.get('spurs_removed') or []))
+        if info.get('ripple'):
+            parts.append('tile ripple')
+        if info.get('flatten'):
+            parts.append('floor levelled')
+        note = '; clean: %s' % ', '.join(parts) if parts else ''
+        if info.get('floor_skipped'):
+            note += '; floor not levelled: %s' % info['floor_skipped']
+        return note
     def _tile_kwargs(self, sample_set):
         weight = 1.0
         bw = getattr(sample_set, 'bin_weight', None)
@@ -609,9 +817,27 @@ class Scanner(ScannerBase):
     def on_sample_set_processed(self, sample_set):
         kw = self._tile_kwargs(sample_set)
         self.spectrum.add_sample_set(**kw)
+        live = getattr(self, '_live', None)
+        if live is not None:
+            # V22.7: the band being scanned also shows in the scan's spectrum
+            # (at the gain of the scan) while it is measured
+            main, g, g0, drop = live
+            try:
+                sh = drop(g, g0, sample_set.center_frequency)
+                kw2 = dict(kw)
+                kw2['magnitude'] = np.asarray(kw['magnitude']) * (10. ** (-sh / 10.))
+                main.add_sample_set(**kw2)
+            except Exception:
+                logger.exception('live view of the band')
         self.events.emit('tile', center_mhz=sample_set.center_frequency / 1e6,
                          points=int(np.size(kw['frequency'])))
-        self.progress = self.sample_collection.calc_progress()
+        banded = getattr(self, '_banded', None)
+        coll = self.sample_collection
+        if banded is not None and live is not None:
+            self.progress = min(1., (banded['done'] + len(getattr(coll, 'processed_keys', ()) or ()))
+                                / float(banded['total']))
+        else:
+            self.progress = coll.calc_progress()
     def rebuild_spectrum(self):
         """V20: some tiles changed after they were added (read again next to
         a strong carrier): the spectrum is built again from all tiles."""
@@ -622,6 +848,32 @@ class Scanner(ScannerBase):
         t0 = time.time()
         self.spectrum.rebuild(tiles)
         logger.info('spectrum rebuilt from %d tiles in %.2f s', len(tiles), time.time() - t0)
+
+def merge_band_infos(infos, plan=None):
+    """V22.7: one cleanup_info for a scan of several bands (one per gain)."""
+    out = {'bands': infos}
+    if plan is not None:
+        out['gain_plan'] = plan.as_list()
+        out['ref_gain'] = plan.ref_gain
+        out['gain_probe_s'] = round(plan.seconds, 1)
+    for key in ('spurs_removed', 'spurs_kept', 'calibration_leaks'):
+        vals = []
+        for i in infos:
+            vals += list(i.get(key) or [])
+        if vals:
+            out[key] = vals
+    out['spurs'] = any(i.get('spurs') for i in infos)
+    out['ripple'] = any(i.get('ripple') for i in infos)
+    out['flatten'] = bool(infos) and all(i.get('flatten') for i in infos)
+    cals = [i.get('calibration') for i in infos if i.get('calibration')]
+    if cals:
+        out['calibration'] = cals[0]
+    skipped = ['%s: %s' % ('-'.join('%g' % v for v in i['ranges'][0]), i['floor_skipped'])
+               for i in infos if i.get('floor_skipped')]
+    if skipped:
+        out['floor_skipped'] = '; '.join(skipped)
+    return out
+
 
 def scan_and_save(filename=None, frequency_format=None, **kwargs):
     """Scan and write the result to a file (.csv, .sdb2, .sdb3 or .npz);

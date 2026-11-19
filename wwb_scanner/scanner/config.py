@@ -28,6 +28,7 @@ TESTED = dict(
     sweep_overlap_ratio=0.65,
     auto_gain=True,
     verify_peaks=True,
+    band_gain=False,        # V22.7: own gain per band (A+); on after the check on the PC
     clean_ripple=True,
     clean_spurs=True,
     clean_images=False,
@@ -97,6 +98,7 @@ class SamplingConfig(Config):
         window_type=TESTED['window_type'],
         auto_gain=TESTED['auto_gain'],          # V17: re-measure clipped tiles with lower gain
         verify_peaks=TESTED['verify_peaks'],    # V21.2: check peaks next to strong carriers with less gain
+        band_gain=TESTED['band_gain'],          # V22.7: own gain per band (scanner/gain_plan.py)
         tile_keep_ratio=None,                   # None: sample_processing.DEFAULT_TILE_KEEP_RATIO
         tile_center_gap_hz=None,                # None: sample_processing.DEFAULT_TILE_CENTER_GAP_HZ
     )

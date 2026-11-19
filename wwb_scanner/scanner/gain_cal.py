@@ -33,7 +33,7 @@ import os
 import time
 
 import numpy as np
-from scipy.signal import get_window
+from wwb_scanner.scanner.windows import get_window   # V22.6: without scipy
 from wwb_scanner.scanner import psd as _psd   # V21.3.1: fast Welch
 
 logger = logging.getLogger(__name__)

@@ -4,7 +4,6 @@ import types
 
 import pytest
 import numpy as np
-from scipy import signal
 
 @pytest.fixture(autouse=True)
 def _forget_hung_usb_calls():
@@ -42,6 +41,7 @@ def tmp_db_store(tmpdir, monkeypatch):
 def random_samples():
     def gen(n=1024, rs=2.048e6, fc=800e6):
         a = np.random.randint(low=-128, high=128, size=n)
+        from scipy import signal    # V22.6: scipy only for the tests
         sig = signal.hilbert(a / 256.)
         freqs, Pxx = signal.welch(sig, fs=rs, return_onesided=False)
         if np.count_nonzero(Pxx) != Pxx.size:

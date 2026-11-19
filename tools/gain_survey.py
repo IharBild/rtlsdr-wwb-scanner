@@ -127,7 +127,10 @@ class Dongle(object):
 def psd(x):
     import numpy as np
     try:                        # V21.3.1: fast Welch of the scanner (same result)
-        from scipy.signal import get_window
+        try:                    # V22.6: own windows (no scipy)
+            from wwb_scanner.scanner.windows import get_window
+        except ImportError:
+            from scipy.signal import get_window
         from wwb_scanner.scanner import psd as _psd
         f, p = _psd.welch(np.asarray(x), FS, get_window('hann', NPERSEG), NPERSEG)
     except ImportError:         # older installed scanner

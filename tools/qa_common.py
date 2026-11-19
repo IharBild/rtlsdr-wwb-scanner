@@ -72,6 +72,8 @@ MARKERS = [
     ('V22.3', 'receivers/__init__.py', 'class Receiver'),
     ('V22.4', 'dongles.py', 'def _bind_legacy'),
     ('V22.5', 'portable.py', 'def _console_to_file'),
+    ('V22.6', 'scanner/windows.py', "WINDOW_TYPES = ['hann', 'blackmanharris', 'flattop']"),
+    ('V22.7', 'scanner/gain_plan.py', 'def make_plan'),
 ]
 
 

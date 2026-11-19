@@ -19,6 +19,7 @@ Item {
     property alias cleanFloor: model.cleanFloor
     property alias autoGain: model.autoGain
     property alias verifyPeaks: model.verifyPeaks
+    property alias bandGain: model.bandGain
     property alias scanRanges: model.scanRanges
 
     signal configUpdate()
@@ -50,6 +51,7 @@ Item {
         property alias cleanFloor: model.cleanFloor
         property alias autoGain: model.autoGain
         property alias verifyPeaks: model.verifyPeaks
+        property alias bandGain: model.bandGain
         property alias scanRanges: model.scanRanges
     }
 }

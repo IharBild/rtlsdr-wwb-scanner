@@ -4,10 +4,11 @@ import bisect
 import time
 import threading
 import numpy as np
-from scipy.signal.windows import __all__ as WINDOW_TYPES
-from scipy.signal import get_window
 # V21.3.1: own Welch (one batched FFT); scipy 1.16+ welch loops in Python
 from wwb_scanner.scanner import psd as _psd
+# V22.6: own windows (hann, blackmanharris, flattop): scipy is not needed
+from wwb_scanner.scanner import windows as _windows
+from wwb_scanner.scanner.windows import WINDOW_TYPES
 
 import logging
 logger = logging.getLogger(__name__)
@@ -15,36 +16,15 @@ logger = logging.getLogger(__name__)
 from wwb_scanner.core import JSONMixin
 from wwb_scanner.scanner.scan_timing import ScanTiming
 
-WINDOW_TYPES = [s for s in WINDOW_TYPES if s != 'get_window']
-
-# Windows that scipy cannot build from a name alone get usual parameters;
-# old names get their new name. Anything that still fails becomes hann.
-WINDOW_ALIASES = {'hanning': 'hann'}
-def _window_spec(name, size):
-    return {
-        'kaiser': ('kaiser', 8.6),
-        'kaiser_bessel_derived': ('kaiser_bessel_derived', 8.6),
-        'gaussian': ('gaussian', size / 6.),
-        'general_gaussian': ('general_gaussian', 1.5, size / 6.),
-        'general_cosine': ('general_cosine', [0.5, 0.5]),
-        'general_hamming': ('general_hamming', 0.54),
-        'chebwin': ('chebwin', 100),
-        'dpss': ('dpss', 3),
-    }.get(name, name)
-
 _window_cache = {}
 def make_window(name, size):
-    """Window array for ``name``; never raises (falls back to hann)."""
+    """Window array for ``name``; never raises. V22.6: a window that is no
+    longer offered (hamming, kaiser, ...) becomes hann (windows.resolve)."""
     key = (name, size)
     w = _window_cache.get(key)
     if w is not None:
         return w
-    n = WINDOW_ALIASES.get(name or 'hann', name or 'hann')
-    try:
-        w = get_window(_window_spec(n, size), size)
-    except Exception as exc:
-        logger.warning('window %r cannot be used (%s), using hann', name, exc)
-        w = get_window('hann', size)
+    w = _windows.get_window(_windows.resolve(name), size)
     _window_cache[key] = w
     return w
 

@@ -43,6 +43,7 @@ class ScanConfigData(GenericQObject):
     _n_cleanFloor = Signal()
     _n_autoGain = Signal()
     _n_verifyPeaks = Signal()
+    _n_bandGain = Signal()
     _n_scanRanges = Signal()
     configUpdate = Signal()
     def __init__(self, *args):
@@ -65,6 +66,7 @@ class ScanConfigData(GenericQObject):
         self._cleanFloor = config.TESTED['clean_floor']
         self._autoGain = config.TESTED['auto_gain']
         self._verifyPeaks = config.TESTED['verify_peaks']   # V21.2: second-gain check
+        self._bandGain = config.TESTED['band_gain']         # V22.7: own gain per band
         self._scanRanges = ''
         super().__init__(*args)
 
@@ -122,6 +124,10 @@ class ScanConfigData(GenericQObject):
     def _g_verifyPeaks(self): return self._verifyPeaks
     def _s_verifyPeaks(self, value): self._generic_setter('_verifyPeaks', value)
     verifyPeaks = Property(bool, _g_verifyPeaks, _s_verifyPeaks, notify=_n_verifyPeaks)
+
+    def _g_bandGain(self): return self._bandGain
+    def _s_bandGain(self, value): self._generic_setter('_bandGain', value)
+    bandGain = Property(bool, _g_bandGain, _s_bandGain, notify=_n_bandGain)
 
     # V18: several ranges as JSON '[[470, 534], [823, 832]]'; '' = one range
     def _g_scanRanges(self): return self._scanRanges
@@ -368,6 +374,7 @@ class ScannerInterface(GenericQObject):
         conf.sampling.window_type = sc.windowType
         conf.sampling.auto_gain = bool(getattr(sc, 'autoGain', False))
         conf.sampling.verify_peaks = bool(getattr(sc, 'verifyPeaks', False))
+        conf.sampling.band_gain = bool(getattr(sc, 'bandGain', False))     # V22.7
         conf.processing.clean_ripple = bool(getattr(sc, 'cleanRipple', False))
         conf.processing.clean_spurs = bool(getattr(sc, 'cleanSpurs', False))
         conf.processing.clean_images = bool(getattr(sc, 'cleanImages', False))

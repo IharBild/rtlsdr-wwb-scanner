@@ -10,7 +10,7 @@ company in Poland and for sound engineers across Europe. Most of the code in thi
 written with Claude (Anthropic); every release is checked on a real V4 dongle by the
 maintainer.
 
-Current version: **V22.5** in the branch `v4-fixes` (installed by the command below). Last tagged
+Current version: **V22.7** in the branch `v4-fixes` (installed by the command below). Last tagged
 release: [v22.3](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v22.3)
 (branch `v4-fixes`). The `master` branch is the original upstream code and is not used here.
 
@@ -183,6 +183,20 @@ release: [v22.3](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v22
   - Checked: the window check U1-U41 passes on PySide2 5.15 (Python 3.8) and PySide6 6.12
     (Python 3.13, also from a clean install with only Essentials + Addons); all tests on
     both. **Not yet on Windows with the dongle.**
+- **V22.7** - **Own gain per band** (Scan settings > "Own gain per band", off until checked on
+  the V4). A short probe before the scan (a few seconds) reads every band of the scan at the
+  gain of the scan and raises the gain where the band is quiet enough (headroom of the strongest
+  part minus 6 dB, the new gain checked once more), e.g. 560-700 MHz at 49.6 dB instead of
+  33.8 dB. The gain never goes below the gain of the scan (Overload still re-measures clipped
+  tiles). Only gains with a floor calibration are used. Each group of bands of one gain is
+  scanned with its own gain and cleaned with its own calibration; levels are brought to the gain
+  of the scan with the real gain steps, so carriers keep their level across band edges. The gains
+  are named in the status line and saved with the scan (`gain_plan`).
+- **V22.6** - **Three FFT windows** (Hann, Blackman-Harris, Flat-top), computed by the program
+  itself - the same arrays as scipy to the last bit, so scans with Hann are unchanged. scipy is
+  no longer needed (the portable version is ~70 MB smaller; the tests still use it). A window of
+  an older version in the settings becomes Hann (said once). Portable build without software
+  OpenGL and Qt's own OpenSSL.
 - **V22.5** - **Portable Windows version** (no Python to install): a folder with
   `wwb_scanner.exe`, built by GitHub Actions (workflow *Portable Windows build*, PyInstaller,
   `tools/portable`) and attached to each published release as
@@ -443,6 +457,12 @@ Windows: быстрее, без собственных помех донгла �
   копируются из реестра). Настройки по умолчанию — в ядре; без tinydb. В ядре появились
   служба скана и события, сканы из нескольких проходов (основа режима «Точный») и
   интерфейс приёмника (основа для других приёмников). Проверено на V4 18.11.2026.
+- V22.7: «Own gain per band» в Scan settings (пока выключено, до проверки на V4). Короткая проба
+  перед сканом поднимает усиление в тихих полосах (например, 560–700 МГц на 49,6 дБ вместо 33,8),
+  уровни приводятся к усилению скана по реальным шагам — несущие не «прыгают» на краях полос.
+  Используются только ступени с калибровкой пола.
+- V22.6: три окна БПФ (Hann, Blackman-Harris, Flat-top), считаются самой программой — те же
+  значения, что у scipy; scipy больше не нужна, портативная версия меньше.
 - V22.5: портативная версия для Windows без установки Python — папка с `wwb_scanner.exe`
   (zip в каждом релизе). Все данные — в папке `data` рядом с exe, флешка переносит их между ПК.
   Драйвер WinUSB (Zadig) нужен один раз на каждом ПК. Проверка без скана: `wwb_scanner.exe --selftest`.

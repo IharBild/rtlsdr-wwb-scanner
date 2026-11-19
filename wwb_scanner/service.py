@@ -80,6 +80,7 @@ def prepare(kind, base, when=None):
         conf.device.gain = gain_cal.SURVEY_GAIN_DB
         conf.sampling.auto_gain = False
         conf.sampling.verify_peaks = False
+        conf.sampling.band_gain = False
         conf.processing.update(off)
         name = 'Gain step calibration (survey, gain %s dB)' % gain_cal.SURVEY_GAIN_DB
     elif kind == FLOOR_CALIBRATION:
@@ -90,6 +91,7 @@ def prepare(kind, base, when=None):
         conf.gain_calibration = False
         conf.sampling.auto_gain = False
         conf.sampling.verify_peaks = False
+        conf.sampling.band_gain = False
         conf.processing.update(off)
         name = 'Calibration without antenna, gain %s dB' % base.device.gain
     else:

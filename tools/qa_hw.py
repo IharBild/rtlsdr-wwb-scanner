@@ -126,13 +126,18 @@ def guard(tid, title):
 # ---------------------------------------------------------------- environment
 
 def check_environment(args):
-    import numpy, scipy
+    import numpy
     info = {
         'python': sys.version.split()[0] + (' 64-bit' if sys.maxsize > 2 ** 32 else ' 32-bit'),
         'os': platform.platform(),
         'numpy': numpy.__version__,
-        'scipy': scipy.__version__,
     }
+    try:                        # V22.6: the scanner no longer needs scipy
+        import scipy
+        info['scipy'] = scipy.__version__
+    except ImportError:
+        info['scipy'] = 'нет (не нужна с V22.6)'
+
     for mod in ('rtlsdr', 'PySide6', 'pytest'):
         try:
             m = __import__(mod)
@@ -360,7 +365,7 @@ class Lab(object):
             self.home_report = os.path.join(os.path.expanduser('~'), 'wwb_scan_timing.txt')
 
     def config(self, start, end, window_type='hann', overlap=0.65, sweeps=40, auto_gain=False, clean=False,
-               ranges=None):
+               ranges=None, band_gain=False):
         c = {
             'scan_range': [float(start), float(end)],
             'device': {'gain': 33.8},
@@ -369,7 +374,8 @@ class Lab(object):
                          'window_size': 96, 'window_type': window_type,
                          # V22.0: the core defaults are the window's (all on);
                          # the H checks measure with exactly these switches
-                         'auto_gain': bool(auto_gain), 'verify_peaks': False},
+                         'auto_gain': bool(auto_gain), 'verify_peaks': False,
+                         'band_gain': bool(band_gain)},          # V22.7 (an older scanner ignores it)
             'processing': {'clean_ripple': bool(clean), 'clean_spurs': bool(clean),
                            'clean_floor': bool(clean), 'clean_images': False},
         }
@@ -730,7 +736,11 @@ def h3_full(lab):
 def h4_windows(lab):
     out = []
     bad = False
-    for w in ('hann', 'blackmanharris', 'general_hamming', 'general_cosine', 'flattop'):
+    try:                        # V22.6: three windows
+        from wwb_scanner.scanner.sample_processing import WINDOW_TYPES as wlist
+    except ImportError:
+        wlist = ('hann', 'blackmanharris', 'general_hamming', 'general_cosine', 'flattop')
+    for w in wlist:
         s = lab.scan('h4_%s' % w, 470, 500, window_type=w)
         ok = not s['hung'] and not s['error'] and s['f'].size > 1000
         bad = bad or not ok
@@ -952,12 +962,25 @@ def h9_auto_gain(lab, h2):
 H10_MIN_SNR_DB = 15      # V20.4
 
 
+def _welch96(x):
+    """Welch, hann 96, two-sided (as scipy.signal.welch(..., return_onesided=False,
+    detrend=False)). V22.6: the scanner's own Welch and windows, scipy if they
+    are missing (an older installed scanner)."""
+    import numpy as np
+    try:
+        from wwb_scanner.scanner import psd as _psd
+        from wwb_scanner.scanner.windows import get_window
+        return _psd.welch(np.asarray(x), 2.4e6, get_window('hann', 96), 96)
+    except ImportError:
+        from scipy.signal import welch
+        return welch(x, fs=2.4e6, window='hann', nperseg=96, return_onesided=False, detrend=False)
+
+
 @guard('H10', 'точность шагов усиления (V17)')
 def h10_gain_steps(lab, s):
     """Auto gain scales a re-measured tile by the nominal gain difference.
     Check on a strong (not clipped) signal how exact the nominal steps are."""
     import numpy as np
-    from scipy.signal import welch
     from wwb_scanner.scanner import cleanup as C
     from wwb_scanner.scanner.sample_processing import clip_ratio
     f, y = s['f'], s['y']
@@ -1001,7 +1024,7 @@ def h10_gain_steps(lab, s):
             sdr.gain = g
             sdr.read_samples(16384)
             x = sdr.read_samples(262144)
-            fr, p = welch(x, fs=2.4e6, window='hann', nperseg=96, return_onesided=False, detrend=False)
+            fr, p = _welch96(x)
             o = np.argsort(fr)
             fr, p = fr[o], p[o]
             k = int(np.argmin(np.abs(fr + off)))
@@ -1073,6 +1096,66 @@ def h11_clean(lab, s):
               '%.2f' % rip0 if rip0 is not None else '?', '%.2f' % rip1 if rip1 is not None else '?',
               'пол выровнен по калибровке %s' % info.get('calibration') if info.get('flatten')
               else 'пол не выровнен: %s' % info.get('floor_skipped'), int(big.sum())))
+
+
+def v227_installed():
+    try:
+        from wwb_scanner.scanner import gain_plan  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+@guard('H13', 'своё усиление на полосу (V22.7)')
+def h13_band_gain(lab, ref):
+    """The same scan as H9/H11 (470-800, clean, Overload) with "Own gain per
+    band": which gains the probe chose, whether strong carriers keep their
+    level (at the gain of the scan) and how much lower the floor of the
+    raised bands is. The air changes between the two scans: medians only."""
+    import numpy as np
+    s = lab.scan('band_gain', 470, 800, clean=True, auto_gain=True, band_gain=True)
+    plan = getattr(s['scanner'], 'gain_plan', None)
+    if s['hung'] or s['error'] or plan is None:
+        result('H13', 'FAIL', 'скан со своим усилением на полосу',
+               'завис %s, ошибка %r, план %r' % (s['hung'], s['error'], plan))
+        return s
+    bands = '; '.join('%g-%g %.1f дБ (%s)' % (b.lo, b.hi, b.gain, b.why) for b in plan.bands)
+    if not plan.banded:
+        result('H13', 'INFO', 'своё усиление на полосу: усиление нигде не поднято',
+               'проба %.1f с; %s' % (plan.seconds, plan.note or bands))
+        return s
+    f, y = s['f'], s['y']
+    rf, ry = ref['f'], ref['y']
+    yi = np.interp(rf, f, y)
+    fl = floor_level(ry)
+    strong = ry > fl + 20
+    d_strong = yi[strong] - ry[strong]
+    med = float(np.median(d_strong)) if d_strong.size else None
+    rows = []
+    worse = False
+    for b in plan.bands:
+        if b.gain <= plan.ref_gain + 0.05:
+            continue
+        m_new = (f >= b.lo) & (f <= b.hi)
+        m_ref = (rf >= b.lo) & (rf <= b.hi)
+        if m_new.sum() < 50 or m_ref.sum() < 50:
+            continue
+        q_new = float(np.percentile(y[m_new], 20))
+        q_ref = float(np.percentile(ry[m_ref], 20))
+        worse = worse or q_new > q_ref + 0.5
+        rows.append('%g-%g: пол %.1f -> %.1f дБ (%+.1f)' % (b.lo, b.hi, q_ref, q_new, q_new - q_ref))
+    ok_levels = med is not None and abs(med) <= 1.5
+    status = 'PASS' if ok_levels and not worse else 'WARN'
+    result('H13', status, 'своё усиление на полосу (470-800)',
+           'проба %.1f с; полосы: %s; сильные точки (> пол + 20 дБ): разница с H9 медиана %s дБ (n=%d); '
+           '%s; время %.0f с против %.0f с в H9' % (
+               plan.seconds, bands, '%+.2f' % med if med is not None else '?', int(strong.sum()),
+               '; '.join(rows) or 'нет поднятых полос', s['time'], ref['time']))
+    try:
+        lab.save(s, 'scan_band_gain')
+    except Exception as exc:
+        print('export failed: %r' % (exc,))
+    return s
 
 
 BANDS_H12 = [(470.0, 534.0), (606.0, 630.0), (823.0, 832.0), (863.0, 865.0)]
@@ -1198,6 +1281,8 @@ def main():
                 h10_gain_steps(lab, h2[0])
                 if h9:
                     h11_clean(lab, h9[0])
+                    if v227_installed():
+                        h13_band_gain(lab, h9[0])
             if v18_installed():
                 h12_bands(lab, h2)
             v10 = any(r[0] == 'E3' and r[1] == 'PASS' for r in RESULTS)

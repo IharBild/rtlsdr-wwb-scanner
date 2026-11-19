@@ -109,8 +109,9 @@ def test_dependencies_one_stack():
         if 'python_version' in line:
             assert line.strip().startswith('PySide6-'), line
     assert re.search(r'^\s*pyrtlsdr\s*>=\s*0\.4\s*$', req, re.M), req
-    assert 'numpy' in req and 'scipy' in req
-    for gone in ('PySide2', 'tinydb', 'json-object-factory', 'setuptools'):
+    assert 'numpy' in req
+    # V22.6: own FFT windows - scipy is only for the tests
+    for gone in ('PySide2', 'tinydb', 'json-object-factory', 'setuptools', 'scipy'):
         assert gone not in req, gone
     assert re.search(r'python_requires\s*=\s*>=\s*3\.11', cfg)
 
