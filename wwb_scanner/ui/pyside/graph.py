@@ -1,6 +1,7 @@
 import time
 import logging
 logger = logging.getLogger(__name__)
+from wwb_scanner import events
 import os
 import sys
 
@@ -40,7 +41,7 @@ class GraphTableModel(QtCore.QAbstractTableModel):
     def data(self, index, role):
         if role == QtCore.Qt.DisplayRole or role == QtCore.Qt.EditRole:
             return float(self._data[index.row(), index.column()])
-        return QtCore.QVariant()
+        return None     # V22.9 (audit AUD-27): QtCore.QVariant is gone in PySide6 6.12
     def _reshape_data(self, d_arr):
         """Grow the table at its end (a live scan adds points at the top)."""
         new_shape = (2, d_arr.size)
@@ -437,7 +438,7 @@ class SpectrumGraphData(QtQuick.QQuickItem):
             self.model.set_from_graph_dtype(pts)
         dt = time.time() - t0
         if dt > 0.5:
-            print('chart update took %.1f s (%d points)' % (dt, self.xy_data.size), flush=True)
+            events.console('chart update took %.1f s (%d points)' % (dt, self.xy_data.size))
 
     @Slot(QtCore.QUrl)
     def load_from_file(self, uri):
@@ -469,14 +470,14 @@ class SpectrumGraphData(QtQuick.QQuickItem):
         if uri.fragment().lower() == 'wsm':
             fmt = 'wsm'
         self._csv_format = None
-        print('export to %s (%s)' % (filename, fmt), flush=True)
+        events.console('export to %s (%s)' % (filename, fmt))
         try:
             self.spectrum.export_to_file(filename=filename, frequency_format=fmt)
         except Exception as exc:
             logger.error('Could not save %s: %s', os.path.basename(filename), exc,
                          exc_info=not isinstance(exc, (ValueError, OSError)))
             return
-        print('export done: %s' % filename, flush=True)
+        events.console('export done: %s' % filename)
         # V21.0 (audit A5, step 1): the export is confirmed in the window,
         # with what the numbers in the file are
         note = EXPORT_LEVEL_NOTE_WSM if fmt == 'wsm' else EXPORT_LEVEL_NOTE
@@ -491,16 +492,16 @@ class SpectrumGraphData(QtQuick.QQuickItem):
             if not path and hasattr(uri, 'toString'):
                 path = uri.toString()
             filename = add_export_extension(path, name_filter)
-            print('export to %s (format %r)' % (filename, name_filter), flush=True)
+            events.console('export to %s (format %r)' % (filename, name_filter))
             if self.spectrum is None:
-                print('export FAILED: no scan in the graph', flush=True)
+                events.console('export FAILED: no scan in the graph')
                 return
             fmt = 'wsm' if 'wsm' in (name_filter or '').lower() else CSV_FREQUENCY_FORMAT
             self.spectrum.export_to_file(filename=filename, frequency_format=fmt)
-            print('export done: %s, %d bytes' % (filename, os.path.getsize(filename)), flush=True)
+            events.console('export done: %s, %d bytes' % (filename, os.path.getsize(filename)))
         except Exception:
             import traceback
-            print('export FAILED:', flush=True)
+            events.console('export FAILED:')
             traceback.print_exc()
             sys.stdout.flush()
 
@@ -528,6 +529,7 @@ class LiveSpectrumGraphData(SpectrumGraphData):
     _n_update_timer = Signal()
     _n_scanner = Signal()
     updateSpectrumData = Signal()
+    scanEmpty = Signal()        # V22.9: the scan ended without a point (Stop at once, an error)
     def __init__(self, *args):
         self._update_interval = None
         self._update_timer = None
@@ -567,6 +569,10 @@ class LiveSpectrumGraphData(SpectrumGraphData):
                         self.update_spectrum_data()
             finally:
                 self.scanner = None
+            # V22.9: no empty line in the list of scans after an early Stop
+            sd = getattr(self.spectrum, 'sample_data', None)
+            if sd is None or not getattr(sd, 'size', 0):
+                self.scanEmpty.emit()
 
     def _g_update_interval(self): return self._update_interval
     def _s_update_interval(self, value):

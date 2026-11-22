@@ -86,6 +86,9 @@ def test_io(tmpdir, random_samples):
         spectrum.export_to_file(filename=str(fn))
         imp_spectrum = Spectrum.import_from_file(str(fn))
 
-        assert np.allclose(spectrum.sample_data['frequency'], imp_spectrum.sample_data['frequency'])
+        # V22.9 (audit P3-18): sdb2 points at or below no_data_value (-140)
+        # are gaps when read back; the random data here goes below it
+        keep = dB > -140. if ext == 'sdb2' else np.ones(dB.size, bool)
+        assert np.allclose(spectrum.sample_data['frequency'][keep], imp_spectrum.sample_data['frequency'])
         imp_dB = np.around(imp_spectrum.sample_data['dbFS'], decimals=1)
-        assert np.allclose(dB, imp_dB)
+        assert np.allclose(dB[keep], imp_dB)

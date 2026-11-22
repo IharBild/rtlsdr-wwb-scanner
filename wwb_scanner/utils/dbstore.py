@@ -14,13 +14,111 @@ reads the file again only when it changed on disk and writes through a
 temporary file, so a crash while saving leaves the old file whole.
 """
 from wwb_scanner import events
+import contextlib
 import os
 import datetime
+import tempfile
+import threading
 import time
 
 import numpy as np
 
 from wwb_scanner.utils import numpyjson
+
+# V22.9 (external audit P3-03 / P2-HIST1): two programs (two windows, the
+# window and a tool) on one data folder lost records, gave two scans one
+# number and failed with PermissionError when one replaced the index while
+# the other had it open. Every change is now made under a lock file, on the
+# file as it is on disk at that moment; replacing the file is tried again
+# for a while (Windows: an antivirus or the search indexer may hold it).
+LOCK_TIMEOUT_S = 10.
+REPLACE_TRIES = 20
+REPLACE_PAUSE_S = 0.1
+
+
+class HistoryBusy(IOError):
+    """The history is locked by another program for too long."""
+
+
+class FileLock(object):
+    """A lock between programs (a locked byte of ``path``), and between the
+    threads of this program; re-entrant in one thread."""
+    def __init__(self, path):
+        self.path = path
+        self._tl = threading.RLock()
+        self._depth = 0
+        self._fh = None
+    def _try(self, fh):
+        try:
+            if os.name == 'nt':
+                import msvcrt
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except OSError:
+            return False
+    def _unlock(self, fh):
+        try:
+            if os.name == 'nt':
+                import msvcrt
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+    def acquire(self, timeout=None):
+        timeout = LOCK_TIMEOUT_S if timeout is None else timeout
+        deadline = time.monotonic() + timeout
+        if not self._tl.acquire(timeout=timeout):
+            raise HistoryBusy('the history is busy in this program (%s)' % self.path)
+        if self._depth:
+            self._depth += 1
+            return
+        try:
+            d = os.path.dirname(self.path)
+            if d and not os.path.isdir(d):
+                os.makedirs(d, exist_ok=True)
+            fh = open(self.path, 'a+b')
+            while not self._try(fh):
+                if time.monotonic() >= deadline:
+                    fh.close()
+                    raise HistoryBusy('the history is locked by another program for %.0f s (%s)'
+                                      % (timeout, self.path))
+                time.sleep(0.05)
+        except BaseException:
+            self._tl.release()
+            raise
+        self._fh = fh
+        self._depth = 1
+    def release(self):
+        self._depth -= 1
+        if not self._depth:
+            fh, self._fh = self._fh, None
+            self._unlock(fh)
+            fh.close()
+        self._tl.release()
+    def __enter__(self):
+        self.acquire()
+        return self
+    def __exit__(self, *exc):
+        self.release()
+
+
+def _replace(src, dst):
+    """os.replace, tried again while Windows says the file is in use."""
+    for i in range(REPLACE_TRIES):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if i == REPLACE_TRIES - 1:
+                raise
+            time.sleep(REPLACE_PAUSE_S)
 
 
 class Document(dict):
@@ -41,10 +139,10 @@ class Table(object):
     def __len__(self):
         return len(self._rows())
     def insert(self, data):
-        rows = self._rows()
-        new_id = max([int(k) for k in rows] or [0]) + 1
-        rows[str(new_id)] = dict(data)
-        self._db._write()
+        with self._db.changing() as tables:
+            rows = tables.setdefault(self.name, {})
+            new_id = max([int(k) for k in rows] or [0]) + 1
+            rows[str(new_id)] = dict(data)
         return new_id
     def get(self, doc_id=None, **match):
         """By id, or the first record whose fields equal ``match``."""
@@ -57,17 +155,17 @@ class Table(object):
                 return d
         return None
     def update(self, data, doc_ids):
-        rows = self._rows()
-        for i in doc_ids:
-            key = str(int(i))
-            if key in rows:
-                rows[key].update(data)
-        self._db._write()
+        with self._db.changing() as tables:
+            rows = tables.setdefault(self.name, {})
+            for i in doc_ids:
+                key = str(int(i))
+                if key in rows:
+                    rows[key].update(data)
     def remove(self, doc_ids):
-        rows = self._rows()
-        for i in doc_ids:
-            rows.pop(str(int(i)), None)
-        self._db._write()
+        with self._db.changing() as tables:
+            rows = tables.setdefault(self.name, {})
+            for i in doc_ids:
+                rows.pop(str(int(i)), None)
     def last_id(self):
         return max([int(k) for k in self._rows()] or [0])
 
@@ -78,6 +176,19 @@ class JsonDB(object):
         self.path = str(path)
         self._data = None
         self._stamp = None
+        self.lock = FileLock(self.path + '.lock')
+    @contextlib.contextmanager
+    def changing(self):
+        """V22.9: change the tables as they are on disk now, under the lock,
+        and write them."""
+        with self.lock:
+            self.refresh()
+            data = self._tables()
+            yield data
+            self._write()
+    def refresh(self):
+        """Read the file again at the next use."""
+        self._data = None
     def _file_stamp(self):
         try:
             st = os.stat(self.path)
@@ -98,7 +209,18 @@ class JsonDB(object):
                 data = numpyjson.load(fh)
             if not isinstance(data, dict):
                 raise ValueError('not a table file')
-            return {k: v for k, v in data.items() if isinstance(v, dict)}
+            tables = {k: v for k, v in data.items() if isinstance(v, dict)}
+            # V22.9 (external audit P3-13): a record whose key is not a number
+            # stopped every read of the history (int('x')); left out
+            bad = 0
+            for name, rows in tables.items():
+                keep = {k: v for k, v in rows.items()
+                        if isinstance(k, str) and k.isdigit() and isinstance(v, dict)}
+                bad += len(rows) - len(keep)
+                tables[name] = keep
+            if bad:
+                events.console('!!! %s: %d damaged record(s) left out' % (self.path, bad))
+            return tables
         except (ValueError, UnicodeDecodeError) as exc:
             # A cut-off file (power loss, crash while saving) used to stop
             # the program from starting. Keep a copy and start a new one.
@@ -112,21 +234,33 @@ class JsonDB(object):
                   % (exc, backup))
             return {}
     def _write(self):
-        d = os.path.dirname(self.path)
-        if d and not os.path.isdir(d):
+        """V22.9: a temporary file of its own (two programs used one name),
+        on disk (fsync) before it replaces the file."""
+        d = os.path.dirname(self.path) or '.'
+        if not os.path.isdir(d):
             os.makedirs(d, exist_ok=True)
-        tmp = self.path + '.tmp'
-        with open(tmp, 'w', encoding='utf-8') as fh:
-            fh.write(numpyjson.dumps(self._tables()))
-        os.replace(tmp, self.path)
+        text = numpyjson.dumps(self._tables())
+        fd, tmp = tempfile.mkstemp(dir=d, prefix=os.path.basename(self.path) + '.', suffix='.tmp')
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as fh:
+                fh.write(text)
+                fh.flush()
+                os.fsync(fh.fileno())
+            _replace(tmp, self.path)
+        except BaseException:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise
         self._stamp = self._file_stamp()
     def table(self, name):
         return Table(self, name)
     def tables(self):
         return set(self._tables().keys())
     def drop_table(self, name):
-        if self._tables().pop(name, None) is not None:
-            self._write()
+        with self.changing() as tables:
+            tables.pop(name, None)
 
 
 # V22.8 (external audit B1): marks a scan puts on its spectrum for the graph
@@ -153,6 +287,8 @@ def doc_id(doc):
 
 
 def get_by_id(table, i):
+    if i is None:
+        return None             # V22.9: Table.get() without an id gave the first record
     return table.get(doc_id=i)
 
 
@@ -287,7 +423,7 @@ class DBStore(object):
         if passes is not None:
             arrays.update(passes.to_arrays())       # V22.2: every pass of the scan
         np.savez_compressed(tmp, **arrays)
-        os.replace(tmp, path)
+        _replace(tmp, path)
         return name
     def add_scan(self, spectrum, scan_config=None):
         if scan_config is None:
@@ -308,6 +444,12 @@ class DBStore(object):
             data['marks'] = marks
         sd = data.pop('sample_data', None)
         points = getattr(sd, 'data', sd)
+        # V22.9 (external audit P3-03): number, points file and record under
+        # one lock, with the index as it is on disk now
+        with self.scan_db.lock:
+            self.scan_db.refresh()
+            return self._add_scan_locked(spectrum, data, points)
+    def _add_scan_locked(self, spectrum, data, points):
         table = self.scan_db.table('scans_performed')
         new = spectrum.eid is None
         if not new:
@@ -339,6 +481,7 @@ class DBStore(object):
             excluded = ['samples', 'sample_data', 'center_frequencies']
             scan_data[doc_id(scan)] = {key:scan[key] for key in scan.keys()
                                     if key not in excluded}
+            scan_data[doc_id(scan)]['eid'] = doc_id(scan)      # V22.9 (audit AUD-03)
         return scan_data
     def get_scan(self, eid):
         table = self.scan_db.table('scans_performed')

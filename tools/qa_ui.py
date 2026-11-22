@@ -320,6 +320,7 @@ def main():
     v224_checks(app, win, si)
     v227_checks(app, win, si)
     v228_checks(app, win, si)
+    v229_checks(app, win, si)
     v209_checks(app, win, si)
     v208_checks(app, win, controls, si, fresh, first_start)
     win.close()
@@ -1199,6 +1200,48 @@ def v228_checks(app, win, si):
     except Exception as exc:
         check('U45', False, 'error: %s' % exc)
     finally:
+        cfg.startFreq, cfg.endFreq = old
+
+
+def v229_checks(app, win, si):
+    """V22.9. U46: a scan stopped before its first tile leaves no empty entry
+    in the list of scans (V22.8: an empty line stayed)."""
+    try:
+        from wwb_scanner.ui.pyside.graph import LiveSpectrumGraphData
+    except ImportError as exc:
+        check('U46', False, 'error: %s' % exc)
+        return
+    if not hasattr(LiveSpectrumGraphData, 'scanEmpty'):
+        check('U46', False, 'no LiveSpectrumGraphData.scanEmpty (V22.9 not installed)')
+        return
+    cfg = si.scanConfig
+    old = (cfg.startFreq, cfg.endFreq)
+    try:
+        controls = find(win, has_method('scannerState(bool)'))
+        gr = [o for o in win.findChildren(QtCore.QObject)
+              if o.metaObject().indexOfMethod('removeSpectrum(QVariant)') >= 0][0]
+        count = 'spectrumGraphs.filter(function(s){ return !!s; }).length'
+        n0 = int(_qml_eval(gr, count))
+        UIFakeRtlSdr.open_delay = 0. if REAL else 0.8
+        cfg.startFreq, cfg.endFreq = 470.0, 520.0
+        controls[0].scannerState.emit(True)
+        pump(app, 0.2)
+        n_run = int(_qml_eval(gr, count))
+        controls[0].scannerState.emit(False)
+        t0 = time.time()
+        while si.running and time.time() - t0 < 30:
+            pump(app, 0.1)
+        pump(app, 1.8)              # the empty graph goes 1 s after the end of the scan
+        n1 = int(_qml_eval(gr, count))
+        res = si.last_result
+        tiles = getattr(res, 'tiles_done', None)
+        ok = n_run == n0 + 1 and (n1 == n0 if not tiles else n1 == n0 + 1)
+        check('U46', ok, 'Stop at once: graphs %d -> %d while running -> %d after (tiles %s)'
+              % (n0, n_run, n1, tiles))
+    except Exception as exc:
+        check('U46', False, 'error: %s' % exc)
+    finally:
+        UIFakeRtlSdr.open_delay = 0.
         cfg.startFreq, cfg.endFreq = old
 
 

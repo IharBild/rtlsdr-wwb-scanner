@@ -24,6 +24,18 @@ from wwb_scanner.utils.config import Config
 MIN_FREQ_MHZ = 0.5
 MAX_FREQ_MHZ = 1766.
 
+# V22.9 (external audit P2-GAIN1, P2-RATE1, P2-FCORR1): what the dongle
+# takes. RTL2832U sample rates (librtlsdr): 225-300 kHz and 900-3200 kHz.
+# Above 2.56 MS/s the RTL2832U drops samples (RTL-SDR Blog datasheet:
+# "2.56 MHz stable (up to 3.2 MHz with drops)"); at 3.2 MS/s the levels were
+# ~17 dB lower than at 2.4 MS/s (audit pass 3, 22.11.2026) - a warning,
+# the rate stays settable.
+MIN_GAIN_DB = 0.
+MAX_GAIN_DB = 49.6
+SAMPLE_RATE_RANGES_HZ = ((225001., 300000.), (900001., 3200000.))
+STABLE_SAMPLE_RATE_HZ = 2.56e6
+MAX_PPM = 300
+
 # The tested configuration in the units of the scanner core.
 TESTED = dict(
     sample_rate=2.4e6,
@@ -86,6 +98,48 @@ class ScanConfig(Config):
                 return ('The dongle scans %g-%g MHz: %g-%g MHz is outside that range.'
                         % (MIN_FREQ_MHZ, MAX_FREQ_MHZ, lo, hi))
         return None
+    def device_problem(self):
+        """V22.9: None, or why the dongle can not take the gain, the sample
+        rate or the frequency correction of these settings (text). A gain
+        that was not a number became 0 dB, 100 dB became 49.6 dB, 100000 ppm
+        was passed on."""
+        def num(v):
+            try:
+                v = float(v)
+            except (TypeError, ValueError):
+                return None
+            return v if v == v and abs(v) != float('inf') else None
+        g = self.device.get('gain')
+        if g is not None:
+            gv = num(g)
+            if gv is None or not (MIN_GAIN_DB - 0.05 <= gv <= MAX_GAIN_DB + 0.05):
+                return 'The gain must be %g-%g dB (it is %r).' % (MIN_GAIN_DB, MAX_GAIN_DB, g)
+        r = self.sampling.get('sample_rate')
+        rv = num(r)
+        if rv is not None and rv > 0 and not any(lo - 1 <= rv <= hi + 1
+                                                 for lo, hi in SAMPLE_RATE_RANGES_HZ):
+            return ('The dongle takes a sample rate of 225-300 kHz or 900-3200 kHz '
+                    '(it is %g kHz).' % (rv / 1e3))
+        c = self.device.get('freq_correction')
+        if c not in (None, 0):
+            cv = num(c)
+            if cv is None or abs(cv) > MAX_PPM or cv != int(cv):
+                return ('The frequency correction must be a whole number of ppm, at most %d '
+                        '(it is %r).' % (MAX_PPM, c))
+        return None
+    def warnings(self):
+        """V22.9 (external audit P3-14): settings that scan, but not well."""
+        out = []
+        try:
+            r = float(self.sampling.get('sample_rate'))
+        except (TypeError, ValueError):
+            r = 0.
+        if r > STABLE_SAMPLE_RATE_HZ + 1:
+            out.append('Sample rate %.3f MS/s is above %.2f MS/s, the stable limit of the RTL2832U: '
+                       'the dongle may drop samples and the levels are not comparable with scans '
+                       'at 2.4 MS/s (at 3.2 MS/s they were about 17 dB lower).'
+                       % (r / 1e6, STABLE_SAMPLE_RATE_HZ / 1e6))
+        return out
     def check(self):
         """None, or why these settings can not be scanned (text)."""
         inf = float('inf')
@@ -102,7 +156,7 @@ class ScanConfig(Config):
             return 'sample rate, samples per sweep and sweeps per scan must be above 0'
         if not (0 < s.sweep_overlap_ratio <= 1):
             return 'overlap ratio must be above 0 and at most 1'
-        return None
+        return self.device_problem()
 
 
 class DeviceConfig(Config):

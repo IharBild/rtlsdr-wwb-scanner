@@ -338,7 +338,10 @@ def test_sdb3_gap_is_written_as_no_data_value(tmpdir):
     assert crc == exporters.crc16_arc(body)
     back = importers.BaseImporter.import_file(fn)
     yb = np.asarray(back.sample_data['dbFS'], float)
-    assert np.allclose(yb[gap], -140.) and np.allclose(yb[~gap], -100.)
+    fb = np.asarray(back.sample_data['frequency'], float)
+    # V22.9 (audit P3-18): the gap stays a gap when read back (was -140)
+    assert yb.size == (~gap).sum() and np.allclose(yb, -100.)
+    assert not ((fb > 480.05) & (fb < 489.95)).any()
 
 
 # ------------------------------------------------------------------------ B1, B4

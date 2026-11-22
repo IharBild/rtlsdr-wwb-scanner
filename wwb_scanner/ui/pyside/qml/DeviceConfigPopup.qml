@@ -179,7 +179,9 @@ Dialog {
                             sampleRateNote.text = '225-300 or 900-3200 kHz';
                         } else {
                             root.sampleRate = v;
-                            sampleRateNote.text = '';
+                            // V22.9 (external audit P3-14): above 2560 kHz the
+                            // dongle drops samples and the levels are lower
+                            sampleRateNote.text = v > 2560 ? 'above 2560: samples may drop, levels lower' : '';
                         }
                         sampleRateField.text = root.sampleRate.toString();
                     }

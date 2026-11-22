@@ -86,11 +86,70 @@ class NumpyEncoder(object):
     def decode(self, d):
         if '__npy__' in d:
             data = base64.b64decode(d['__npy__'])
-            return np.load(io.BytesIO(data), allow_pickle=False)
+            buf = io.BytesIO(data)
+            check_npy_header(buf, 'stored array')        # V22.9 (audit P3-05)
+            return np.load(buf, allow_pickle=False)
         if '__ndarray__' in d:
             data = base64.b64decode(d['__ndarray__'])
             return safe_array_loads(data)
         return d
+
+# V22.9 (external audit P3-05): an .npy header can claim any shape; np.load
+# then tries to allocate it (a 199-byte file asked for 7.28 TiB). The
+# header is checked first. A full 0.5-1766 MHz scan has ~70 000 points.
+MAX_ARRAY_ITEMS = 50000000
+MAX_ARRAY_BYTES = 1 << 30
+
+
+def check_npy_header(fp, what='array', max_items=None, max_bytes=None):
+    """Read the .npy header at ``fp`` (position restored) and raise
+    ValueError when the array would be too big or holds Python objects."""
+    from numpy.lib import format as fmt
+    max_items = MAX_ARRAY_ITEMS if max_items is None else max_items
+    max_bytes = MAX_ARRAY_BYTES if max_bytes is None else max_bytes
+    pos = fp.tell()
+    try:
+        version = fmt.read_magic(fp)
+        if version == (1, 0):
+            shape, _, dtype = fmt.read_array_header_1_0(fp)
+        elif version == (2, 0):
+            shape, _, dtype = fmt.read_array_header_2_0(fp)
+        else:
+            shape, _, dtype = fmt._read_array_header(fp, version)
+    finally:
+        fp.seek(pos)
+    n = 1
+    for d in shape:
+        n *= int(d)
+    if dtype.hasobject:
+        raise ValueError('%s holds Python objects (not accepted)' % what)
+    if n > max_items or n * dtype.itemsize > max_bytes:
+        raise ValueError('%s is too large (%d values of %d bytes)' % (what, n, dtype.itemsize))
+    return shape, dtype
+
+
+def load_npz_member(path, key, what=None):
+    """``key`` of the .npz file ``path``, its size checked before it is read
+    (V22.9). A missing key or a damaged archive: ValueError."""
+    import os
+    import zipfile
+    name = os.path.basename(str(path))
+    what = what or name
+    try:
+        with zipfile.ZipFile(path) as z:
+            member = key + '.npy'
+            if member not in z.namelist():
+                raise ValueError('%s: no %r in the file' % (what, key))
+            with z.open(member) as fp:
+                buf = io.BytesIO(fp.read(1 << 16))
+            check_npy_header(buf, '%s: %s' % (what, key))
+        with np.load(path, allow_pickle=False) as d:
+            return d[key]
+    except zipfile.BadZipFile as exc:
+        raise ValueError('%s: not an .npz file (%s)' % (what, exc))
+    except MemoryError:
+        raise ValueError('%s: too large to load' % what)
+
 
 def dumps(obj, **kwargs):
     kwargs.setdefault('cls', Encoder)

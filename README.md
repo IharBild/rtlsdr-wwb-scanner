@@ -10,7 +10,7 @@ company in Poland and for sound engineers across Europe. Most of the code in thi
 written with Claude (Anthropic); every release is checked on a real V4 dongle by the
 maintainer.
 
-Current version: **V22.8** in the branch `v4-fixes` (installed by the command below). Last tagged
+Current version: **V22.9** in the branch `v4-fixes` (installed by the command below). Last tagged
 release: [v22.3](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v22.3)
 (branch `v4-fixes`). The `master` branch is the original upstream code and is not used here.
 
@@ -183,6 +183,21 @@ release: [v22.3](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v22
   - Checked: the window check U1-U41 passes on PySide2 5.15 (Python 3.8) and PySide6 6.12
     (Python 3.13, also from a clean install with only Essentials + Addons); all tests on
     both. **Not yet on Windows with the dongle.**
+- **V22.9** - **Reliability 2** (external audit of V22.8, three passes, 22.11.2026). No dongle is
+  closed under a running USB call (the audit crashed libusb this way from another thread); a call
+  on a closed dongle gives an error instead of reaching the freed handle. Opening the dongle has a
+  time limit (20 s). Own gain per band: after a USB error the next band uses the dongle opened
+  anew, a band that can not be set up is "not measured" and the other bands are kept; a USB error
+  in the gain probe opens the dongle anew. History: changes are made under a lock file (two
+  programs on one data folder lost records), the file is replaced through an own temporary file
+  and tried again while Windows holds it; a history that can not be written is a warning, the scan
+  stays in the window. Gain (0-49.6 dB), sample rate (225-300 / 900-3200 kHz) and frequency
+  correction (whole ppm, at most 300) are checked before the dongle is opened; above 2.56 MS/s a
+  warning (the RTL2832U drops samples, levels lower). Import: limits for huge sdb3 grids and npz
+  files, no NaN/Inf from CSV, DTD refused in any encoding, one clear error for a damaged npz, a
+  damaged history record is left out; a gap in sdb2/sdb3 stays a gap. sdb2/sdb3 carry the time of
+  the scan, not of the export. A scan stopped before its first tile leaves no empty entry in the
+  list. The time report is in the order of time and covers all bands.
 - **V22.8** - **Reliability** (external audit of 22.11.2026). A dongle whose set-up fails (for
   example an unsupported sample rate) is closed again and the scan ends with an error; the next
   scan no longer waits for ever. Stop pressed while the dongle is being opened (~1.6 s) ends the
@@ -470,6 +485,17 @@ Windows: быстрее, без собственных помех донгла �
   копируются из реестра). Настройки по умолчанию — в ядре; без tinydb. В ядре появились
   служба скана и события, сканы из нескольких проходов (основа режима «Точный») и
   интерфейс приёмника (основа для других приёмников). Проверено на V4 18.11.2026.
+- V22.9: надёжность-2 (три прохода внешнего аудита V22.8). Донгл не закрывается под идущим
+  вызовом USB; вызов на закрытом донгле — ошибка, а не обращение к освобождённому handle.
+  Открытие донгла с тайм-аутом 20 с. «Own gain per band»: после сбоя USB следующая полоса идёт
+  на заново открытом донгле, полоса, которую не удалось настроить, — «не измерена», остальные
+  сохраняются; сбой в пробе — донгл открывается заново. История: изменения под файлом-блокировкой
+  (две программы на одной папке теряли записи), замена файла через свой временный файл с повтором,
+  пока Windows держит файл; не удалось сохранить — предупреждение, скан остаётся в окне.
+  Усиление 0–49,6 дБ, частота 225–300 / 900–3200 кГц, поправка — целые ppm до 300 проверяются до
+  открытия донгла; выше 2,56 МС/с — предупреждение. Импорт: лимиты sdb3 и npz, без NaN/Inf из
+  CSV, DTD в любой кодировке отклоняется, разрыв sdb2/sdb3 остаётся разрывом. В sdb2/sdb3 — время
+  скана, а не экспорта. Скан, остановленный до первой плитки, не оставляет пустую строку в списке.
 - V22.8: надёжность (внешний аудит 22.11.2026). Донгл, который не принял настройки, закрывается,
   скан кончается ошибкой, следующий скан не зависает. Stop во время открытия донгла останавливает
   скан до первой плитки. Закрытие окна во время скана останавливает его и ждёт (программа падала).

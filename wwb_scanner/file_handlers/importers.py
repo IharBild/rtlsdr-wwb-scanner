@@ -11,6 +11,11 @@ from wwb_scanner.scan_objects import Spectrum
 
 logger = logging.getLogger(__name__)
 
+# V22.9 (external audit P3-04): points one imported file may have. A full
+# 0.5-1766 MHz scan has ~70 000; an sdb3 header asking for 2e9 points hung
+# the window in np.arange.
+MAX_IMPORT_POINTS = 20000000
+
 
 def decode_text(raw):
     """V20.8: the text of a scan file whatever program wrote it. UTF-8 first
@@ -59,7 +64,7 @@ class BaseImporter(object):
         try:
             self.parse_file_data()
         except (KeyError, IndexError, TypeError, AttributeError, ZeroDivisionError,
-                OverflowError) as exc:
+                OverflowError, MemoryError) as exc:
             # V18.1 (audit 3.3): a damaged file gives one clear message
             raise ValueError('%s: the file is damaged or not a supported scan file (%s: %s)'
                              % (os.path.basename(str(self.filename)), type(exc).__name__, exc))
@@ -72,12 +77,25 @@ class BaseImporter(object):
         raise NotImplementedError('Method must be implemented by subclasses')
 
 class NumpyImporter(BaseImporter):
+    """V22.9 (external audit P3-05, P3-12): the size in the file is checked
+    before it is read, no Python objects, and every problem is one clear
+    ValueError with the file name (a missing key gave a bare KeyError)."""
     _extension = 'npz'
     def __call__(self):
-        data = np.load(self.filename)
+        from wwb_scanner.utils.numpyjson import load_npz_member
+        name = os.path.basename(str(self.filename))
+        try:
+            data = load_npz_member(self.filename, 'sample_data', name)
+        except ValueError as exc:
+            raise ValueError('%s - the file is damaged or not a scan of this program' % (exc,))
+        except OSError as exc:
+            raise ValueError('%s: the file can not be read (%s)' % (name, exc))
+        if data.dtype.names is None or not {'frequency', 'dbFS'} <= set(data.dtype.names):
+            raise ValueError('%s: the file is damaged or not a scan of this program (no frequency/'
+                             'dbFS points)' % name)
         spectrum = self.spectrum
-        spectrum.name = os.path.basename(self.filename)
-        spectrum.add_sample_set(data=data['sample_data'])
+        spectrum.name = name
+        spectrum.add_sample_set(data=data)
         return spectrum
 
 
@@ -100,6 +118,9 @@ class CSVImporter(BaseImporter):
                     if len(parts) != 2:
                         raise ValueError(line)
                     f, v = float(parts[0]), float(parts[1])
+                    # V22.9 (external audit P3-07): nan / inf are not levels
+                    if not (np.isfinite(f) and np.isfinite(v)):
+                        raise ValueError(line)
                 except ValueError:
                     bad.append((n, line[:40]))
                     continue
@@ -146,6 +167,8 @@ class CSVImporter(BaseImporter):
                 f, v = float(parts[0]), float(parts[li])
             except (ValueError, IndexError):
                 continue
+            if not (np.isfinite(f) and np.isfinite(v)):
+                continue
             freqs.append(f)
             levels.append(v)
         if len(freqs) < 2:
@@ -163,9 +186,24 @@ class BaseWWBImporter(BaseImporter):
         # Python 3.7 and hang the program, so such files are refused.
         with open(self.filename, 'rb') as f:
             data = f.read()
+        refuse = ValueError('%s: XML with a DTD / entity declarations is not a WWB file and is not '
+                            'accepted (security)' % os.path.basename(self.filename))
         if re.search(br'<!\s*(DOCTYPE|ENTITY)', data, re.IGNORECASE):
-            raise ValueError('%s: XML with a DTD / entity declarations is not a WWB file and is not '
-                             'accepted (security)' % os.path.basename(self.filename))
+            raise refuse
+        # V22.9 (external audit P3-06): the bytes of a UTF-16 file do not show
+        # "<!DOCTYPE"; expat reads the file in its own encoding and stops at
+        # the first declaration, before any entity is expanded
+        from xml.parsers import expat
+        pre = expat.ParserCreate()
+
+        def no_dtd(*args):
+            raise refuse
+        pre.StartDoctypeDeclHandler = no_dtd
+        pre.EntityDeclHandler = no_dtd
+        try:
+            pre.Parse(data, True)
+        except expat.ExpatError as exc:
+            raise ValueError('%s: not a WWB file (XML error: %s)' % (os.path.basename(self.filename), exc))
         return ET.ElementTree(ET.fromstring(data))
 
 class WWBImporter(BaseWWBImporter):
@@ -193,7 +231,21 @@ class WWBImporter(BaseWWBImporter):
                 logger.warning('%s: date %r not understood', self.filename, dt_str)
         freqs = np.fromiter((float(t.text) / 1000. for t in freq_set), dtype=np.float64)
         dB = np.fromiter((float(t.text) for t in data_set), dtype=np.float64)
-        spectrum.add_sample_set(frequency=freqs, dbFS=dB)
+        n = min(freqs.size, dB.size)
+        freqs, dB = freqs[:n], dB[:n]
+        # V22.9 (external audit P3-18): a point without data (no_data_value,
+        # -140 in the files of WWB and of this program) is a gap, not a level
+        nodata = root.find('data_sets')
+        nodata = nodata.get('no_data_value') if nodata is not None else None
+        keep = np.isfinite(freqs) & np.isfinite(dB)
+        if nodata is not None:
+            try:
+                keep &= dB > float(nodata) + 0.05
+            except ValueError:
+                pass
+        if not keep.any():
+            raise ValueError('%s: no measured point in the file' % os.path.basename(self.filename))
+        spectrum.add_sample_set(frequency=freqs[keep], dbFS=dB[keep])
 
 
 class WWB3Importer(BaseImporter):
@@ -221,16 +273,33 @@ class WWB3Importer(BaseImporter):
         scale = float(header.get('Scale Factor', 1)) or 1.
         nodata = header.get('NoDataValue')
         layout, freqs = [], []
+        total = 0
         for item in header['BinarySchema']:
             if 'Curve' in item:
                 n = 0
                 for r in item['Curve']['FreqRanges']:
-                    f = np.arange(r['StartFreq'], r['EndFreq'] + r['StepFreq'] / 2., r['StepFreq'])
+                    # V22.9 (external audit P3-04): the number of points is
+                    # checked before the grid is made
+                    lo, hi, step = float(r['StartFreq']), float(r['EndFreq']), float(r['StepFreq'])
+                    if not (np.isfinite(lo) and np.isfinite(hi) and np.isfinite(step)) or \
+                            step <= 0 or hi < lo:
+                        raise ValueError('%s: frequency range %r is not valid'
+                                         % (os.path.basename(self.filename), r))
+                    count = int((hi - lo) / step) + 1
+                    total += count
+                    if total > MAX_IMPORT_POINTS:
+                        raise ValueError('%s: too many points (%d, at most %d)'
+                                         % (os.path.basename(self.filename), total, MAX_IMPORT_POINTS))
+                    f = np.arange(lo, hi + step / 2., step)
                     freqs.append(f)
                     n += f.size
                 layout.append(('curve', n * width))
             else:
-                layout.append((item.get('DataValue'), int(item['Bytes'])))
+                size = int(item['Bytes'])
+                if not 0 <= size <= 1 << 20:
+                    raise ValueError('%s: a sweep field of %d bytes is not valid'
+                                     % (os.path.basename(self.filename), size))
+                layout.append((item.get('DataValue'), size))
         rec = sum(size for _, size in layout)
         if rec <= 0:
             raise ValueError('%s: empty sweep layout' % os.path.basename(self.filename))
@@ -250,9 +319,19 @@ class WWB3Importer(BaseImporter):
         data = np.vstack(sweeps)
         if nodata is not None:
             data[data == nodata] = np.nan
-        dB = np.nanmax(data, axis=0) / scale
-        dB[~np.isfinite(dB)] = -140.
+        # V22.9 (external audit P3-18): a point without data in every sweep
+        # is a gap (before: -140 dB, a level that was never measured)
+        has = np.isfinite(data).any(axis=0)
+        dB = np.full(data.shape[1], np.nan)
+        if has.any():
+            dB[has] = np.nanmax(data[:, has], axis=0) / scale
         f_khz = np.concatenate(freqs)
+        if f_khz.size != dB.size:
+            raise ValueError('%s: the sweep does not fit the frequency ranges'
+                             % os.path.basename(self.filename))
+        if not has.any():
+            raise ValueError('%s: no measured point in the file' % os.path.basename(self.filename))
+        f_khz, dB = f_khz[has], dB[has]
         unit = str(header.get('FreqUnits', 'KHz')).lower()
         f_mhz = f_khz / {'khz': 1000., 'mhz': 1., 'hz': 1e6}.get(unit, 1000.)
         spectrum = self.spectrum

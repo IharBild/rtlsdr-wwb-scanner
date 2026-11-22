@@ -118,13 +118,13 @@ class DeviceInfoList(GenericQObject):
         """V18.1 (audit 1.6): a dongle pulled out during the update, or busy in
         another program, is skipped with a message; dongles no longer
         plugged in leave the list."""
-        print('update_devices')
+        logger.debug('update_devices')     # V22.9 (audit AUD-28): was print
         try:
             device_serials = list(_rtlsdr().get_device_serial_addresses())
         except Exception as exc:
             logger.warning('Could not list the RTL-SDR dongles: %s', exc)
             return
-        print(device_serials)
+        logger.debug('dongles: %r', device_serials)
         try:
             # V22.4: two dongles with one serial number share calibrations
             from wwb_scanner import dongles
@@ -151,7 +151,8 @@ class DeviceInfoList(GenericQObject):
             logger.debug('added %s', device)
 
     def add_device(self, device_index, device_serial):
-        assert device_index not in self._devices
+        if device_index in self._devices:      # V22.9 (audit P3-20): was an assert
+            raise ValueError('dongle %r is listed twice' % (device_index,))
         device = DeviceInfo()
         device.device_index = device_index
         device.device_serial = device_serial

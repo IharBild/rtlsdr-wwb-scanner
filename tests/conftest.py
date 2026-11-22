@@ -28,6 +28,17 @@ def _no_active_dongle():
     yield
     dongles.reset()
 
+@pytest.fixture(autouse=True)
+def _own_data_folder(monkeypatch):
+    """V22.9 (external audit AUD-30): with WWB_SCANNER_DATA set on the
+    computer (the audit, the portable build) 7 tests read and wrote the data
+    of the user; every test starts without it (tests that want a data
+    folder set their own)."""
+    from wwb_scanner import paths
+    monkeypatch.delenv(paths.ENV_VAR, raising=False)
+    monkeypatch.setattr(paths, '_override', None)
+    yield
+
 @pytest.fixture
 def tmp_db_store(tmpdir, monkeypatch):
     db_root = tmpdir.mkdir('db_root')

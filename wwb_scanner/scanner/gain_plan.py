@@ -232,10 +232,13 @@ def make_plan(rx, segments, g0, gains, sample_rate, has_floor=None, drop=None,
             bands.append(PlanBand(lo, hi, g, headroom_db=worst, clipped=clipped,
                                   strongest_hz=worst_hz, why=why))
     finally:
-        try:
-            run(setattr, sp.TUNE_TIMEOUT, rx, 'gain', g0)
-        except Exception:
-            logger.exception('could not set the gain back to %s dB', g0)
+        # V22.9 (external audit AUD-05): not on a dongle a USB error closed
+        # (the scan opens it anew) or one with a call that still hangs
+        if getattr(rx, 'is_open', True) and not sp.stuck_usb_calls():
+            try:
+                run(setattr, sp.TUNE_TIMEOUT, rx, 'gain', g0)
+            except Exception:
+                logger.exception('could not set the gain back to %s dB', g0)
     bands = _merge(bands)
     plan = Plan(g0, bands, seconds=time.monotonic() - t0)
     logger.info('gain plan (%.1f s): %s', plan.seconds, '; '.join(

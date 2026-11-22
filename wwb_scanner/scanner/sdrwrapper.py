@@ -4,6 +4,7 @@ import threading
 import traceback
 
 from wwb_scanner import scan_dll
+from wwb_scanner.receivers import gate
 from wwb_scanner.scanner import watchdog
 
 logger = logging.getLogger(__name__)
@@ -11,6 +12,10 @@ logger = logging.getLogger(__name__)
 # V22.8 (external audit A1): opening or closing waits at most this long for
 # another thread that holds the dongle (one that hangs in a USB call)
 LOCK_WAIT_S = 15.
+
+# V22.9 (external audit AUD-04): opening (finding the dongle and opening its
+# USB device) gives up after this long instead of waiting for ever
+OPEN_TIMEOUT_S = 20.
 
 # V22.8 (external audit B3): dongles left open because a USB call on them
 # still hangs. Closing frees the handle under that call (memory corruption,
@@ -141,13 +146,33 @@ class SdrWrapper(object):
             logger.error('The dongle is not closed: a USB call on it still hangs (closing it now '
                          'could crash the program). Unplug it and plug it back in.')
             return
+        # V22.9 (external audit P3-01): a call that runs now (a read in the
+        # scan thread) ends first; no new one starts while it is closed
         watchdog.beat()
-        try:
-            sdr.close()
-        except Exception:
-            logger.exception('closing the dongle failed')
+        with gate.quiet(sdr) as ok:
+            if not ok:
+                _ABANDONED.append(sdr)
+                logger.error('The dongle is not closed: a USB call on it did not end in %.0f s '
+                             '(closing it now could crash the program). Unplug it and plug it '
+                             'back in.', gate.CLOSE_WAIT_S)
+                return
+            try:
+                sdr.close()
+            except Exception:
+                logger.exception('closing the dongle failed')
         watchdog.beat()
     def _open_sdr_local(self):
+        """V22.9 (external audit AUD-04): in a helper thread with a time
+        limit - a dongle that does not answer while it is found or opened
+        gives an error instead of a program that waits for ever."""
+        from wwb_scanner.scanner.sample_processing import run_with_timeout, SdrTimeout
+        try:
+            return run_with_timeout(self._open_sdr_now, OPEN_TIMEOUT_S)
+        except SdrTimeout:
+            raise IOError('The dongle did not answer within %.0f s while it was opened. Unplug it, '
+                          'plug it back in and start again; if this message comes back, restart '
+                          'the program' % OPEN_TIMEOUT_S)
+    def _open_sdr_now(self):
         from wwb_scanner import dongles
         dc = self.scanner.device_config
         serial_number = dc.serial_number

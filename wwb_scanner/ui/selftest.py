@@ -31,7 +31,7 @@ def _lines_and_ok(engine, qml_problems):
     data = paths.data_dir()
     try:
         probe = os.path.join(paths.data_dir(create=True), '.selftest')
-        with open(probe, 'w') as fh:
+        with open(probe, 'w', encoding='utf-8') as fh:
             fh.write('ok')
         os.remove(probe)
         line('OK', 'data folder', data + ('' if not portable.note() else ' (%s)' % portable.note()))

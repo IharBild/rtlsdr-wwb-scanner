@@ -232,6 +232,8 @@ class FakeRtlSdr(object):
         self.unlocks = 0
         self.hung_threads = 0
         self.closed_calls = 0
+        self.in_call = 0                      # V22.9: calls running inside the device now
+        self.closed_under_call = 0            # V22.9: close() during a call (libusb abort() on the PC)
         FakeRtlSdr.instances.append(self)
 
     # --- properties used by the scanner
@@ -271,7 +273,7 @@ class FakeRtlSdr(object):
                 if f.action == 'raise':
                     raise IOError('LIBUSB_ERROR_IO (injected)')
                 if f.action == 'close':
-                    self.close()
+                    self.device_opened = False      # the library closed it itself
                     raise IOError('LIBUSB_ERROR_IO (injected, device closed)')
                 if f.action == 'hang':
                     self.hung_threads += 1
@@ -285,6 +287,13 @@ class FakeRtlSdr(object):
         return None
 
     def set_center_freq(self, freq):
+        self.in_call += 1
+        try:
+            return self._set_center_freq(freq)
+        finally:
+            self.in_call -= 1
+
+    def _set_center_freq(self, freq):
         self._check_open()
         self.calls['set_center_freq'] += 1
         self.locked = True
@@ -295,6 +304,13 @@ class FakeRtlSdr(object):
         self.tuned.append(float(freq))
 
     def read_samples(self, num_samples):
+        self.in_call += 1
+        try:
+            return self._read_samples(num_samples)
+        finally:
+            self.in_call -= 1
+
+    def _read_samples(self, num_samples):
         self._check_open()
         self.calls['read_samples'] += 1
         self._fault('read_samples', self._fc)
@@ -324,6 +340,10 @@ class FakeRtlSdr(object):
         return x
 
     def close(self):
+        if self.in_call and self.device_opened:
+            # V22.9: the real library frees the handle under the running
+            # transfer and stops the program (external audit P3-01)
+            self.closed_under_call += 1
         self.device_opened = False
 
 

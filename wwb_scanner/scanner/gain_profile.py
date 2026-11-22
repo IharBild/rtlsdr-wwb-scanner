@@ -83,7 +83,7 @@ def _open_survey(path):
     import csv
     if os.path.isdir(path):
         def rd(name, mode='r'):
-            return open(os.path.join(path, name), mode)
+            return open(os.path.join(path, name), mode, **({} if 'b' in mode else {'encoding': 'utf-8'}))
         names = os.listdir(path)
     else:
         z = zipfile.ZipFile(path)

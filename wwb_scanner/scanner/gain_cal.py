@@ -91,7 +91,7 @@ def save_table(table, sample_rate):
     path = table_path(sample_rate)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + '.tmp'
-    with open(tmp, 'w') as fh:
+    with open(tmp, 'w', encoding='utf-8') as fh:
         json.dump(table, fh, indent=1)
     os.replace(tmp, path)
     _cache.pop(path, None)
@@ -111,7 +111,7 @@ def load_table(sample_rate):
     if hit is not None and hit[0] == mtime:
         return hit[1]
     try:
-        with open(path) as fh:
+        with open(path, encoding='utf-8') as fh:
             table = json.load(fh)
         if table.get('version') != VERSION or not table.get('groups'):
             raise ValueError('unknown format')

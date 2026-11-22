@@ -47,7 +47,7 @@ def _writable(folder):
     try:
         os.makedirs(folder, exist_ok=True)
         probe = os.path.join(folder, '.write_test')
-        with open(probe, 'w') as fh:
+        with open(probe, 'w', encoding='utf-8') as fh:
             fh.write('ok')
         os.remove(probe)
         return True
@@ -98,7 +98,7 @@ def _console_to_file():
             os.replace(path, path + '.1')
         fh = io.open(path, 'a', encoding='utf-8', errors='replace', buffering=1)
     except OSError:
-        fh = io.open(os.devnull, 'w')
+        fh = io.open(os.devnull, 'w', encoding='utf-8')
     if sys.stdout is None:
         sys.stdout = fh
     if sys.stderr is None:

@@ -26,9 +26,13 @@ class ScanTiming(object):
         except Exception:
             pass
     def _durations(self):
+        """V22.9 (external audit AUD-19): in the order of time (sorted by the
+        key - the frequency - the tiles read again after the scan gave a
+        negative wall time and negative shares)."""
         rows = []
-        for key in sorted(self.tiles):
-            t = self.tiles[key]
+        with self.lock:
+            tiles = list(self.tiles.items())
+        for key, t in tiles:
             if not all(s in t for s in STAGES):
                 continue
             rows.append(dict(
@@ -40,13 +44,14 @@ class ScanTiming(object):
                 stop=t['returned'] - t['inserted'],
                 start=t['start'], end=t['returned'],
             ))
+        rows.sort(key=lambda r: r['start'])
         return rows
     def build_report(self):
         rows = self._durations()
         if not rows:
             return 'no complete tiles measured'
         n = len(rows)
-        total = rows[-1]['end'] - rows[0]['start']
+        total = max(r['end'] for r in rows) - rows[0]['start']
         lines = ['Scan timing (seconds)', 'tiles measured: %d' % n,
                  'wall time first tile start -> last tile end: %.1f' % total,
                  'average per tile: %.3f' % (total / n), '',
@@ -58,7 +63,7 @@ class ScanTiming(object):
             vals = [r[field] for r in rows]
             share = sum(vals) / total * 100. if total else 0.
             lines.append('%-24s %.3f    %.3f    %.0f %%' % (label, sum(vals) / n, max(vals), share))
-        gaps = [rows[i + 1]['start'] - rows[i]['end'] for i in range(n - 1)]
+        gaps = [max(0., rows[i + 1]['start'] - rows[i]['end']) for i in range(n - 1)]
         if gaps:
             share = sum(gaps) / total * 100. if total else 0.
             lines.append('%-24s %.3f    %.3f    %.0f %%' % ('between tiles', sum(gaps) / len(gaps), max(gaps), share))

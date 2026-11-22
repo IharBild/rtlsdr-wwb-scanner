@@ -99,12 +99,26 @@ Item {
         series: modelMapper.series
         mapper: modelMapper
 
+        // V22.9: a scan that measured nothing leaves no empty entry behind
+        // (removed a moment later, after the end of the scan has been handled)
+        onScanEmpty: removeEmpty.start()
+
         onColorChanged: {
             if (root.series){
                 if (root.series.color != graphData.color){
                     root.series.color = graphData.color;
                 }
             }
+        }
+    }
+
+    Timer {
+        id: removeEmpty
+        interval: 1000
+        repeat: false
+        onTriggered: {
+            if (root.graphParent && !(root.scanner && root.scanner.running))
+                root.graphParent.removeSpectrum(root);
         }
     }
 

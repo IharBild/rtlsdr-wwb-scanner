@@ -75,6 +75,7 @@ MARKERS = [
     ('V22.6', 'scanner/windows.py', "WINDOW_TYPES = ['hann', 'blackmanharris', 'flattop']"),
     ('V22.7', 'scanner/gain_plan.py', 'def make_plan'),
     ('V22.8', 'scanner/watchdog.py', 'class Watchdog'),
+    ('V22.9', 'receivers/gate.py', 'class DongleClosed'),
 ]
 
 

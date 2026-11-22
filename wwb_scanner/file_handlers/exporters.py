@@ -290,10 +290,20 @@ def wsm_csv(spectrum, dt=None, receiver=None, scale=WSM_LEVEL_SCALE, squelch=WSM
 class BaseWWBExporter(BaseExporter):
     def __init__(self, **kwargs):
         super(BaseWWBExporter, self).__init__(**kwargs)
-        # dt: local time of the export (date/time attributes, as WWB writes
-        # them); date_time is always the UTC epoch in ms. (Before V12 the
-        # date/time attributes were UTC, one hour off in Warsaw.)
-        self.dt = kwargs.get('dt') or datetime.datetime.now()
+        # dt: local time (date/time attributes, as WWB writes them);
+        # date_time is always the UTC epoch in ms. (Before V12 the date/time
+        # attributes were UTC, one hour off in Warsaw.) V22.9 (external audit
+        # P2-DATE1): the time of the scan, not of the export - an old scan
+        # exported today showed today's date in WWB. The WWB receiver scan
+        # tests/data/572-636.sdb2 carries the time it was scanned.
+        dt = kwargs.get('dt')
+        if dt is None:
+            ts = getattr(self.spectrum, 'timestamp_utc', None)
+            try:
+                dt = datetime.datetime.fromtimestamp(float(ts)) if ts else None
+            except (TypeError, ValueError, OverflowError, OSError):
+                dt = None
+        self.dt = dt or datetime.datetime.now()
         self.epoch_ms = kwargs.get('epoch_ms')
     def set_filename(self, value):
         ext = self._extension

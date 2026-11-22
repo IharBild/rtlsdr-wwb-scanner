@@ -248,7 +248,8 @@ class Spectrum(JSONMixin):
         with self.data_update_lock:
             self.data_updated.set()
     def save_to_dbstore(self, store=None):
-        (store or _db_store()).add_scan(self)
+        """The number (eid) of the scan in the history (V22.9, audit P3-20: was None)."""
+        return (store or _db_store()).add_scan(self)
     def update_dbstore(self, *attrs):
         if self.eid is None:
             return
@@ -258,15 +259,30 @@ class Spectrum(JSONMixin):
         _db_store().update_scan(self.eid, **d)
     @classmethod
     def from_dbstore(cls, dbdata=None, eid=None):
+        """A scan of the history, by its record or its number (eid).
+        V22.9 (external audit AUD-03 / P3-09): a record as get_all_scans
+        gives it (a plain dict) opened the first scan of the history, and
+        the eid was lost (the record's own "eid": None won)."""
         if dbdata is None:
-            assert eid is not None
+            if eid is None:
+                raise ValueError('from_dbstore: give the record or the number (eid) of the scan')
             dbdata = _db_store().get_scan(eid)
+            if dbdata is None:
+                raise ValueError('scan %s is not in the history' % (eid,))
         else:
             from wwb_scanner.utils.dbstore import doc_id
-            eid = doc_id(dbdata)
+            if eid is None:
+                eid = doc_id(dbdata)
+            if eid is None:
+                eid = dbdata.get('eid')
             if dbdata.get('sample_data') is None and dbdata.get('sample_data_file'):
+                if eid is None:
+                    raise ValueError('from_dbstore: the record has no number (eid)')
                 dbdata = _db_store().get_scan(eid)    # V14: points in scans/*.npz
+                if dbdata is None:
+                    raise ValueError('scan %s is not in the history' % (eid,))
         dbdata = dict(dbdata)
+        dbdata['eid'] = eid
         dbdata.pop('sample_data_file', None)
         dbdata.pop('center_frequencies', None)       # written before V22.0
         dbdata.pop('samples', None)

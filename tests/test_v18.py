@@ -165,7 +165,8 @@ def test_M4_export_keeps_the_gap_empty(monkeypatch, tmpdir):
         fb = np.asarray(back.sample_data.frequency, float)
         yb = np.asarray(back.sample_data['dbFS'], float)
         gap = (fb > 501) & (fb < 529)
-        assert gap.any() and np.all(yb[gap] <= E.NO_DATA_DB + 0.5), ext
+        # V22.9 (audit P3-18): the gap stays a gap when read back (was -140 points)
+        assert not gap.any(), ext
         i = int(np.argmin(np.abs(fb - 540.0)))
         assert yb[i] > E.NO_DATA_DB + 40, ext
 

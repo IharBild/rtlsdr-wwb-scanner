@@ -59,6 +59,11 @@ class ScanFailed(Exception):
 class ScanSettingsError(ScanFailed, ValueError):
     """V22.8: settings that can not be scanned (ScanConfig.check)."""
 
+class NoDongle(ScanFailed, AttributeError):
+    """V22.9 (external audit P3-15): something that needs the open dongle
+    (the step of the tiles needs its real sample rate) without one. An
+    AttributeError too, so ``getattr(scanner, ..., default)`` still works."""
+
 class ScannerBase(JSONMixin):
     WINDOW_TYPES = WINDOW_TYPES
     def __init__(self, **kwargs):
@@ -245,9 +250,11 @@ class ScannerBase(JSONMixin):
         """V22.8 (external audit B7): the core checks the limits of the dongle
         itself (the window and the service do it too); other problems of the
         range are named by build_sample_sets as before."""
-        why = self.config.out_of_range()
+        why = self.config.out_of_range() or self.config.device_problem()
         if why:
             raise ScanSettingsError(why)
+        for text in self.config.warnings():     # V22.9 (external audit P3-14)
+            logging.getLogger('wwb_scanner.status').warning(text)
     def _nothing_measured(self, coll):
         """V22.8 (external audit B7): a scan without a single measured point
         is an error, not a finished scan (it was saved as one)."""
@@ -435,9 +442,22 @@ class ScannerBase(JSONMixin):
             # V18: nothing between the ranges (tile edges reach into the gaps)
             self.spectrum.keep_ranges(segs)
     def save_to_dbstore(self):
+        """The eid of the saved scan; None when it is not saved. V22.9
+        (external audit P3-03): a history that can not be written (locked by
+        another program, the file held by an antivirus) is a warning - the
+        scan stays in the window and can be exported."""
         if self.history is None:
-            return
-        self.spectrum.save_to_dbstore(None if self.history == 'default' else self.history)
+            return None
+        self.history_error = None
+        try:
+            return self.spectrum.save_to_dbstore(None if self.history == 'default' else self.history)
+        except Exception as exc:
+            self.history_error = exc
+            logger.debug('saving to the history failed', exc_info=True)
+            logging.getLogger('wwb_scanner.status').warning(
+                'The scan is not saved to the history (%s). It stays in the window: export it '
+                'if you need it', exc)
+            return None
     def _serialize(self):
         d = dict(
             config=self.config._serialize(),
@@ -516,12 +536,18 @@ class Scanner(ScannerBase):
         self.sampling_config.samples_per_sweep = value
     @property
     def step_size(self):
-        step_size = getattr(self, '_step_size', None)
-        if step_size is not None:
-            return step_size
         c = self.sampling_config
         overlap = c.sweep_overlap_ratio
+        # V22.9 (external audit P3-15): computed again when the settings it
+        # comes from change (before, the first value stayed for ever)
+        key = (c.sample_rate, overlap, self.window_size, tile_keep(c))
+        step_size = getattr(self, '_step_size', None)
+        if step_size is not None and getattr(self, '_step_key', None) == key:
+            return step_size
         rx = self.receiver
+        if rx is None:
+            raise NoDongle('the dongle is not open: the step of the tiles needs its sample rate')
+        self._equal_spacing = None
         rx.sample_rate = c.sample_rate
         rs = int(round(rx.sample_rate))
 
@@ -555,6 +581,8 @@ class Scanner(ScannerBase):
 
         step_size = hz_to_mhz(step_size)
         self._step_size = step_size
+        # the key of the settings as they are now (the dongle's real rate is in them)
+        self._step_key = (c.sample_rate, overlap, self.window_size, tile_keep(c))
         logger.info(f'step_size: {step_size!r}, equal_spacing: {self._equal_spacing}')
         return step_size
     @property
@@ -646,8 +674,11 @@ class Scanner(ScannerBase):
         try:
             try:
                 # V22.8: not when Stop came already or the range is wrong
-                # (the base class says why, audit B7)
-                if not self.stop_requested and not self.config.out_of_range():
+                # (the base class says why, audit B7); V22.9: nor with a gain,
+                # sample rate or correction the dongle can not take (a gain
+                # that was not a number became 0 dB when the dongle was set up)
+                if not self.stop_requested and not self.config.out_of_range() and \
+                        not self.config.device_problem():
                     try:
                         self.sdr_wrapper.open_sdr()
                     except Exception as exc:
@@ -707,6 +738,12 @@ class Scanner(ScannerBase):
                 self.gain_plan = self.make_gain_plan()
             except Exception:
                 logger.exception('gain plan failed: one gain for the whole scan')
+            # V22.9 (external audit AUD-05): a USB error in the probe closed
+            # the dongle - opened anew before the scan uses it
+            if not self.stop_requested and self._usable_receiver() is None:
+                raise ScanFailed('the dongle stopped answering during the gain probe and could not be '
+                                 'opened again: nothing measured. Unplug the dongle, plug it back in '
+                                 'and start again')
             if self.stop_requested:
                 st.info('Scan %s stopped during the gain probe: nothing measured', self.range_text())
                 return
@@ -760,13 +797,53 @@ class Scanner(ScannerBase):
             g0 = float(self.gain)
         return gain_plan.make_plan(rx, self.segments, g0, self.gains, sr, has_floor=has_floor,
                                    drop=drop, should_stop=lambda: bool(self.stop_requested))
+    def _usable_receiver(self):
+        """V22.9: the receiver, opened anew when a USB error closed it (None:
+        the dongle can not be opened again)."""
+        rx = self.receiver
+        if rx is not None and getattr(rx, 'is_open', True):
+            return rx
+        from wwb_scanner.scanner.sample_processing import stuck_usb_calls
+        wrapper = getattr(self, 'sdr_wrapper', None)
+        if wrapper is None or stuck_usb_calls() or self.stop_requested:
+            return None
+        try:
+            if wrapper.open_sdr() is None:
+                return None
+        except Exception:
+            logger.warning('opening the dongle again failed', exc_info=True)
+            return None
+        events.console('dongle opened again after a USB error')
+        return self.receiver
+    def _band_gain_set(self, gain, ranges):
+        """V22.9 (external audit AUD-02): set the gain of a group of bands on
+        the receiver of now. When that fails, the dongle is opened anew once
+        and the gain set again; when it still fails, the bands are "not
+        measured" and the scan goes on with the next group."""
+        from wwb_scanner.scanner.sample_processing import run_with_timeout, TUNE_TIMEOUT
+        for attempt in (0, 1):
+            rx = self._usable_receiver()
+            if rx is None:
+                break
+            try:
+                run_with_timeout(setattr, TUNE_TIMEOUT, rx, 'gain', gain)
+                return True
+            except Exception:
+                logger.warning('setting the gain %.1f dB for %s failed', gain, ranges, exc_info=True)
+                if attempt == 0 and getattr(rx, 'is_open', True):
+                    # an error that left the dongle open: closed and opened anew
+                    try:
+                        self.sdr_wrapper.close_sdr()
+                    except Exception:
+                        logger.exception('closing the dongle after the error failed')
+        self.bands_not_measured.extend([list(r) for r in ranges])
+        return False
     def _run_banded(self, running, plan):
         """V22.7: every group of bands of one gain is scanned as a scan of its
         own (tiles, Overload, peak check, clean scan with the calibration of
         that gain), then the levels are brought to the gain of the scan and
         the bands are put together into this scan's spectrum."""
         from wwb_scanner.scanner import gain_plan, gain_cal
-        from wwb_scanner.scanner.sample_processing import run_with_timeout, TUNE_TIMEOUT
         t_start = time.time() - plan.seconds
         st = logging.getLogger('wwb_scanner.status')
         main = self.spectrum
@@ -785,18 +862,28 @@ class Scanner(ScannerBase):
                          tiles=total)
         st.info('Gain per band: %s (probe %.0f s)', plan.text(), plan.seconds)
         parts, infos, colls = [], [], []
-        rx = self.receiver
+        timing = None
+        self.bands_not_measured = []
         try:
             for gain, ranges in groups:
                 if self.stop_requested:
                     break
-                run_with_timeout(setattr, TUNE_TIMEOUT, rx, 'gain', gain)
+                # V22.9 (external audit AUD-02 / P3-02): the receiver of now -
+                # after a USB error in the band before, the dongle was opened
+                # anew and the old one is closed
+                if not self._band_gain_set(gain, ranges):
+                    continue
                 self.device_config.gain = gain
                 conf.scan_range = [ranges[0][0], ranges[-1][1]]
                 conf.scan_ranges = [list(r) for r in ranges] if len(ranges) > 1 else None
                 band = Spectrum(name=main.name, step_size=main.step_size)
                 self.spectrum = band
                 self.sample_collection = SampleCollection(scanner=self)
+                # V22.9 (external audit AUD-19): one time report for all bands
+                if timing is None:
+                    timing = getattr(self.sample_collection, 'timing', None)
+                elif hasattr(self.sample_collection, 'timing'):
+                    self.sample_collection.timing = timing
                 self.build_sample_sets()
                 self._live = (main, gain, g0, drop)
                 if not self._set_running(running):     # V22.8: one step with Stop
@@ -831,8 +918,12 @@ class Scanner(ScannerBase):
             conf.scan_range, conf.scan_ranges = saved
             self.device_config.gain = g0
             from wwb_scanner.scanner.sample_processing import set_gain_back
-            set_gain_back(None, rx, g0, 'the scan of the bands', stop=False)
+            rx = self.receiver
+            if rx is not None and getattr(rx, 'is_open', True):
+                set_gain_back(None, rx, g0, 'the scan of the bands', stop=False)
         self._merge_band_collections(colls)
+        for lo, hi in self.bands_not_measured:
+            st.warning('Gain per band: %.3f-%.3f MHz not measured (dongle error)', lo, hi)
         stopped_by_user = bool(self.stop_requested)
         if not parts:
             if not stopped_by_user:

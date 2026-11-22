@@ -1199,9 +1199,18 @@ def h14_open(lab):
     bad['sampling']['sample_rate'] = 8.0e6
     sc = main.Scanner(config=bad, history=None)
     th = threading.Thread(target=sc.run_scan, daemon=True)
+    # V22.9 refuses 8 MS/s before the dongle is opened (ScanConfig.device_problem);
+    # here the dongle itself must refuse it, so that check is left out
+    saved_check = getattr(ScanConfig, 'device_problem', None)
+    if saved_check is not None:
+        ScanConfig.device_problem = lambda self: None
     t0 = time.time()
-    th.start()
-    th.join(60)
+    try:
+        th.start()
+        th.join(60)
+    finally:
+        if saved_check is not None:
+            ScanConfig.device_problem = saved_check
     dt_bad = time.time() - t0
     if th.is_alive():
         result('H14', 'FAIL', 'отказ настройки донгла (8 МС/с)', 'скан висит больше 60 с')
@@ -1219,6 +1228,62 @@ def h14_open(lab):
            '%s; следующий скан 470-480: %s, %d плиток, %.1f с' % (
                what, 'завис' if s['hung'] else ('ошибка %r' % s['error'] if s['error'] else 'OK'),
                s['processed'], s['time']))
+
+
+def v229_installed():
+    try:
+        from wwb_scanner.receivers import gate  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+_H15_CHILD = r'''
+import json, sys, threading, time
+from wwb_scanner.scanner import main
+conf = json.loads(sys.argv[1])
+sc = main.Scanner(config=conf, history=None)
+th = threading.Thread(target=sc.run_scan, daemon=True)
+th.start()
+time.sleep(float(sys.argv[2]))
+sc.sdr_wrapper.close_sdr()
+th.join(60)
+print('H15 alive=%s error=%r points=%d' % (th.is_alive(), sc.error, sc.spectrum.sample_data.size), flush=True)
+'''
+
+
+@guard('H15', 'закрытие донгла во время чтения (V22.9)')
+def h15_close_during_read(lab):
+    """V22.9 (external audit P3-01) on the real dongle: the dongle is closed
+    from another thread while the scan reads (the audit: rc=3, "Assertion
+    failed: refcnt >= 2" from libusb at 1.7 and 1.9 s). In a child process,
+    so a crash ends only the child. Expected: exit code 0 every time."""
+    import json
+    import subprocess
+    if lab.simulate:
+        result('H15', 'SKIP', 'закрытие донгла во время чтения', 'только на донгле')
+        return
+    conf = json.dumps(lab.config(470, 478))
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join(p for p in sys.path if p))
+    rows, bad = [], 0
+    for delay in (1.4, 1.7, 1.9, 1.7, 1.9):
+        t0 = time.time()
+        try:
+            p = subprocess.run([sys.executable, '-c', _H15_CHILD, conf, str(delay)], env=env,
+                               capture_output=True, text=True, timeout=120)
+            rc, out = p.returncode, (p.stdout + p.stderr)
+        except subprocess.TimeoutExpired:
+            rc, out = 'timeout', ''
+        line = [l for l in out.splitlines() if l.startswith('H15 ')]
+        crash = 'Assertion failed' in out or rc != 0
+        bad += bool(crash)
+        rows.append('%.1f с: rc=%s%s (%.0f с)' % (delay, rc, ' ' + line[-1][4:] if line else '',
+                                               time.time() - t0))
+        if crash:
+            print(out[-2000:])
+        time.sleep(1.0)
+    result('H15', 'FAIL' if bad else 'PASS', 'закрытие донгла из другого потока во время чтения, 5 раз',
+           '; '.join(rows))
 
 
 BANDS_H12 = [(470.0, 534.0), (606.0, 630.0), (823.0, 832.0), (863.0, 865.0)]
@@ -1348,6 +1413,8 @@ def main():
                         h13_band_gain(lab, h9[0])
             if v228_installed():
                 h14_open(lab)
+            if v229_installed():
+                h15_close_during_read(lab)
             if v18_installed():
                 h12_bands(lab, h2)
             v10 = any(r[0] == 'E3' and r[1] == 'PASS' for r in RESULTS)
