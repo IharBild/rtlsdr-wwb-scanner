@@ -309,7 +309,7 @@ def run_ui_check(outdir):
     env['PYTHONIOENCODING'] = 'utf-8'
     t0 = time.time()
     try:
-        p = subprocess.run([sys.executable, ui, '0', '1766'], cwd=outdir, env=env,
+        p = subprocess.run([sys.executable, ui, '0.5', '1766'], cwd=outdir, env=env,
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=1200)
         out = p.stdout.decode('utf-8', 'replace')
     except subprocess.TimeoutExpired as exc:

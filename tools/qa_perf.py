@@ -86,7 +86,7 @@ def p2_merge_growth():
 
 
 def p3_p4_full_scan():
-    sc, dt, pr = full_scan(0, 1766, profile=True)
+    sc, dt, pr = full_scan(0.5, 1766, profile=True)
     tiles = len(sc.sample_collection.sample_sets)
     print('P3 full scan 0-1766 MHz without USB time: %.1f s, %d tiles, %.1f ms per tile (Python part)'
           % (dt, tiles, dt / tiles * 1000))
@@ -101,7 +101,7 @@ def p3_p4_full_scan():
 
 def p5_memory():
     tracemalloc.start()
-    sc, dt, _ = full_scan(0, 1766)
+    sc, dt, _ = full_scan(0.5, 1766)
     cur, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
     print('P5 memory of full scan (Python heap): now %.0f MB, peak %.0f MB' % (cur / 1e6, peak / 1e6))
