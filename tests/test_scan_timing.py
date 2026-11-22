@@ -26,8 +26,12 @@ def test_report_contains_stages_and_totals(tmpdir):
     assert 'Scan timing' in open(path).read()
 
 
-def test_incomplete_tiles_are_skipped_and_no_crash():
+def test_incomplete_tiles_are_skipped_and_no_crash(tmpdir):
     timing = ScanTiming()
     timing.tick(1.0, 'start')
     assert 'no complete tiles' in timing.build_report()
-    assert timing.write_report('/nonexistent_dir/x.txt') is None
+    # V22.8: a folder that can not exist (its parent is a file) - '/nonexistent_dir'
+    # can be created by root, and the report then was written there
+    blocker = tmpdir.join('a_file')
+    blocker.write('x')
+    assert timing.write_report(str(blocker.join('x.txt'))) is None

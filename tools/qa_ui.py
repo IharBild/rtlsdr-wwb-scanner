@@ -36,7 +36,10 @@ class UIFakeRtlSdr(sim.FakeRtlSdr):
     gain_values = sim.R828D_GAINS
     air = None
     extra_kw = {}               # V20.5 (U25): e.g. gain_affects
+    open_delay = 0.             # V22.8 (U44): opening takes this long (PC: ~1.6 s)
     def __init__(self, device_index=0, serial_number=None, device_serial=None, **kw):
+        if UIFakeRtlSdr.open_delay:
+            time.sleep(UIFakeRtlSdr.open_delay)
         kw.setdefault('air', UIFakeRtlSdr.air or _ui_air())
         for k, v in UIFakeRtlSdr.extra_kw.items():
             kw.setdefault(k, v)
@@ -316,6 +319,7 @@ def main():
     v212_checks(app, win, si)
     v224_checks(app, win, si)
     v227_checks(app, win, si)
+    v228_checks(app, win, si)
     v209_checks(app, win, si)
     v208_checks(app, win, controls, si, fresh, first_start)
     win.close()
@@ -1134,6 +1138,68 @@ def v227_checks(app, win, si):
               % ('found' if sw is not None else 'MISSING', on, off, default, WINDOW_TYPES))
     except Exception as exc:
         check('U43', False, 'error: %s' % exc)
+
+
+def v228_checks(app, win, si):
+    """V22.8 (external audit 22.11.2026). U44: Stop pressed while the dongle
+    is being opened ends the scan before its first tile (V22.7: the request
+    was lost and the whole range was scanned). U45: closing the window during
+    a scan stops it and waits for its threads; the dongle is closed by the
+    scan (V22.7: the process ended with 0xC0000409)."""
+    try:
+        from wwb_scanner.ui.pyside import scanner as S
+    except ImportError as exc:
+        check('U44', False, 'error: %s' % exc)
+        return
+    if not hasattr(S, 'shutdown_all'):
+        check('U44', False, 'no scanner.shutdown_all (V22.8 not installed)')
+        return
+    cfg = si.scanConfig
+    old = (cfg.startFreq, cfg.endFreq)
+    try:
+        UIFakeRtlSdr.open_delay = 0. if REAL else 0.8
+        cfg.startFreq, cfg.endFreq = 470.0, 520.0
+        si.start()
+        pump(app, 0.2)
+        early = si.scanner is not None and not si.scanner._running.is_set()
+        si.stop()
+        t0 = time.time()
+        while si.running and time.time() - t0 < 30:
+            pump(app, 0.1)
+        pump(app, 0.3)
+        res = si.last_result
+        ok = (early and not si.running and res is not None and res.stopped_by_user
+              and res.tiles_done == 0)
+        check('U44', ok, 'Stop %s the dongle opened: stopped %s, tiles %s of %s, %.1f s'
+              % ('before' if early else 'AFTER', getattr(res, 'stopped_by_user', None),
+                 getattr(res, 'tiles_done', None), getattr(res, 'tiles_total', None), time.time() - t0))
+    except Exception as exc:
+        check('U44', False, 'error: %s' % exc)
+    finally:
+        UIFakeRtlSdr.open_delay = 0.
+    try:
+        cfg.startFreq, cfg.endFreq = 470.0, 700.0
+        si.start()
+        t0 = time.time()
+        while time.time() - t0 < 20 and not (si.scanner is not None and si.scanner._running.is_set()):
+            pump(app, 0.05)
+        pump(app, 0.5)
+        sc = si.scanner
+        running = sc is not None and sc._running.is_set()
+        t1 = time.time()
+        done = S.shutdown_all(15.)
+        dt = time.time() - t1
+        dev = getattr(getattr(sc, 'sdr_wrapper', None), 'sdr', 'n/a')
+        while si.running and time.time() - t1 < 20:
+            pump(app, 0.1)
+        ok = running and done and sc.stop_requested and sc._stopped.is_set() and dev is None \
+            and not si.running
+        check('U45', ok, 'window closed during a scan: scan stopped %s, threads ended %s in %.1f s, '
+              'dongle closed %s' % (getattr(sc, 'stop_requested', None), done, dt, dev is None))
+    except Exception as exc:
+        check('U45', False, 'error: %s' % exc)
+    finally:
+        cfg.startFreq, cfg.endFreq = old
 
 
 def v209_checks(app, win, si):

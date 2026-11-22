@@ -41,7 +41,8 @@ def tmp_db_store(tmpdir, monkeypatch):
 def random_samples():
     def gen(n=1024, rs=2.048e6, fc=800e6):
         a = np.random.randint(low=-128, high=128, size=n)
-        from scipy import signal    # V22.6: scipy only for the tests
+        # V22.6: scipy only for the tests; V22.8: skipped without it (clean install)
+        signal = pytest.importorskip('scipy.signal')
         sig = signal.hilbert(a / 256.)
         freqs, Pxx = signal.welch(sig, fs=rs, return_onesided=False)
         if np.count_nonzero(Pxx) != Pxx.size:

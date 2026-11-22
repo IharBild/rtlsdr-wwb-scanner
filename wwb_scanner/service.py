@@ -56,8 +56,9 @@ def start_problem(conf, kind=SCAN, dongle_found=True):
         return 'The sample rate is not set: enter it in Device Settings (for example 2400).'
     if _number(conf.device.get('gain')) is None:
         return 'The gain is not set: choose it in Device Settings.'
-    if kind != SCAN or conf.get('scan_ranges'):
+    if kind != SCAN:
         return ''           # these scans bring their own ranges
+    # V22.8 (external audit B7): a list of bands is checked too (it was not)
     return conf.check() or ''
 
 
@@ -323,16 +324,17 @@ class ScanService(object):
         """Finish the pass that is running, then stop (multi-pass scans)."""
         self._stop_all = True
     def stop(self, wait_start=10.):
-        """Ask the running scan to end. A scan that is still opening the
-        dongle is waited for (up to ``wait_start`` s) so the request is not
-        lost; then it returns at once."""
+        """Ask the running scan to end and return at once. V22.8: a scan that
+        is still opening the dongle keeps the request itself (audit A6);
+        only a thread that has not reached the scanner yet is waited for
+        (up to ``wait_start`` s)."""
         s = self.scanner
         if s is None or not self.running:
             return False
         self._stop_all = True
         deadline = time.monotonic() + wait_start
-        while not s._running.is_set() and self.running and time.monotonic() < deadline:
-            time.sleep(0.01)
+        while not getattr(s, '_run_begun', True) and self.running and time.monotonic() < deadline:
+            time.sleep(0.005)
         return bool(self.running and s.request_stop())
     def wait(self, timeout=None):
         t = self.thread

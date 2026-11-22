@@ -78,6 +78,8 @@ class ScanTiming(object):
             with open(path, 'w', encoding='utf-8') as f:
                 f.write(report + '\n')
             return path
-        except Exception:
-            logger.exception('could not write timing report')
+        except Exception as exc:
+            # V22.8: a report for diagnosis only - its failure (a folder
+            # without write access) is no error of the scan, no dialog
+            logger.info('could not write the timing report: %s', exc)
             return None

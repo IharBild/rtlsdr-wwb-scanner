@@ -208,7 +208,10 @@ def test_service_refuses_and_stops(store):
         svc.start(ScanConfig())                      # one scan at a time
     assert svc.stop() is True
     res = svc.wait(60)
-    assert res.stopped_by_user and not res.ok and 0 < res.tiles_done < res.tiles_total
+    # V22.8 (audit A6): a Stop this early (the dongle is being opened) ends
+    # the scan before its first tile - it is no longer delayed to the start
+    assert res.stopped_by_user and not res.ok
+    assert res.tiles_total == 0 or res.tiles_done < res.tiles_total
 
 
 def test_service_saves_to_the_history_by_default(store):

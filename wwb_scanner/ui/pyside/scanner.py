@@ -1,5 +1,7 @@
 from wwb_scanner.ui.pyside.qt import QtCore, QtQml, Signal, Property, Slot
 import logging
+import time
+import weakref
 logger = logging.getLogger(__name__)
 
 from wwb_scanner.scanner import config
@@ -136,6 +138,26 @@ class ScanConfigData(GenericQObject):
 
 CAL_OLD_DAYS = 30
 READY_POLL_S = 0.1
+# V22.8 (external audit A5): closing the window during a scan stops it and
+# waits this long for the scan thread (the tile being read, then the measured
+# part is cropped, cleaned and saved, and the dongle closed)
+QUIT_WAIT_S = 15.
+
+_INTERFACES = weakref.WeakSet()     # every ScannerInterface (QML makes them)
+
+
+def shutdown_all(timeout=QUIT_WAIT_S):
+    """V22.8 (audit A5): stop every running scan and wait for its threads.
+    True when no thread of a scan is left running."""
+    deadline = time.monotonic() + timeout
+    ok = True
+    for si in list(_INTERFACES):
+        try:
+            ok = si.shutdown(max(0., deadline - time.monotonic())) and ok
+        except Exception:
+            logger.exception('stopping the scan at exit')
+            ok = False
+    return ok
 
 
 def _wait_scanner_ready(scanner):
@@ -243,6 +265,37 @@ class ScannerInterface(GenericQObject):
         self.scan_thread = None
         self.scan_init_thread = None
         self.last_result = None          # V22.1: service.ScanResult of the last scan
+        _INTERFACES.add(self)            # V22.8: found at exit (shutdown_all)
+
+    def shutdown(self, timeout=QUIT_WAIT_S):
+        """V22.8 (external audit A5): the program is closing. A running scan
+        is stopped and its threads are waited for (up to ``timeout`` s), so
+        no Qt thread is destroyed while it runs (that ended the program
+        with 0xC0000409) and the dongle is closed by the scan as always.
+        The main event loop has ended by now: the threads are ended here,
+        not through the signals of the window. True when none is left."""
+        scanner = self.scanner
+        threads = [t for t in (self.scan_thread, self.scan_init_thread) if t is not None]
+        if scanner is None and not threads:
+            return True
+        if scanner is not None and scanner.request_stop():
+            logger.info('the window is closing during a scan: stopping the scan')
+        deadline = time.monotonic() + timeout
+        ok = True
+        for t in threads:
+            qt_thread = getattr(t, '_thread', None)
+            if qt_thread is None:
+                continue
+            # quit() is thread safe: the thread's event loop ends after the
+            # work it is doing (the scan) has returned
+            qt_thread.quit()
+            left_ms = int(max(0., deadline - time.monotonic()) * 1000)
+            if not qt_thread.wait(left_ms):
+                ok = False
+        if not ok:
+            logger.error('the scan did not end within %.1f s of closing the window '
+                         '(a USB call hangs?)', timeout)
+        return ok
 
     @property
     def startFreq(self): return self.scanConfig.startFreq

@@ -129,6 +129,21 @@ class JsonDB(object):
             self._write()
 
 
+# V22.8 (external audit B1): marks a scan puts on its spectrum for the graph
+# (sample_processing.report_overload), kept in the history with the scan
+MARK_KEYS = ('image_marks', 'product_marks', 'loss_bands', 'unmeasurable_bands')
+
+
+def scan_marks(spectrum):
+    """{key: [mark, ...]} of the marks ``spectrum`` has (only those it has)."""
+    out = {}
+    for k in MARK_KEYS:
+        v = getattr(spectrum, k, None)
+        if v:
+            out[k] = [dict(x) for x in v]
+    return out
+
+
 # helpers kept from V13 (tools and tests use them)
 def doc_id(doc):
     """id of a stored record"""
@@ -254,7 +269,15 @@ class DBStore(object):
     def _write_points(self, eid, data, sample_data, name=None, raw_dbFS=None, passes=None):
         if not os.path.isdir(self.scans_dir):
             os.makedirs(self.scans_dir, exist_ok=True)
-        name = self._safe_name(name) or self._scan_file_name(eid, data, sample_data)
+        own = self._safe_name(name)
+        name = own or self._scan_file_name(eid, data, sample_data)
+        if not own:
+            # V22.8: a new file never takes the place of another scan's points
+            # (numbers start at 1 again after a damaged index was replaced)
+            base, n = name[:-len('.npz')], 1
+            while os.path.exists(os.path.join(self.scans_dir, name)):
+                n += 1
+                name = '%s_%d.npz' % (base, n)
         path = os.path.join(self.scans_dir, name)
         tmp = path + '.tmp.npz'
         arrays = {'sample_data': sample_data}
@@ -277,16 +300,24 @@ class DBStore(object):
         info = getattr(spectrum, 'cleanup_info', None)
         if info:
             data['cleanup'] = info
+        # V22.8 (external audit B1): the marks of the scan (images, products
+        # of the dongle, bands with less sensitivity, bands not measurable)
+        # are kept with it; the raw values are in the points file
+        marks = scan_marks(spectrum)
+        if marks:
+            data['marks'] = marks
         sd = data.pop('sample_data', None)
         points = getattr(sd, 'data', sd)
         table = self.scan_db.table('scans_performed')
-        if spectrum.eid is not None:
+        new = spectrum.eid is None
+        if not new:
             eid = spectrum.eid
             old = get_by_id(table, eid)
             name = old.get('sample_data_file') if old is not None else None
         else:
-            eid = table.insert(data)
-            spectrum.eid = eid
+            # V22.8 (external audit B4): the points file first, then one record
+            # in the index - a record never points to a file not yet written
+            eid = table.last_id() + 1
             name = None
         if points is not None:
             data['sample_data_file'] = self._write_points(
@@ -294,7 +325,11 @@ class DBStore(object):
                 passes=getattr(spectrum, 'passes', None))
             if getattr(spectrum, 'passes', None) is not None:
                 data['passes'] = len(spectrum.passes)
-        update_ids(table, data, [eid])
+        if new:
+            eid = table.insert(data)
+            spectrum.eid = eid
+        else:
+            update_ids(table, data, [eid])
         return eid
     def get_all_scans(self):
         table = self.scan_db.table('scans_performed')
@@ -322,6 +357,10 @@ class DBStore(object):
             from wwb_scanner.scan_objects.passes import ScanPasses
             with np.load(os.path.join(self.scans_dir, name)) as z:
                 rec['sample_data'] = SampleArray(data=z['sample_data'])
+                if 'raw_dbFS' in z.files:
+                    raw = np.asarray(z['raw_dbFS'], dtype=np.float64)
+                    if raw.shape == (rec['sample_data'].size,):
+                        rec['raw_dbFS'] = raw      # V22.8 (audit B1): read back too
                 p = ScanPasses.from_arrays(z)
                 if p is not None:
                     rec['passes'] = p              # V22.2

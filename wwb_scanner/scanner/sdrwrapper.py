@@ -1,8 +1,29 @@
 from wwb_scanner import events
+import logging
 import threading
 import traceback
 
 from wwb_scanner import scan_dll
+from wwb_scanner.scanner import watchdog
+
+logger = logging.getLogger(__name__)
+
+# V22.8 (external audit A1): opening or closing waits at most this long for
+# another thread that holds the dongle (one that hangs in a USB call)
+LOCK_WAIT_S = 15.
+
+# V22.8 (external audit B3): dongles left open because a USB call on them
+# still hangs. Closing frees the handle under that call (memory corruption,
+# 0xC0000374 on the PC); pyrtlsdr closes in __del__, so they are kept here.
+_ABANDONED = []
+
+
+def _usb_stuck():
+    from wwb_scanner.scanner.sample_processing import stuck_usb_calls
+    try:
+        return stuck_usb_calls()
+    except Exception:
+        return 0
 
 # V22.0: pyrtlsdr (and with it the dongle library) is loaded when a dongle
 # is opened, not when the scanner is imported: the core, its tests and the
@@ -61,25 +82,71 @@ class SdrWrapper(object):
                 sdr_val = getattr(sdr, key)
             if sdr_val != scanner_val:
                 setattr(scanner, key, sdr_val)
+    def _lock(self, what):
+        if self.device_lock.acquire(timeout=LOCK_WAIT_S):
+            return True
+        logger.error('%s: the dongle is still busy in another part of the program after %.0f s '
+                     '(a USB call hangs)', what, LOCK_WAIT_S)
+        return False
+
     def open_sdr(self):
-        with self.device_lock:
+        """The open dongle (None: not found or busy).
+
+        V22.8 (external audit A1): when setting the dongle up fails (sample
+        rate, gain), it is closed again and the error raised. Before, its
+        handle stayed open without ``device_open`` and the next open_sdr
+        waited for ever under the lock - also the reopen after a USB error
+        in a scan. A half set-up dongle left by anything else is closed and
+        opened anew, and nothing waits without a time limit."""
+        if not self._lock('opening'):
+            raise IOError('The dongle is still busy (a USB call hangs). Unplug it, plug it back in '
+                          'and start again; if this message comes back, restart the program')
+        try:
             if self.sdr is not None:
-                if not _is_open(self.sdr):
-                    self.sdr.close()
-                    self.sdr = None
-                    self.device_open.clear()
-                else:
-                    self.device_open.wait()
-            if self.sdr is None:
-                self.sdr = self._open_sdr_local()
-                if self.sdr is not None:
-                    # V18.1 (audit 1.1): gain table read here, in the scan thread
-                    learn = getattr(self.scanner, 'learn_gains', None)
-                    if learn is not None and self.enable_scanner_updates:
-                        learn(self.sdr)
-                    self.set_sdr_values()
-                    self.device_open.set()
-        return self.sdr
+                if _is_open(self.sdr) and self.device_open.is_set():
+                    return self.sdr
+                # closed after a USB error, or never set up: not used again
+                self._drop_sdr()
+            watchdog.beat()
+            sdr = self._open_sdr_local()
+            watchdog.beat()
+            if sdr is None:
+                return None
+            self.sdr = sdr
+            try:
+                # V18.1 (audit 1.1): gain table read here, in the scan thread
+                learn = getattr(self.scanner, 'learn_gains', None)
+                if learn is not None and self.enable_scanner_updates:
+                    learn(self.sdr)
+                self.set_sdr_values()
+            except Exception:
+                logger.warning('setting up the dongle failed, it is closed again', exc_info=True)
+                self._drop_sdr()
+                raise
+            self.device_open.set()
+            return self.sdr
+        finally:
+            self.device_lock.release()
+
+    def _drop_sdr(self):
+        """Forget the dongle and close it - unless a USB call on it still
+        hangs (V22.8, audit B3): then it stays open until the program ends."""
+        sdr, self.sdr = self.sdr, None
+        self.device_open.clear()
+        self._rx = (None, None)
+        if sdr is None:
+            return
+        if _usb_stuck():
+            _ABANDONED.append(sdr)
+            logger.error('The dongle is not closed: a USB call on it still hangs (closing it now '
+                         'could crash the program). Unplug it and plug it back in.')
+            return
+        watchdog.beat()
+        try:
+            sdr.close()
+        except Exception:
+            logger.exception('closing the dongle failed')
+        watchdog.beat()
     def _open_sdr_local(self):
         from wwb_scanner import dongles
         dc = self.scanner.device_config
@@ -119,12 +186,15 @@ class SdrWrapper(object):
             self._rx = (dev, rx)
         return rx
     def close_sdr(self):
-        with self.device_lock:
+        if not self._lock('closing'):
+            return          # V22.8: never wait for ever (the opening thread hangs)
+        try:
             if self.sdr is not None:
-                report_i2c_at_close(self.sdr)
-                self.sdr.close()
-                self.sdr = None
-                self.device_open.clear()
+                if not _usb_stuck():
+                    report_i2c_at_close(self.sdr)
+                self._drop_sdr()
+        finally:
+            self.device_lock.release()
     def __enter__(self):
         self.open_sdr()
     def __exit__(self, *args):

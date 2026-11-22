@@ -10,7 +10,7 @@ company in Poland and for sound engineers across Europe. Most of the code in thi
 written with Claude (Anthropic); every release is checked on a real V4 dongle by the
 maintainer.
 
-Current version: **V22.7** in the branch `v4-fixes` (installed by the command below). Last tagged
+Current version: **V22.8** in the branch `v4-fixes` (installed by the command below). Last tagged
 release: [v22.3](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v22.3)
 (branch `v4-fixes`). The `master` branch is the original upstream code and is not used here.
 
@@ -183,6 +183,19 @@ release: [v22.3](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v22
   - Checked: the window check U1-U41 passes on PySide2 5.15 (Python 3.8) and PySide6 6.12
     (Python 3.13, also from a clean install with only Essentials + Addons); all tests on
     both. **Not yet on Windows with the dongle.**
+- **V22.8** - **Reliability** (external audit of 22.11.2026). A dongle whose set-up fails (for
+  example an unsupported sample rate) is closed again and the scan ends with an error; the next
+  scan no longer waits for ever. Stop pressed while the dongle is being opened (~1.6 s) ends the
+  scan before its first tile. Closing the window during a scan stops it and waits for it (the
+  program crashed). A watchdog writes the state of every thread to the log file when a scan has
+  not moved for 60 s. A dongle with a USB call that hangs is not closed under that call. The gain
+  that does not come back after the auto gain stops the scan with the reason (the next tiles were
+  quietly lower). The peak check is limited by time (15 % of the scan, 10-60 s) instead of 30
+  tiles. Scan ranges are checked against what the V4 tunes, 0.5-1766 MHz; a scan without a
+  single point is an error; tiles without data are a warning. sdb3: gaps are written as
+  NoDataValue (WWB read -140 as a level). The history keeps the marks of a scan (images,
+  products, less sensitive and not measurable bands) and reads its raw values back; the points
+  file is written before the index record.
 - **V22.7** - **Own gain per band** (Scan settings > "Own gain per band", off until checked on
   the V4). A short probe before the scan (a few seconds) reads every band of the scan at the
   gain of the scan and raises the gain where the band is quiet enough (headroom of the strongest
@@ -457,6 +470,14 @@ Windows: быстрее, без собственных помех донгла �
   копируются из реестра). Настройки по умолчанию — в ядре; без tinydb. В ядре появились
   служба скана и события, сканы из нескольких проходов (основа режима «Точный») и
   интерфейс приёмника (основа для других приёмников). Проверено на V4 18.11.2026.
+- V22.8: надёжность (внешний аудит 22.11.2026). Донгл, который не принял настройки, закрывается,
+  скан кончается ошибкой, следующий скан не зависает. Stop во время открытия донгла останавливает
+  скан до первой плитки. Закрытие окна во время скана останавливает его и ждёт (программа падала).
+  Сторож: скан стоит 60 с — стеки всех потоков в журнал. Донгл с зависшим вызовом USB не
+  закрывается. Усиление не вернулось после автоусиления — скан останавливается с причиной.
+  Проверка пиков ограничена временем, а не 30 плитками. Диапазон 0,5–1766 МГц; скан без точек —
+  ошибка, плитки без данных — предупреждение. sdb3: разрывы = NoDataValue. В истории — метки
+  скана и сырые уровни.
 - V22.7: «Own gain per band» в Scan settings (пока выключено, до проверки на V4). Короткая проба
   перед сканом поднимает усиление в тихих полосах (например, 560–700 МГц на 49,6 дБ вместо 33,8),
   уровни приводятся к усилению скана по реальным шагам — несущие не «прыгают» на краях полос.

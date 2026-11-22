@@ -1158,6 +1158,69 @@ def h13_band_gain(lab, ref):
     return s
 
 
+def v228_installed():
+    try:
+        from wwb_scanner.scanner import watchdog  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+@guard('H14', 'надёжность открытия донгла (V22.8)')
+def h14_open(lab):
+    """V22.8 (external audit A1, A6) on the real dongle:
+    a) Stop 0.2 s after Start (the dongle is still being opened): the scan
+       ends before its first tile, within a few seconds (V22.7: the whole
+       range was scanned);
+    b) a set-up the dongle refuses (8 MS/s: LibUSBError -22 in the audit's
+       run): the scan ends with an error and the next scan opens the dongle
+       (V22.7: the next open waited for ever)."""
+    from wwb_scanner import service
+    from wwb_scanner.scanner import main
+    from wwb_scanner.scanner.config import ScanConfig
+    conf = lab.config(470, 700)
+    svc = service.ScanService(history=None)
+    t0 = time.time()
+    svc.start(ScanConfig(conf))
+    time.sleep(0.2)
+    asked = svc.stop()
+    res = svc.wait(60)
+    dt = time.time() - t0
+    if res is None:
+        result('H14', 'FAIL', 'Stop во время открытия донгла', 'скан не закончился за 60 с')
+        return
+    ok_a = asked and res.stopped_by_user and res.tiles_done == 0 and dt < 10
+    # the simulator opens at once: by 0.2 s the scan may already be running
+    st_a = 'PASS' if ok_a else ('INFO' if lab.simulate and res.stopped_by_user else 'FAIL')
+    result('H14', st_a, 'Stop во время открытия донгла (470-700)',
+           'stop()=%s, остановлен=%s, плиток %d из %d, %.1f с' % (
+               asked, res.stopped_by_user, res.tiles_done, res.tiles_total, dt))
+    bad = lab.config(470, 480)
+    bad['sampling']['sample_rate'] = 8.0e6
+    sc = main.Scanner(config=bad, history=None)
+    th = threading.Thread(target=sc.run_scan, daemon=True)
+    t0 = time.time()
+    th.start()
+    th.join(60)
+    dt_bad = time.time() - t0
+    if th.is_alive():
+        result('H14', 'FAIL', 'отказ настройки донгла (8 МС/с)', 'скан висит больше 60 с')
+        return
+    refused = sc.error is not None and 'could not be set up' in str(sc.error)
+    s = lab.scan('after_refused_setup', 470, 480, timeout=120)
+    ok_next = not s['hung'] and s['error'] is None and s['processed'] > 0
+    if refused:
+        status = 'PASS' if ok_next else 'FAIL'
+        what = 'донгл отказал (%s) за %.1f с' % (sc.error, dt_bad)
+    else:
+        status = 'INFO' if ok_next else 'FAIL'
+        what = 'донгл принял 8 МС/с, отказ не воспроизведён (ошибка %r)' % (sc.error,)
+    result('H14', status, 'отказ настройки донгла и следующий скан',
+           '%s; следующий скан 470-480: %s, %d плиток, %.1f с' % (
+               what, 'завис' if s['hung'] else ('ошибка %r' % s['error'] if s['error'] else 'OK'),
+               s['processed'], s['time']))
+
+
 BANDS_H12 = [(470.0, 534.0), (606.0, 630.0), (823.0, 832.0), (863.0, 865.0)]
 
 
@@ -1283,6 +1346,8 @@ def main():
                     h11_clean(lab, h9[0])
                     if v227_installed():
                         h13_band_gain(lab, h9[0])
+            if v228_installed():
+                h14_open(lab)
             if v18_installed():
                 h12_bands(lab, h2)
             v10 = any(r[0] == 'E3' and r[1] == 'PASS' for r in RESULTS)

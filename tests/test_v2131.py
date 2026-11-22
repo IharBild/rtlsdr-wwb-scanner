@@ -2,7 +2,11 @@
 one tile took 88 ms instead of 11-14 ms on the PC with Python 3.13, 15.11.2026)."""
 import numpy as np
 import pytest
-from scipy.signal import welch as scipy_welch, get_window
+
+# V22.8: scipy is only the reference here (the program does not need it
+# since V22.6): without it, as in a clean install, these tests are skipped
+pytest.importorskip('scipy')
+from scipy.signal import welch as scipy_welch, get_window  # noqa: E402
 
 from wwb_scanner.scanner import psd
 

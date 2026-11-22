@@ -101,7 +101,30 @@ def install_error_hooks():
         setattr(threading, 'excepthook', thook)
 
 def on_app_quit():
+    """V22.8 (external audit A5): a scan still running when the window
+    closes is stopped and waited for (scanner.shutdown_all). Only when its
+    thread hangs in a USB call does the process end at once: Qt would end it
+    anyway (a thread destroyed while running, 0xC0000409), and closing the
+    dongle under that call could corrupt memory."""
     logger.info('exiting application')
+    try:
+        ok = scanner.shutdown_all()
+    except Exception:
+        logger.exception('stopping the scan at exit')
+        ok = False
+    if not ok:
+        logger.error('exiting with a scan thread still in a USB call: the dongle is left open; '
+                     'unplug it and plug it back in')
+        exit_now(1)
+
+
+def exit_now(code):
+    """End the process without Python's clean-up (see on_app_quit)."""
+    try:
+        logging.shutdown()
+    except Exception:
+        pass
+    os._exit(code)
 
 def get_qmsg_levelname(mode):
     return qt.msg_level_name(mode)

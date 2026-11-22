@@ -17,6 +17,13 @@ V22.0 (audit 16.11, item 1): one schema for the whole program.
 """
 from wwb_scanner.utils.config import Config
 
+# V22.8 (external audit B7): the range a scan may cover, MHz. RTL-SDR Blog V4
+# datasheet: 500 kHz to 1.766 GHz (below 28.8 MHz through its built-in
+# upconverter, the driver does it; the R828D tuner itself: 24-1766 MHz).
+# main.MAX_TUNER_FREQ_HZ is the same upper limit.
+MIN_FREQ_MHZ = 0.5
+MAX_FREQ_MHZ = 1766.
+
 # The tested configuration in the units of the scanner core.
 TESTED = dict(
     sample_rate=2.4e6,
@@ -63,6 +70,22 @@ class ScanConfig(Config):
             return [(float(a), float(b)) for a, b in self.scan_ranges]
         lo, hi = self.scan_range
         return [(float(lo), float(hi))]
+    def out_of_range(self):
+        """V22.8 (external audit B7): None, or the text when a range of this
+        scan is outside what the dongle tunes (0, -100 or 2000 MHz were
+        accepted and scanned). Ranges that are not numbers are left to check()."""
+        try:
+            segs = self.segments()
+        except (TypeError, ValueError):
+            return None
+        inf = float('inf')
+        for lo, hi in segs:
+            if lo != lo or hi != hi or abs(lo) == inf or abs(hi) == inf:
+                continue
+            if lo < MIN_FREQ_MHZ or hi > MAX_FREQ_MHZ:
+                return ('The dongle scans %g-%g MHz: %g-%g MHz is outside that range.'
+                        % (MIN_FREQ_MHZ, MAX_FREQ_MHZ, lo, hi))
+        return None
     def check(self):
         """None, or why these settings can not be scanned (text)."""
         inf = float('inf')
@@ -71,6 +94,9 @@ class ScanConfig(Config):
                 return 'Start Freq and End Freq must be numbers (MHz).'
             if hi <= lo:
                 return 'End Freq (%g MHz) must be above Start Freq (%g MHz).' % (hi, lo)
+        why = self.out_of_range()
+        if why:
+            return why
         s = self.sampling
         if not (s.sample_rate > 0 and s.samples_per_sweep > 0 and s.sweeps_per_scan > 0):
             return 'sample rate, samples per sweep and sweeps per scan must be above 0'

@@ -52,12 +52,25 @@ def is_equal_spacing(nfft, fs, step_size):
 class StopScanner(Exception):
     pass
 
+class ScanFailed(Exception):
+    """V22.8: the scan can not give a result; the text says why (for the
+    user, without a traceback in the log)."""
+
+class ScanSettingsError(ScanFailed, ValueError):
+    """V22.8: settings that can not be scanned (ScanConfig.check)."""
+
 class ScannerBase(JSONMixin):
     WINDOW_TYPES = WINDOW_TYPES
     def __init__(self, **kwargs):
         self._running = threading.Event()
         self._stopped = threading.Event()
         self.stop_requested = False     # V21.1: set by request_stop()
+        # V22.8 (external audit A6): Stop while the dongle is being opened
+        # (~1.6 s on the PC) is kept; the lock makes "check Stop, then run"
+        # one step against request_stop()
+        self._stop_lock = threading.Lock()
+        self._run_begun = False
+        self.stopped_early = False      # Stop came before the first tile
         self._current_freq = None
         self._progress = 0.
         # V22.0 (audit 16.11, items 1-2): no settings given -> the tested
@@ -190,29 +203,70 @@ class ScannerBase(JSONMixin):
                 break
             self.sample_collection.build_sample_set(float(c))
         logger.info('scan of %s: %d tiles', self.range_text(), len(centres))
+    def _begin_run(self):
+        """V22.8: the start of a run. The same Scanner run again starts with
+        a clean Stop state (before, ``_stopped`` stayed set for ever)."""
+        with self._stop_lock:
+            if self._stopped.is_set():
+                self._stopped.clear()
+                self.stop_requested = False
+                self.stopped_early = False
+            self._run_begun = True
+    def _set_running(self, running):
+        """V22.8 (audit A6): ``running.set()`` unless Stop came first (then
+        False). One step under the lock, so a Stop in between is not lost."""
+        with self._stop_lock:
+            if self.stop_requested:
+                return False
+            running.set()
+            return True
+    def _stopped_before_start(self):
+        logging.getLogger('wwb_scanner.status').info(
+            'Scan %s stopped before the first tile: nothing measured', self.range_text())
     def run_scan(self):
         """Never raises: an error ends the scan (what was measured is kept),
         so the window does not stay in the "running" state."""
+        self._begin_run()
         running = self._running
         self.error = None
         try:
+            self._check_ranges()
             self._run_scan(running)
         except Exception as exc:
             self.error = exc
             # shown in the window (status line + dialog) and in the log file
-            logger.error('Scan failed: %s', exc, exc_info=True)
+            logger.error('Scan failed: %s', exc, exc_info=not isinstance(exc, ScanFailed))
             events.console('!!! Scan failed: %r' % (exc,))
         finally:
             running.clear()
             self.sample_collection.stopped.set()
             self._stopped.set()
+    def _check_ranges(self):
+        """V22.8 (external audit B7): the core checks the limits of the dongle
+        itself (the window and the service do it too); other problems of the
+        range are named by build_sample_sets as before."""
+        why = self.config.out_of_range()
+        if why:
+            raise ScanSettingsError(why)
+    def _nothing_measured(self, coll):
+        """V22.8 (external audit B7): a scan without a single measured point
+        is an error, not a finished scan (it was saved as one)."""
+        why = getattr(coll, 'abort_reason', '') or ''
+        if why:
+            return ScanFailed('The scan measured nothing: %s' % why)
+        if getattr(coll, 'aborted', False):
+            return ScanFailed('The scan measured nothing: the dongle stopped answering. Unplug it, '
+                              'plug it back in and start again')
+        return ScanFailed('The scan measured nothing: no tile gave data (tuner not locked or USB '
+                          'errors, see the log). Unplug the dongle, plug it back in and start again')
     def _run_scan(self, running):
         t_start = time.time()
-        self.stop_requested = False
         self.build_sample_sets()
         self.events.emit('scan_started', name=self.spectrum.name, ranges=[list(s) for s in self.segments],
                          tiles=len(self.sample_collection.sample_sets))
-        running.set()
+        if not self._set_running(running):
+            self._stopped_before_start()
+            return
         self.sample_collection.scan_all_freqs()
         self.sample_collection.stopped.wait()
         # V21.1 (audit B5): a scan ended by Stop is finished like any other
@@ -225,6 +279,8 @@ class ScannerBase(JSONMixin):
                 'Scan %s stopped%s', self.range_text(),
                 '' if self.spectrum.sample_data.size else ' before the first tile: nothing measured')
             return
+        if not self.spectrum.sample_data.size:
+            raise self._nothing_measured(self.sample_collection)
         if running.is_set() or stopped_by_user:
             t0 = time.time()
             events.console('scan finished, cropping...')
@@ -249,13 +305,19 @@ class ScannerBase(JSONMixin):
                     what, time.time() - t_start,
                     float(np.max(sd['frequency'])) if sd.size else 0., done, total, clean_note)
             elif getattr(coll, 'aborted', False):
-                logging.getLogger('wwb_scanner.status').info(
-                    'Scan %s stopped after %.0f s (dongle error), measured part kept',
-                    what, time.time() - t_start)
+                # V22.8: the reason when the scan knows it (the gain did not come back)
+                reason = getattr(coll, 'abort_reason', '') or 'dongle error'
+                logging.getLogger('wwb_scanner.status').warning(
+                    'Scan %s stopped after %.0f s (%s), measured part kept',
+                    what, time.time() - t_start, reason)
             elif getattr(coll, 'missing_tiles', None):
-                logging.getLogger('wwb_scanner.status').info(
-                    'Scan %s done in %.0f s, %d tile(s) without data',
-                    what, time.time() - t_start, len(coll.missing_tiles))
+                # V22.8 (external audit B7): a gap in the scan is a warning
+                # (it was an info line): WWB shows a straight line there
+                logging.getLogger('wwb_scanner.status').warning(
+                    'Scan %s done in %.0f s, %d tile(s) without data: the scan has a gap at %s MHz',
+                    what, time.time() - t_start, len(coll.missing_tiles),
+                    ', '.join('%.1f' % (k / 1e6) for k in sorted(coll.missing_tiles)[:4]) +
+                    (' ...' if len(coll.missing_tiles) > 4 else ''))
             else:
                 # V20: a band that lost sensitivity next to a strong signal is
                 # named in the last message (it stays in the status line)
@@ -268,13 +330,24 @@ class ScannerBase(JSONMixin):
         """V21.1 (audit B4): ask the scan to end and return at once. The scan
         thread finishes the tile it is reading (a hanging USB read: up to
         READ_TIMEOUT), then crops, cleans and saves what was measured.
-        Returns False when no scan is running."""
-        if not self._running.is_set():
+        Returns False when no scan is running.
+        V22.8 (external audit A6): a Stop while the scan is starting (the
+        dongle is being opened, ~1.6 s on the PC) is kept, and the scan ends
+        before its first tile; before, it was lost and the whole range was
+        scanned."""
+        with self._stop_lock:
+            if self._running.is_set():
+                self.stop_requested = True
+                self._running.clear()
+                self.sample_collection.scanning.clear()     # as cancel(), without waiting
+                return True
+            if self._run_begun and not self._stopped.is_set():
+                self.stop_requested = True
+                self.stopped_early = True
+                self.sample_collection.scanning.clear()
+                logger.info('Stop while the scan is starting: it ends before the first tile')
+                return True
             return False
-        self.stop_requested = True
-        self._running.clear()
-        self.sample_collection.scanning.clear()     # as cancel(), without waiting
-        return True
     def stop_scan(self):
         """Stop and wait until the scan thread is done (scripts, tests)."""
         if not self.request_stop():
@@ -532,11 +605,22 @@ class Scanner(ScannerBase):
             gains = self._gains = self.get_gains()
         return gains
     def get_gains(self):
-        self.sdr_wrapper.enable_scanner_updates = False
-        with self.sdr_wrapper:
+        """The gain table of the dongle.
+        V22.8 (external audit B2): the settings of the dongle are switched
+        on again whatever happens (an error left them off for every later
+        open), and a dongle the scan has open is only asked, never closed
+        here (``with`` closed it in the middle of a scan)."""
+        wrapper = self.sdr_wrapper
+        if wrapper.sdr is not None:
             rx = self.receiver
-            gains = None if rx is None else [float(g) for g in rx.gains()]
-        self.sdr_wrapper.enable_scanner_updates = True
+            return None if rx is None else [float(g) for g in rx.gains()]
+        wrapper.enable_scanner_updates = False
+        try:
+            with wrapper:
+                rx = self.receiver
+                gains = None if rx is None else [float(g) for g in rx.gains()]
+        finally:
+            wrapper.enable_scanner_updates = True
         return gains
     def get_nearest_gain(self, gain):
         gains = self.gains
@@ -548,43 +632,75 @@ class Scanner(ScannerBase):
         # V18.1 (audit 1.2): a USB call of an earlier scan never returned.
         # Opening the dongle again would only hang another thread.
         from wwb_scanner.scanner.sample_processing import stuck_usb_calls
+        from wwb_scanner.scanner import watchdog
+        self._begin_run()
+        self._refused = False
+        self._open_error = None
         if stuck_usb_calls():
             self._refused = True
             return super(Scanner, self).run_scan()
         keep_awake(True)
+        # V22.8 (external audit A7): a scan that stops moving leaves the
+        # stacks of all threads in the log (from opening to closing the dongle)
+        dog = watchdog.Watchdog('scan').start()
         try:
-            with self.sdr_wrapper:
-                if self.sdr is None:
-                    self._wait_for_dongle()
+            try:
+                # V22.8: not when Stop came already or the range is wrong
+                # (the base class says why, audit B7)
+                if not self.stop_requested and not self.config.out_of_range():
+                    try:
+                        self.sdr_wrapper.open_sdr()
+                    except Exception as exc:
+                        # V22.8 (audit A1): the set-up failed; the dongle is closed
+                        self._open_error = exc
+                    if self.sdr is None and self._open_error is None and not self.stop_requested:
+                        self._wait_for_dongle()
                 super(Scanner, self).run_scan()
+            finally:
+                try:
+                    self.sdr_wrapper.close_sdr()
+                except Exception:
+                    logger.exception('closing the dongle failed')
         finally:
+            dog.stop()
             keep_awake(False)
     def _wait_for_dongle(self):
         """V20.4: just after a USB error the dongle is "not found or busy"
-        for a few seconds. Try again for up to REOPEN_WAIT_S before failing."""
+        for a few seconds. Try again for up to REOPEN_WAIT_S before failing.
+        V22.8: Stop ends the waiting."""
         from wwb_scanner.scanner import sample_processing as sp
         events.console('dongle not found or busy, waiting up to %.0f s...' % sp.REOPEN_WAIT_S)
         deadline = time.monotonic() + sp.REOPEN_WAIT_S
-        while self.sdr is None and time.monotonic() < deadline:
+        while self.sdr is None and time.monotonic() < deadline and not self.stop_requested:
             time.sleep(sp.REOPEN_PAUSE_S)
             try:
                 self.sdr_wrapper.open_sdr()
-            except Exception:
-                logger.exception('opening the dongle failed')
+            except Exception as exc:
+                logger.warning('opening the dongle failed: %s', exc)
+                self._open_error = exc
+                break
         if self.sdr is not None:
             events.console('dongle found')
     def _run_scan(self, running):
         if getattr(self, '_refused', False):
             raise IOError('The dongle stopped answering in the last scan. Unplug it, plug it back '
                           'in and start again; if this message comes back, restart the program')
+        if self.stop_requested:
+            self._stopped_before_start()          # V22.8 (audit A6)
+            return
         if self.sdr is None:
+            if self._open_error is not None:
+                raise ScanFailed('The dongle could not be set up (%s). Check Device Settings '
+                                 '(sample rate), unplug the dongle, plug it back in and start '
+                                 'again' % (self._open_error,))
             raise IOError('RTL-SDR dongle not found or busy (unplug/replug it, '
                           'close other SDR programs)')
         # V22.7: own gain per band (gain_plan.py): a short probe first
         self.gain_plan = None
         if self._band_gain_wanted():
-            self.stop_requested = False
-            running.set()               # Stop works during the probe
+            if not self._set_running(running):  # Stop works during the probe
+                self._stopped_before_start()
+                return
             st = logging.getLogger('wwb_scanner.status')
             st.info('Choosing the gain of every band (short probe)...')
             try:
@@ -594,6 +710,16 @@ class Scanner(ScannerBase):
             if self.stop_requested:
                 st.info('Scan %s stopped during the gain probe: nothing measured', self.range_text())
                 return
+            if self.gain_plan is None or not self.gain_plan.banded:
+                # V22.8 (audit B2): one gain for the whole scan - it must be the
+                # gain of the scan again, whatever the probe left set
+                from wwb_scanner.scanner.sample_processing import set_gain_back
+                rx = self.receiver
+                if getattr(rx, 'is_open', True) and \
+                        not set_gain_back(None, rx, float(self.gain), 'the gain probe', stop=False):
+                    raise ScanFailed('the gain could not be set back to %s dB after the gain probe: '
+                                     'nothing measured. Unplug the dongle, plug it back in and start '
+                                     'again' % self.gain)
         if self.gain_plan is not None and self.gain_plan.banded:
             self._run_banded(running, self.gain_plan)
         else:
@@ -673,8 +799,7 @@ class Scanner(ScannerBase):
                 self.sample_collection = SampleCollection(scanner=self)
                 self.build_sample_sets()
                 self._live = (main, gain, g0, drop)
-                running.set()
-                if self.stop_requested:
+                if not self._set_running(running):     # V22.8: one step with Stop
                     break
                 self.sample_collection.scan_all_freqs()
                 self.sample_collection.stopped.wait()
@@ -705,14 +830,14 @@ class Scanner(ScannerBase):
             self.spectrum = main
             conf.scan_range, conf.scan_ranges = saved
             self.device_config.gain = g0
-            try:
-                if getattr(rx, 'is_open', True):
-                    run_with_timeout(setattr, TUNE_TIMEOUT, rx, 'gain', g0)
-            except Exception:
-                logger.exception('could not set the gain back to %s dB', g0)
+            from wwb_scanner.scanner.sample_processing import set_gain_back
+            set_gain_back(None, rx, g0, 'the scan of the bands', stop=False)
         self._merge_band_collections(colls)
         stopped_by_user = bool(self.stop_requested)
         if not parts:
+            if not stopped_by_user:
+                # V22.8 (external audit B7): nothing measured is an error
+                raise self._nothing_measured(colls[-1] if colls else self.sample_collection)
             st.info('Scan %s stopped before the first tile: nothing measured', self.range_text())
             return
         info = self._put_bands(main, parts, infos, plan)

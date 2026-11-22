@@ -142,7 +142,7 @@ def test_tile_limit(monkeypatch, tmpdir):
     coll = sc.sample_collection
     assert coll.peak_checks and len(set(c['tile'] for c in coll.peak_checks)) <= 2
     assert coll.peak_check_skipped > 0
-    assert 'peak(s) next to strong carriers not checked (tile limit)' in coll.overload_note
+    assert 'peak(s) next to strong carriers not checked (time limit' in coll.overload_note
 
 
 def test_dongle_closed_during_the_check(monkeypatch, tmpdir):

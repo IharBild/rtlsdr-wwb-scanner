@@ -216,8 +216,9 @@ def test_K15_averaging_law(monkeypatch, tmpdir):
     assert 3.0 <= r <= 5.0
 
 
-# K17/K20: low edge of the range, 0-35 MHz (V4 HF upconverter area)
-@pytest.mark.parametrize('rng', [(0, 35), (24, 31), (28, 30), (0, 1)])
+# K17/K20: low edge of the range, 0.5-35 MHz (V4 HF upconverter area).
+# V22.8: the V4 tunes from 500 kHz (datasheet); 0 MHz is refused (test_v228)
+@pytest.mark.parametrize('rng', [(0.5, 35), (24, 31), (28, 30), (0.5, 1.5)])
 def test_K20_low_edge(monkeypatch, tmpdir, rng):
     air = sim.Air(noise=0.03).tone(28.8e6, 0.02)
     f, y, *_ = scan(monkeypatch, tmpdir, rng[0], rng[1], air)

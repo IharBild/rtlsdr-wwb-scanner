@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 from wwb_scanner.core import JSONMixin
 from wwb_scanner.scanner.scan_timing import ScanTiming
+from wwb_scanner.scanner import watchdog as _watchdog
 
 _window_cache = {}
 def make_window(name, size):
@@ -95,22 +96,73 @@ def stuck_usb_calls():
 def run_with_timeout(func, timeout, *args):
     """Call ``func`` in a helper thread. If it does not return within
     ``timeout`` seconds raise SdrTimeout, so the scan can stop instead of
-    freezing the program. (A stuck USB call itself cannot be killed.)"""
+    freezing the program. (A stuck USB call itself cannot be killed.)
+    V22.8: every call tells the watchdog (watchdog.py) when it starts and ends."""
     box = {}
     def target():
         try:
             box['result'] = func(*args)
         except BaseException as exc:
             box['exc'] = exc
-    t = threading.Thread(target=target, daemon=True)
+    _watchdog.beat()
+    t = threading.Thread(target=target, daemon=True, name='wwb-usb-call')
     t.start()
     t.join(timeout)
+    _watchdog.beat()
     if t.is_alive():
         _STUCK.append(t)
         raise SdrTimeout('no answer from the dongle in %s s' % timeout)
     if 'exc' in box:
         raise box['exc']
     return box.get('result')
+
+
+def timing_report_path(scanner):
+    """V22.8: the time report of a scan goes next to the history the scan is
+    saved to (its folder); None (the data folder of the process) for the
+    default history or a scan that is not saved. Before V22.8 a scan with
+    a history somewhere else still wrote into the real data folder."""
+    import os
+    h = getattr(scanner, 'history', None)
+    if h is None:
+        return None
+    try:
+        if h == 'default':
+            from wwb_scanner.utils.dbstore import db_store as h
+        d = os.path.dirname(str(h.scan_db_path))
+        if d and not os.path.isdir(d):
+            os.makedirs(d, exist_ok=True)
+        return os.path.join(d, 'wwb_scan_timing.txt')
+    except Exception:
+        return None
+
+
+def set_gain_back(coll, rx, g0, after, stop=True):
+    """V22.8 (external audit B2): set the gain of the scan back after a
+    reading with less gain. Before V22.8 a failure was only written to the
+    log: the next tiles were then measured with the low gain and came out
+    lower, with nothing to show it. Now it is an error of the scan: with
+    ``stop`` the scan ends (what was measured before is kept) and the reason
+    is in the status line. Never on a closed handle (V20.4). Returns True
+    when the gain is back."""
+    if not getattr(rx, 'is_open', True):
+        return False           # a new handle (reopen) gets the gain of the scan when it opens
+    if stuck_usb_calls():
+        return False           # never another call on a handle that hangs (the scan stops already)
+    try:
+        run_with_timeout(setattr, TUNE_TIMEOUT, rx, 'gain', g0)
+        return True
+    except Exception as exc:
+        text = ('the gain could not be set back to %s dB after %s (%s): the rest of the scan '
+                'would be measured with the wrong gain' % (g0, after, exc))
+        if coll is not None:
+            coll.gain_lost = text
+            if stop:
+                coll.aborted = True
+                coll.abort_reason = text
+        logger.error('Scan stopped: %s; the part measured before is kept' % text if stop else
+                     'Peak check: %s' % text, exc_info=not isinstance(exc, SdrTimeout))
+        return False
 
 # V17: a clipped tile is read again with lower gain (these steps down, until
 # it is no longer clipped) and scaled back by the gain difference. Such a
@@ -234,8 +286,15 @@ VERIFY_CAND_DB = 10.          # narrow peak this far above the floor is checked 
 VERIFY_BELOW_SOURCE_DB = 6.   # ... if at least this much weaker than the 2nd strongest carrier
 VERIFY_NARROW_HZ = 150e3      # narrow: this far away on both sides ...
 VERIFY_NARROW_DB = 6.         # ... at least this much lower
-VERIFY_MAX_TILES = 30         # tiles read again (3 readings each, ~0.2 s per tile)
-VERIFY_MAX_SHARE = 0.10
+# V22.8 (external audit B5): how many tiles are read again is set by time,
+# not by a fixed 30 tiles (a full 31-1766 MHz scan left 60 peaks unchecked):
+# the check may take VERIFY_BUDGET_SHARE of the time the scan took, at
+# least VERIFY_MIN_BUDGET_S and at most VERIFY_MAX_BUDGET_S. A tile of the
+# check is 3 readings, each as long as a tile of the scan.
+VERIFY_BUDGET_SHARE = 0.15
+VERIFY_MIN_BUDGET_S = 10.
+VERIFY_MAX_BUDGET_S = 60.
+VERIFY_MAX_TILES = 400        # upper limit whatever the time
 VERIFY_MIN_TILES = 6
 VERIFY_STABLE_DB = 3.         # the two normal readings (and the two low ones) agree
 VERIFY_REAL_TOL_DB = 3.       # a real signal: low reading within this of the normal one
@@ -469,6 +528,7 @@ class SampleSet(JSONMixin):
     def window_size(self):
         return getattr(self.scanner, 'window_size', NPERSEG)
     def _tick(self, stage):
+        _watchdog.beat()                # V22.8: the scan moves
         collection = self.collection
         timing = getattr(collection, 'timing', None)
         if timing is not None:
@@ -647,11 +707,9 @@ class SampleSet(JSONMixin):
         except Exception:
             logger.exception('auto gain at %s Hz failed, clipped tile kept', self.center_frequency)
         finally:
-            try:
-                if getattr(rx, 'is_open', True):     # V20.4: never on a closed handle
-                    run_with_timeout(setattr, TUNE_TIMEOUT, rx, 'gain', g0)
-            except Exception:
-                logger.exception('could not set the gain back to %s dB', g0)
+            # V22.8 (audit B2): a gain that does not come back stops the scan
+            set_gain_back(self.collection, rx, g0,
+                          'the auto gain at %.3f MHz' % (self.center_frequency / 1e6))
         if best is None:
             return iq
         x, g_set, cr = best
@@ -905,9 +963,12 @@ class SampleCollection(JSONMixin):
         self.sample_sets = {}
         self.timing = ScanTiming()
         self.aborted = False
+        self.abort_reason = ''       # V22.8: why the scan stopped by itself (status line)
+        self.gain_lost = ''          # V22.8 (audit B2): the gain did not come back
         self.tile_errors = 0
         self.processed_keys = set()
         self.missing_tiles = []
+        self.t_scan_start = None     # V22.8: time budget of the peak check
     def calc_progress(self):
         num_sets = len(self.sample_sets)
         if not num_sets:
@@ -930,9 +991,15 @@ class SampleCollection(JSONMixin):
         return sample_set
     def scan_all_freqs(self):
         self.scanning.set()
+        if getattr(self.scanner, 'stop_requested', False):
+            # V22.8 (audit A6): Stop came between the start and this line
+            self.scanning.clear()
         self.reopened = 0        # V20.4: dongle opened again after a USB error
         complete_events = set()
         self.aborted = False
+        self.abort_reason = ''
+        self.gain_lost = ''
+        self.t_scan_start = time.monotonic()
         self.tile_errors = 0
         self.processed_keys = set()
         keys = sorted(self.sample_sets.keys())
@@ -940,8 +1007,9 @@ class SampleCollection(JSONMixin):
             if not self.scanning.is_set():
                 break
             if self.aborted:
-                logger.error('Scan stopped: the dongle stopped answering. '
-                             'Unplug and replug it, then start again.')
+                if not self.abort_reason:       # V22.8: the reason was told already
+                    logger.error('Scan stopped: the dongle stopped answering. '
+                                 'Unplug and replug it, then start again.')
                 break
             if n % 20 == 0:
                 events.console('scan tile %d/%d at %.3f MHz' % (n + 1, len(keys), key / 1e6))
@@ -975,7 +1043,7 @@ class SampleCollection(JSONMixin):
         self.scanning.clear()
         self.report_pll()
         self.report_overload()
-        self.timing.write_report()
+        self.timing.write_report(timing_report_path(self.scanner))
         self.stopped.set()
     def reopen_dongle(self):
         """V20.4: after a USB error pyrtlsdr has closed the dongle. Open it
@@ -1144,12 +1212,9 @@ class SampleCollection(JSONMixin):
         except Exception:
             logger.exception('reading tiles next to a strong carrier failed, they are kept as measured')
         finally:
-            try:
-                if getattr(rx, 'is_open', True):     # V20.4: never on a closed handle
-                    run_with_timeout(setattr, TUNE_TIMEOUT, rx, 'gain', g0)
-            except Exception:
-                logger.exception('could not set the gain back to %s dB', g0)
-        self.neighbours = sorted(k for k in done if self.sample_sets[k].neighbour)
+            # V22.8 (audit B2): the peak check after this needs the gain of the scan
+            set_gain_back(self, rx, g0, 'reading the tiles next to strong carriers')
+        self.neighbours =sorted(k for k in done if self.sample_sets[k].neighbour)
         self.zone_rereads = sorted(k for k in done if self.sample_sets[k].zone_reread)
         self.finish_low_gain()
 
@@ -1347,6 +1412,18 @@ class SampleCollection(JSONMixin):
             return False
         return True
 
+    def _verify_budget(self):
+        """V22.8 (audit B5): (seconds the peak check may take, seconds one
+        tile of the check takes - 3 readings - judged by the scan)."""
+        t0 = getattr(self, 't_scan_start', None)
+        done = len(getattr(self, 'processed_keys', ()) or ())
+        scan_s = (time.monotonic() - t0) if t0 is not None else 0.
+        per_reading = scan_s / done if done and scan_s > 0 else 0.1
+        per_reading = min(max(per_reading, 0.02), 2.)
+        budget = min(VERIFY_MAX_BUDGET_S, max(VERIFY_MIN_BUDGET_S, VERIFY_BUDGET_SHARE * scan_s))
+        self.peak_check_budget = budget
+        return budget, 3. * per_reading
+
     def verify_peaks(self):
         """V21.2: second-gain check of narrow peaks next to strong carriers
         (see VERIFY_DROP_DB). Only marks: the scan data are not changed.
@@ -1358,6 +1435,8 @@ class SampleCollection(JSONMixin):
         self.peak_checks = []
         self.peak_check_skipped = 0
         self.peak_check_info = ''
+        self.peak_check_late = False       # V22.8: the time limit cut the check short
+        self.peak_check_budget = None      # V22.8: seconds the check may take
         if self.aborted or not self.scanning.is_set() or not self._verify_enabled():
             return
         spectrum = getattr(self.scanner, 'spectrum', None)
@@ -1437,8 +1516,8 @@ class SampleCollection(JSONMixin):
             if best is not None:
                 c['tile'], c['bin'] = best[1], best[2]
         cl = [c for c in cl if 'tile' in c]
-        n_tiles = len(self.sample_sets)
-        limit = min(VERIFY_MAX_TILES, max(VERIFY_MIN_TILES, int(VERIFY_MAX_SHARE * n_tiles)))
+        budget, per_tile = self._verify_budget()
+        limit = min(VERIFY_MAX_TILES, max(VERIFY_MIN_TILES, int(budget / per_tile)))
         order = []
         for c in cl:
             if c['tile'] not in order:
@@ -1472,6 +1551,12 @@ class SampleCollection(JSONMixin):
         g_set_low = g_low
         was_aborted = self.aborted
         t_check = time.monotonic()          # V21.4.1: time of the check in the console
+        # V22.8 (audit B5): the time limit holds even when the dongle is
+        # slower than the scan promised: the first reading of a tile takes
+        # about a third of the time, tiles it did not reach are left out
+        # of the other two readings (and counted as not checked)
+        first_until = t_check + budget / 3.
+        hard_until = t_check + budget * 1.5
         stuck = False
         try:
             for name, g in (('l1', g_low), ('n2', g0), ('l2', g_low)):
@@ -1486,6 +1571,12 @@ class SampleCollection(JSONMixin):
                 for k in keys:
                     if self.aborted or not self.scanning.is_set() or not getattr(rx, 'is_open', True):
                         break
+                    if name != 'l1' and 'l1' not in reads[k]:
+                        continue
+                    now = time.monotonic()
+                    if (name == 'l1' and now > first_until and reads[keys[0]]) or now > hard_until:
+                        self.peak_check_late = True
+                        break
                     reads[k][name] = self.sample_sets[k].read_check(rx)
         except SdrTimeout as exc:
             logger.error('second-gain check of the peaks: %s', exc)
@@ -1498,15 +1589,21 @@ class SampleCollection(JSONMixin):
                 # only the check is cut short - the scan is not "stopped"
                 stuck = True
                 self.aborted = False
-            try:
-                # never on a closed handle; not on a hanging one either
-                if not stuck and getattr(rx, 'is_open', True):
-                    run_with_timeout(setattr, TUNE_TIMEOUT, rx, 'gain', g0)
-            except Exception:
-                logger.exception('could not set the gain back to %s dB', g0)
+            # never on a closed handle; not on a hanging one either. Every tile
+            # is measured by now: a gain that does not come back is an error,
+            # but the scan is kept (V22.8, audit B2)
+            if not stuck:
+                set_gain_back(self, rx, g0, 'the peak check', stop=False)
         if stuck:
             self.peak_check_info = 'peak check stopped: the dongle did not answer in time'
 
+        if self.peak_check_late:
+            # V22.8 (audit B5): peaks of the tiles the time limit cut off are
+            # "not checked", not "unclear"
+            full = set(k for k, r in reads.items() if all(n in r for n in ('l1', 'n2', 'l2')))
+            late = [c for c in cl if c['tile'] not in full]
+            self.peak_check_skipped += len(late)
+            cl = [c for c in cl if c['tile'] in full]
         out = []
         for c in cl:
             k, j = c['tile'], c['bin']
@@ -1793,8 +1890,11 @@ class SampleCollection(JSONMixin):
         if getattr(self, 'peak_check_info', ''):
             note = (note + '; ' if note else '') + self.peak_check_info
         if getattr(self, 'peak_check_skipped', 0):
+            # V22.8 (audit B5): the check is limited by time, not by tiles
+            budget = getattr(self, 'peak_check_budget', None)
             note = (note + '; ' if note else '') + \
-                '%d peak(s) next to strong carriers not checked (tile limit)' % self.peak_check_skipped
+                '%d peak(s) next to strong carriers not checked (time limit%s)' % (
+                    self.peak_check_skipped, ' %.0f s' % budget if budget else '')
         if getattr(self, 'neighbours_skipped', 0):
             note = (note + '; ' if note else '') + \
                 '%d tile(s) next to strong carriers not checked' % self.neighbours_skipped

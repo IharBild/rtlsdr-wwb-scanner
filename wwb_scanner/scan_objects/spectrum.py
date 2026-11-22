@@ -48,6 +48,18 @@ class Spectrum(JSONMixin):
         info = kwargs.get('cleanup')
         if isinstance(info, dict):
             self.cleanup_info = info
+        # V22.8 (external audit B1): marks and values as measured (before the
+        # clean scan) come back from the history with the scan
+        marks = kwargs.get('marks')
+        if isinstance(marks, dict):
+            from wwb_scanner.utils.dbstore import MARK_KEYS
+            for k in MARK_KEYS:
+                v = marks.get(k)
+                if isinstance(v, list):
+                    setattr(self, k, [dict(x) for x in v if isinstance(x, dict)])
+        raw = kwargs.get('raw_dbFS')
+        if raw is not None:
+            self.raw_dbFS = raw
         eid = kwargs.get('scan_config_eid')
         config = kwargs.get('scan_config')
         if config is not None:

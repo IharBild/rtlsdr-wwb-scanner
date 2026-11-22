@@ -476,9 +476,17 @@ def _scalar_list(v):
     return isinstance(v, list) and all(not isinstance(x, (dict, list)) for x in v)
 
 
+# V22.8 (external audit A3): the raw value of a point without data in sdb3
+# (header "NoDataValue", the value WWB writes itself). Before V22.8 a gap got
+# NO_DATA_DB * scale = -140, which WWB reads as a measured -140 dBm (free).
+SDB3_NO_DATA = -1400
+
+
 def sdb3_bytes(freqs_khz, dB, title, color='#38ad6b', dt=None, scale_factor=1,
-               model=None, creator='rtlsdr-wwb-scanner', curve_name='Default curve'):
-    """Whole sdb3 file for one sweep on a regular grid (kHz)."""
+               model=None, creator='rtlsdr-wwb-scanner', curve_name='Default curve',
+               no_data=None):
+    """Whole sdb3 file for one sweep on a regular grid (kHz). ``no_data``:
+    mask of the points without data (written as NoDataValue)."""
     freqs_khz = np.asarray(freqs_khz, dtype=np.int64)
     steps = np.unique(np.diff(freqs_khz))
     if steps.size != 1 or steps[0] <= 0:
@@ -498,7 +506,7 @@ def sdb3_bytes(freqs_khz, dB, title, color='#38ad6b', dt=None, scale_factor=1,
         ],
         'BitWidth': 16,
         'FreqUnits': 'KHz',
-        'NoDataValue': -1400,
+        'NoDataValue': SDB3_NO_DATA,
         'PeriodicSpecialSweeps': [
             {'Interval': 40, 'Type': 'Periodic running peakhold'},
             {'Interval': 100, 'Type': 'Periodic interval peakhold'},
@@ -513,7 +521,13 @@ def sdb3_bytes(freqs_khz, dB, title, color='#38ad6b', dt=None, scale_factor=1,
     }
     v = np.asarray(dB, dtype=np.float64) * scale_factor
     q = np.sign(v) * np.floor(np.abs(v) + 0.5)          # half away from zero, like WWB
-    q = np.clip(q, -32768, 32767).astype('>i2')
+    q = np.clip(q, -32768, 32767)
+    if no_data is not None:
+        nd = np.asarray(no_data, dtype=bool)
+        if nd.shape != q.shape:
+            raise ValueError('no_data mask does not fit the points')
+        q[nd] = SDB3_NO_DATA
+    q = q.astype('>i2')
     rec = b'@Swp' + struct.pack('>I', 1) + struct.pack('>I', 0) + q.tobytes()
     rec += struct.pack('>H', _crc16_arc_np(rec))
     ext = {'Creator': creator, 'UserCurveColors': [color]}
@@ -535,9 +549,12 @@ class WWB3Exporter(BaseExporter):
         grid, values, step = wwb_points(self.spectrum)
         if np.unique(np.diff(grid)).size != 1:
             grid, values = wwb_grid(self.spectrum)
+        # V22.8 (audit A3): gaps of a scan of several ranges and points
+        # without a value get NoDataValue, not a level
+        no_data = np.asarray(values, dtype=np.float64) <= NO_DATA_DB
         return sdb3_bytes(grid, values, title=os.path.basename(self.filename),
                           color=self.spectrum.color.to_hex(), dt=self.dt,
-                          scale_factor=self.scale_factor)
+                          scale_factor=self.scale_factor, no_data=no_data)
     def write_file(self):
         data = self.build_data()
         with open(self.filename, 'wb') as f:
