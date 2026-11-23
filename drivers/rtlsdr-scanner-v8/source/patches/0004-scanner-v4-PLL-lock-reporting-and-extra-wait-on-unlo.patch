@@ -1,0 +1,233 @@
+From 7bc1a3da4fa62b811aa7c70f0a2129222665a86f Mon Sep 17 00:00:00 2001
+From: build <build@local>
+Date: Mon, 2 Nov 2026 12:25:23 +0100
+Subject: [PATCH 4/5] scanner-v4: PLL lock reporting and extra wait on unlock,
+ shadow invalidation on I2C failure, input switch caching after success, build
+ info
+
+---
+ include/rtl-sdr.h     | 23 +++++++++++++++++++++
+ include/tuner_r82xx.h |  7 +++++++
+ src/librtlsdr.c       | 28 +++++++++++++++++++++++++
+ src/tuner_r82xx.c     | 48 +++++++++++++++++++++++++++++++++++++++----
+ 4 files changed, 102 insertions(+), 4 deletions(-)
+
+diff --git a/include/rtl-sdr.h b/include/rtl-sdr.h
+index d88e762..05db01b 100644
+--- a/include/rtl-sdr.h
++++ b/include/rtl-sdr.h
+@@ -409,6 +409,29 @@ RTLSDR_API int rtlsdr_set_bias_tee_gpio(rtlsdr_dev_t *dev, int gpio, int on);
+ 
+ RTLSDR_API int rtlsdr_check_dongle_model(void *dev, char *manufact_check, char *product_check);
+ 
++/* ---- scanner-v4 additions (rtlsdr-wwb-scanner build) ---- */
++
++/*!
++ * Tuner PLL state after the last frequency change (R820T/R828D only).
++ * rtlsdr_set_center_freq() keeps returning 0 when the PLL did not lock
++ * (as upstream does), so a scanner should check this after every retune.
++ *
++ * \param dev the device handle given by rtlsdr_open()
++ * \param late_locks if not NULL: number of retunes since open where the PLL
++ *        locked only after the extra wait (may be NULL)
++ * \param unlocks if not NULL: number of retunes since open where the PLL
++ *        did not lock at all (may be NULL)
++ * \return 1 locked, 0 not locked, -1 no device or not an R82xx tuner
++ */
++RTLSDR_API int rtlsdr_get_tuner_pll_lock(rtlsdr_dev_t *dev, uint32_t *late_locks,
++					 uint32_t *unlocks);
++
++/*!
++ * Build identification of this library, e.g. to log which DLL is loaded.
++ * \return static string, never NULL
++ */
++RTLSDR_API const char *rtlsdr_get_build_info(void);
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/include/tuner_r82xx.h b/include/tuner_r82xx.h
+index 99d5682..08a72d8 100644
+--- a/include/tuner_r82xx.h
++++ b/include/tuner_r82xx.h
+@@ -86,6 +86,13 @@ struct r82xx_priv {
+ 	int				has_lock;
+ 	int				init_done;
+ 
++	/* scanner-v4: 1 after a failed I2C write, the shadow registers no longer
++	 * match the chip, so redundant-write skipping is disabled until re-init */
++	int				shadow_dirty;
++	/* scanner-v4: PLL statistics since open */
++	uint32_t			pll_late_locks;	/* locked only after extra wait */
++	uint32_t			pll_unlocks;	/* gave up, PLL not locked */
++
+ 	/* Store current mode */
+ 	uint32_t			delsys;
+ 	enum r82xx_tuner_type		type;
+diff --git a/src/librtlsdr.c b/src/librtlsdr.c
+index 82bab6d..fa80e89 100644
+--- a/src/librtlsdr.c
++++ b/src/librtlsdr.c
+@@ -1491,6 +1491,34 @@ int rtlsdr_check_dongle_model(void *dev, char *manufact_check, char *product_che
+ }
+ 
+ 
++/* ---- scanner-v4 additions ---- */
++#ifndef RTLSDR_BUILD_INFO
++#define RTLSDR_BUILD_INFO "rtl-sdr-blog + scanner-v4 (unknown revision)"
++#endif
++
++int rtlsdr_get_tuner_pll_lock(rtlsdr_dev_t *dev, uint32_t *late_locks,
++			      uint32_t *unlocks)
++{
++	if (!dev)
++		return -1;
++
++	if (dev->tuner_type != RTLSDR_TUNER_R820T &&
++	    dev->tuner_type != RTLSDR_TUNER_R828D)
++		return -1;
++
++	if (late_locks)
++		*late_locks = dev->r82xx_p.pll_late_locks;
++	if (unlocks)
++		*unlocks = dev->r82xx_p.pll_unlocks;
++
++	return dev->r82xx_p.has_lock ? 1 : 0;
++}
++
++const char *rtlsdr_get_build_info(void)
++{
++	return RTLSDR_BUILD_INFO;
++}
++
+ int rtlsdr_open(rtlsdr_dev_t **out_dev, uint32_t index)
+ {
+ 	int r;
+diff --git a/src/tuner_r82xx.c b/src/tuner_r82xx.c
+index 1ed291d..2397a1d 100644
+--- a/src/tuner_r82xx.c
++++ b/src/tuner_r82xx.c
+@@ -30,6 +30,18 @@
+ #include "rtlsdr_i2c.h"
+ #include "tuner_r82xx.h"
+ 
++#ifdef _WIN32
++#include <windows.h>
++#define r82xx_sleep_ms(ms) Sleep(ms)
++#else
++#include <unistd.h>
++#define r82xx_sleep_ms(ms) usleep((ms) * 1000)
++#endif
++
++/* scanner-v4: extra PLL lock checks, only on the failure path */
++#define PLL_EXTRA_CHECKS	5
++#define PLL_EXTRA_WAIT_MS	1
++
+ #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
+ #define MHZ(x)		((x)*1000*1000)
+ #define KHZ(x)		((x)*1000)
+@@ -260,6 +272,9 @@ static bool shadow_equal(struct r82xx_priv *priv, uint8_t reg, const uint8_t *va
+ {
+ 	int r = reg - REG_SHADOW_START;
+ 
++	if (priv->shadow_dirty)
++		return false;
++
+ 	if (r < 0 || len < 0 || len > NUM_REGS - r)
+ 		return false;
+ 
+@@ -297,6 +312,9 @@ static int r82xx_write(struct r82xx_priv *priv, uint8_t reg, const uint8_t *val,
+ 		if (rc != size + 1) {
+ 			fprintf(stderr, "%s: i2c wr failed=%d reg=%02x len=%d\n",
+ 				   __FUNCTION__, rc, reg, size);
++			/* scanner-v4: the shadow copy was updated before the
++			 * write, so it may not match the chip any more */
++			priv->shadow_dirty = 1;
+ 			if (rc < 0)
+ 				return rc;
+ 			return -1;
+@@ -584,8 +602,25 @@ static int r82xx_set_pll(struct r82xx_priv *priv, uint32_t freq)
+ 		}
+ 	}
+ 
++	/* scanner-v4: the upstream driver checks the lock bit right after the
++	 * write (the 10 ms wait of the original kernel driver is commented out).
++	 * Only if that fails, give the PLL a few more milliseconds. */
++	if (!(data[2] & 0x40)) {
++		for (i = 0; i < PLL_EXTRA_CHECKS; i++) {
++			r82xx_sleep_ms(PLL_EXTRA_WAIT_MS);
++			rc = r82xx_read(priv, 0x00, data, 3);
++			if (rc < 0)
++				return rc;
++			if (data[2] & 0x40) {
++				priv->pll_late_locks++;
++				break;
++			}
++		}
++	}
++
+ 	if (!(data[2] & 0x40)) {
+ 		fprintf(stderr, "[R82XX] PLL not locked!\n");
++		priv->pll_unlocks++;
+ 		priv->has_lock = 0;
+ 		return 0;
+ 	}
+@@ -1239,7 +1274,8 @@ int r82xx_set_freq(struct r82xx_priv *priv, uint32_t freq)
+ 
+ 		/* switch between tuner inputs on the RTL-SDR Blog V4 */
+ 		if (band != priv->input) {
+-			priv->input = band;
++			/* scanner-v4: priv->input is updated only after all
++			 * switching writes succeeded, so a retry redoes them */
+ 
+ 			/* activate cable 2 (HF input) */
+ 			cable_2_in = (band == HF) ? 0x08 : 0x00;
+@@ -1267,6 +1303,8 @@ int r82xx_set_freq(struct r82xx_priv *priv, uint32_t freq)
+ 
+ 			if (rc < 0)
+ 				goto err;
++
++			priv->input = band;
+ 		}
+ 	}
+ 	else if (is_rtlsdr_blog_v4l)
+@@ -1291,8 +1329,6 @@ int r82xx_set_freq(struct r82xx_priv *priv, uint32_t freq)
+ 
+ 		/* switch between tuner inputs on the RTL-SDR Blog V4L */
+ 		if (band != priv->input) {
+-			priv->input = band;
+-
+ 			cable_1_in = (band == HF) ? 0x40 : 0x00;
+ 
+ 			/* Control upconverter GPIO switch on newer batches */
+@@ -1313,6 +1349,8 @@ int r82xx_set_freq(struct r82xx_priv *priv, uint32_t freq)
+ 
+ 			if (rc < 0)
+ 				goto err;
++
++			priv->input = band;
+ 		}
+ 	}
+ 	else /* Standard R828D dongle*/
+@@ -1325,8 +1363,9 @@ int r82xx_set_freq(struct r82xx_priv *priv, uint32_t freq)
+ 
+ 		if ((priv->cfg->rafael_chip == CHIP_R828D) &&
+ 			(air_cable1_in != priv->input)) {
+-			priv->input = air_cable1_in;
+ 			rc = r82xx_write_reg_mask(priv, 0x05, air_cable1_in, 0x60);
++			if (rc >= 0)
++				priv->input = air_cable1_in;
+ 		}
+ 	}
+ 
+@@ -1458,6 +1497,7 @@ int r82xx_init(struct r82xx_priv *priv)
+ 
+ 	/* Initialize registers */
+ 	memset(priv->regs, 0, NUM_REGS);
++	priv->shadow_dirty = 0;
+ 	rc = r82xx_write(priv, 0x05,
+ 			 r82xx_init_array, sizeof(r82xx_init_array));
+ 
+-- 
+2.43.0
+

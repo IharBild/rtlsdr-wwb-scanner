@@ -43,6 +43,7 @@ KNOWN_DLL = {
     'a6616ed2829e1569e197f2039a1fc0aa296c0b5dae160f5951d45ee0e920bf73': 'scanner-v5 x64 (fa7729d, I2C retry)',
     '279fd1bdc082ea0b5100f5a27c920374833d2c003133dd9e5b2096e4169be605': 'scanner-v6 x64 (19c7b92, tuner restore, read timeout)',
     '7d2a2f11646c90ab1b19748d40acaa1be07d9604ca230d42697bcc9059cdf7de': 'scanner-v7 x64 (5049ecd, dithering + GPIO for pyrtlsdr 0.4+)',
+    '762cfed27bcd6da9fd8714416adc5d0c0e42eada6f9aa8794c6c5a4541e0abe8': 'scanner-v8 x64 (5049ecd = v7 code, libusb 1.0.30)',
 }
 
 # qa_hw check -> category of the methodology

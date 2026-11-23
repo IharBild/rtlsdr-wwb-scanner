@@ -1,0 +1,115 @@
+From 02b98304a8a48a7d48de53c3b2f3e87674276327 Mon Sep 17 00:00:00 2001
+From: rtlsdr-wwb-scanner <noreply@example.invalid>
+Date: Thu, 12 Nov 2026 22:26:39 +0100
+Subject: [PATCH 8/8] scanner-v6: timeout for rtlsdr_read_sync()
+
+Upstream waits for ever (BULK_TIMEOUT 0): a USB link that stops delivering
+samples blocks the caller for good. Default now: 2 s plus twice the time the
+requested bytes take at the current sample rate, then LIBUSB_ERROR_TIMEOUT.
+rtlsdr_set_sync_read_timeout(dev, ms): -1 automatic, 0 for ever (upstream),
+> 0 fixed. Asynchronous reading is unchanged.
+---
+ include/rtl-sdr.h | 11 +++++++++++
+ src/librtlsdr.c   | 38 +++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 48 insertions(+), 1 deletion(-)
+
+diff --git a/include/rtl-sdr.h b/include/rtl-sdr.h
+index 4abb460..a7633f7 100644
+--- a/include/rtl-sdr.h
++++ b/include/rtl-sdr.h
+@@ -455,6 +455,17 @@ RTLSDR_API int rtlsdr_get_i2c_stats(rtlsdr_dev_t *dev, uint32_t *retries, uint32
+  */
+ RTLSDR_API int rtlsdr_get_tuner_restores(rtlsdr_dev_t *dev, uint32_t *restores);
+ 
++/*!
++ * scanner-v6: timeout of rtlsdr_read_sync(). Upstream waits for ever; this
++ * build by default gives up after 2 s plus twice the time the requested
++ * bytes take at the current sample rate, and returns LIBUSB_ERROR_TIMEOUT.
++ *
++ * \param dev the device handle given by rtlsdr_open()
++ * \param timeout_ms -1 automatic (default), 0 wait for ever (upstream), > 0 fixed ms
++ * \return 0 on success
++ */
++RTLSDR_API int rtlsdr_set_sync_read_timeout(rtlsdr_dev_t *dev, int timeout_ms);
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/src/librtlsdr.c b/src/librtlsdr.c
+index 3ef0396..fb99acc 100644
+--- a/src/librtlsdr.c
++++ b/src/librtlsdr.c
+@@ -123,6 +123,8 @@ struct rtlsdr_dev {
+ 	/* scanner-v6: 1 after LIBUSB_ERROR_NO_DEVICE on a tuner transfer (the
+ 	 * dongle was unplugged): further tuner transfers fail at once */
+ 	int i2c_gone;
++	/* scanner-v6: rtlsdr_read_sync() timeout, ms: -1 automatic, 0 none */
++	int sync_timeout_ms;
+ 	/* status */
+ 	int dev_lost;
+ 	int driver_active;
+@@ -1561,6 +1563,7 @@ int rtlsdr_open(rtlsdr_dev_t **out_dev, uint32_t index)
+ 
+ 	memset(dev, 0, sizeof(rtlsdr_dev_t));
+ 	dev->i2c_repeater_state = -1;
++	dev->sync_timeout_ms = -1;
+ 	memcpy(dev->fir, fir_default, sizeof(fir_default));
+ 
+ 	r = libusb_init(&dev->ctx);
+@@ -1820,12 +1823,37 @@ int rtlsdr_reset_buffer(rtlsdr_dev_t *dev)
+ 	return 0;
+ }
+ 
++/* scanner-v6: upstream waits for ever (BULK_TIMEOUT 0), so a USB link that
++ * stops delivering samples blocks the caller for good. Automatic timeout:
++ * SYNC_TIMEOUT_BASE_MS plus twice the time the requested bytes take at the
++ * current sample rate (2 bytes per sample). The call then returns
++ * LIBUSB_ERROR_TIMEOUT (-7). rtlsdr_set_sync_read_timeout() changes it. */
++#define SYNC_TIMEOUT_BASE_MS	2000
++#define SYNC_TIMEOUT_MAX_MS	600000
++
++static unsigned int sync_read_timeout(rtlsdr_dev_t *dev, int len)
++{
++	uint64_t rate, ms;
++
++	if (dev->sync_timeout_ms >= 0)
++		return (unsigned int)dev->sync_timeout_ms;
++
++	rate = dev->rate ? dev->rate : 225001;	/* lowest valid rate */
++	ms = SYNC_TIMEOUT_BASE_MS;
++	if (len > 0)
++		ms += (uint64_t)len * 1000 / rate;	/* = 2x len/(2*rate) */
++	if (ms > SYNC_TIMEOUT_MAX_MS)
++		ms = SYNC_TIMEOUT_MAX_MS;
++	return (unsigned int)ms;
++}
++
+ int rtlsdr_read_sync(rtlsdr_dev_t *dev, void *buf, int len, int *n_read)
+ {
+ 	if (!dev)
+ 		return -1;
+ 
+-	return libusb_bulk_transfer(dev->devh, 0x81, buf, len, n_read, BULK_TIMEOUT);
++	return libusb_bulk_transfer(dev->devh, 0x81, buf, len, n_read,
++				    sync_read_timeout(dev, len));
+ }
+ 
+ static void LIBUSB_CALL _libusb_callback(struct libusb_transfer *xfer)
+@@ -2247,6 +2275,14 @@ int rtlsdr_get_tuner_restores(rtlsdr_dev_t *dev, uint32_t *restores)
+ 	return 0;
+ }
+ 
++int rtlsdr_set_sync_read_timeout(rtlsdr_dev_t *dev, int timeout_ms)
++{
++	if (!dev || timeout_ms < -1)
++		return -1;
++	dev->sync_timeout_ms = timeout_ms;
++	return 0;
++}
++
+ int rtlsdr_set_bias_tee_gpio(rtlsdr_dev_t *dev, int gpio, int on)
+ {
+ 	if (!dev)
+-- 
+2.43.0
+

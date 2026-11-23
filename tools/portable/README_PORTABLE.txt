@@ -39,6 +39,23 @@ Update
 ------
 Unpack the new version next to the old one and move the "data" folder into it.
 
+License and source code
+-----------------------
+WWB Scanner is free software under the GNU General Public License, version 2
+(the file LICENSE in this folder). You may copy and share it. The source code
+of this version, with the dongle library patches, is at
+    https://github.com/IharBild/rtlsdr-wwb-scanner  (branch v4-fixes)
+the exact revision is in VERSION.txt. The original program:
+    https://github.com/nocarryr/rtlsdr-wwb-scanner
+Inside: Python, Qt for Python (PySide6, LGPL v3), numpy (BSD),
+librtlsdr (GPL v2) and libusb (LGPL v2.1).
+
+Checking the download
+---------------------
+The release page lists the SHA-256 of the zip (also in the .sha256 file).
+In PowerShell:  Get-FileHash WWB-Scanner-...-portable.zip
+The two must match.
+
 ------------------------------------------------------------------------
 WWB Scanner - портативная версия (Windows 10/11, 64 бит)
 
@@ -70,3 +87,13 @@ Windows может написать "Windows защитила ваш компь�
 
 Обновление
 Распакуйте новую версию рядом со старой и перенесите в неё папку "data".
+
+Лицензия и исходный код
+WWB Scanner - свободная программа под лицензией GNU GPL версии 2 (файл LICENSE
+в этой папке): её можно копировать и передавать. Исходный код этой версии
+вместе с патчами библиотеки донгла: https://github.com/IharBild/rtlsdr-wwb-scanner
+(ветка v4-fixes), точная ревизия - в VERSION.txt.
+
+Проверка скачанного архива
+На странице релиза указан SHA-256 архива (и в файле .sha256).
+В PowerShell:  Get-FileHash WWB-Scanner-...-portable.zip  - значения должны совпасть.

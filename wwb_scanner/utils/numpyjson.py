@@ -151,6 +151,41 @@ def load_npz_member(path, key, what=None):
         raise ValueError('%s: too large to load' % what)
 
 
+def load_npz_members(path, keys, what=None, required=()):
+    """V22.11 (external audit P2-NPZ1, P3-19): the ``keys`` that the .npz
+    file ``path`` has, each size-checked before it is read, as a dict.
+    A key in ``required`` that is missing, a damaged archive or a missing
+    file: ValueError with the file name."""
+    import os
+    import zipfile
+    name = os.path.basename(str(path))
+    what = what or name
+    out = {}
+    try:
+        with zipfile.ZipFile(path) as z:
+            names = set(z.namelist())
+            for key in required:
+                if key + '.npy' not in names:
+                    raise ValueError('%s: no %r in the file' % (what, key))
+            have = [k for k in keys if k + '.npy' in names]
+            for key in have:
+                with z.open(key + '.npy') as fp:
+                    buf = io.BytesIO(fp.read(1 << 16))
+                check_npy_header(buf, '%s: %s' % (what, key))
+        with np.load(path, allow_pickle=False) as d:
+            for key in have:
+                out[key] = d[key]
+    except zipfile.BadZipFile as exc:
+        raise ValueError('%s: not an .npz file (%s)' % (what, exc))
+    except FileNotFoundError:
+        raise ValueError('%s: the file is missing' % what)
+    except MemoryError:
+        raise ValueError('%s: too large to load' % what)
+    except (OSError, EOFError) as exc:
+        raise ValueError('%s: the file can not be read (%s)' % (what, exc))
+    return out
+
+
 def dumps(obj, **kwargs):
     kwargs.setdefault('cls', Encoder)
     return json.dumps(obj, **kwargs)

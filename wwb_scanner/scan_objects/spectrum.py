@@ -282,6 +282,10 @@ class Spectrum(JSONMixin):
                 if dbdata is None:
                     raise ValueError('scan %s is not in the history' % (eid,))
         dbdata = dict(dbdata)
+        if dbdata.get('points_error'):
+            # V22.11 (external audit P3-19): the points file is missing or damaged
+            raise ValueError('scan %s of the history can not be opened: %s'
+                             % (eid, dbdata['points_error']))
         dbdata['eid'] = eid
         dbdata.pop('sample_data_file', None)
         dbdata.pop('center_frequencies', None)       # written before V22.0

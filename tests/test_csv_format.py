@@ -68,19 +68,15 @@ def test_reference_file_passes_own_checker():
 
 
 def test_csv_written_without_newline_translation(tmpdir, monkeypatch):
-    """On Windows text mode turns '\\r\\n' into '\\r\\r\\n' unless newline=''."""
+    """On Windows text mode turns '\\r\\n' into '\\r\\r\\n' unless newline=''.
+    V22.11: files are written as bytes (write_atomic); the line ends of
+    Windows are simulated here."""
     from wwb_scanner.file_handlers import exporters
-    calls = []
-    real_open = open
-
-    def spy(*args, **kwargs):
-        calls.append(kwargs)
-        return real_open(*args, **kwargs)
-
-    monkeypatch.setattr(exporters, 'open', spy, raising=False)
+    monkeypatch.setattr(exporters.os, 'linesep', '\r\n')
     spectrum = make_spectrum([470.0, 470.025, 470.05], [1e-6, 2e-6, 3e-6])
-    export_csv(spectrum, tmpdir)
-    assert calls and calls[-1].get('newline') == ''
+    _, raw = export_csv(spectrum, tmpdir)
+    assert b'\r\r' not in raw
+    assert raw.count(b'\r\n') == 2
 
 
 def test_csv_has_no_double_cr(tmpdir):

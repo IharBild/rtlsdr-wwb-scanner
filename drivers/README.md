@@ -43,3 +43,12 @@ Status: built 13.11.2026, checked on the USB model and in Wine with Windows Pyth
 pyrtlsdr 0.5.1; NOT yet tested on the real dongle.
 
 Licenses: rtl-sdr GPL-2.0-or-later, libusb LGPL-2.1 (see `source/`).
+
+`rtlsdr-scanner-v8/` (V22.11) - the v7 driver code unchanged, linked with libusb 1.0.30
+instead of 1.0.29: libusb 1.0.30 fixes CVE-2026-47104 (one-byte out-of-bounds read in
+`parse_iad_array()`) and CVE-2026-23679 (NULL dereference in `parse_interface()`), both a
+crash from a malformed USB descriptor (external audit of 22.11.2026, B6 / AUD-10). Same 51
+exports; the command line tools are bit-identical to v7; two builds gave bit-identical
+files. `install_dll.py` keeps `.before-v8` (v7) for `rollback`.
+Status: built 23.11.2026 in the sandbox; NOT yet tested on the real dongle. The program
+and the portable build stay on v7 until the check on the PC.

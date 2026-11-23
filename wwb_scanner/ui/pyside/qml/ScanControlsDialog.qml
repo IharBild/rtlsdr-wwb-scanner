@@ -222,7 +222,10 @@ Dialog {
                               "480 MHz). A tone exactly there, only 75 kHz wide and not more than 20 dB " +
                               "above the floor is replaced by the level around it - on the graph and in " +
                               "the exported files. A stronger or wider signal on such a frequency stays " +
-                              "and is marked: it may be a transmitter. Off: nothing is hidden."
+                              "and is marked: it may be a transmitter. The weak lines every 4.16 MHz " +
+                              "that some laptops and USB set-ups add (not more than 7 dB) are hidden " +
+                              "the same way. With the flat-top window these tones are wider than 75 kHz " +
+                              "and are not hidden. Off: nothing is hidden."
                     }
                     Switch {
                         id: cleanRippleSwitch

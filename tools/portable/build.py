@@ -12,6 +12,7 @@ On Windows the dongle library is drivers/rtlsdr-scanner-v7/x64/rtlsdr.dll
 """
 import argparse
 import datetime
+import hashlib
 import os
 import platform
 import shutil
@@ -38,6 +39,14 @@ def git_rev():
                                        stderr=subprocess.DEVNULL, text=True).strip()
     except Exception:
         return os.environ.get('GITHUB_SHA', '')[:7] or 'unknown'
+
+
+def sha256_of(path):
+    h = hashlib.sha256()
+    with open(path, 'rb') as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b''):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def run(cmd, **kw):
@@ -101,6 +110,8 @@ def main(argv=None):
         for n in RTL_TOOLS + ('rtlsdr.dll',):
             shutil.copy2(os.path.join(DRIVER, n), os.path.join(tools, n))
     shutil.copy2(os.path.join(HERE, 'README_PORTABLE.txt'), os.path.join(app, 'README_PORTABLE.txt'))
+    # GPL v2: the license text goes with the program (external audit 22.11)
+    shutil.copy2(os.path.join(ROOT, 'LICENSE'), os.path.join(app, 'LICENSE'))
     ver = version()
     import PySide6
     with open(os.path.join(app, 'VERSION.txt'), 'w', encoding='utf-8') as fh:
@@ -134,6 +145,11 @@ def main(argv=None):
                     p = os.path.join(d, f)
                     z.write(p, os.path.relpath(p, out))
         print('zip: %s, %.0f MB' % (zpath, os.path.getsize(zpath) / 1e6))
+        # SHA-256 of the zip: a file next to it, for the release page (external audit 22.11)
+        digest = sha256_of(zpath)
+        with open(zpath + '.sha256', 'w', encoding='ascii', newline='\n') as fh:
+            fh.write('%s  %s\n' % (digest, os.path.basename(zpath)))
+        print('sha256: %s' % digest)
     return 0 if selftest_ok else 1
 
 

@@ -10,7 +10,7 @@ company in Poland and for sound engineers across Europe. Most of the code in thi
 written with Claude (Anthropic); every release is checked on a real V4 dongle by the
 maintainer.
 
-Current version: **V22.10** in the branch `v4-fixes` (installed by the command below). Last tagged
+Current version: **V22.11** in the branch `v4-fixes` (installed by the command below). Last tagged
 release: [v22.3](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v22.3)
 (branch `v4-fixes`). The `master` branch is the original upstream code and is not used here.
 
@@ -183,6 +183,20 @@ release: [v22.3](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v22
   - Checked: the window check U1-U41 passes on PySide2 5.15 (Python 3.8) and PySide6 6.12
     (Python 3.13, also from a clean install with only Essentials + Addons); all tests on
     both. **Not yet on Windows with the dongle.**
+- **V22.11** - **Hardening after the external audits** (23.11.2026). Exported files are written to a
+  temporary file and put in place in one step, during a scan from a snapshot of the points; a name
+  Windows keeps for a device ("NUL.csv", "COM1.sdb2") is refused (it was "exported" and no file
+  appeared). sdb3 and the WSM CSV carry the time of the scan (V22.9 did it for sdb2 only), and the
+  time comes back on import (also for an sdb2 of WWB without the epoch: local time, not UTC). .npz
+  export and import keep the values as measured and the passes. The CRC of every sdb3 sweep is
+  checked on import (a wrong one is reported, the data are still read). Limits for imported files
+  (512 MB, 20 million points in CSV and WSM too). A history record whose points file is missing or
+  damaged gives a clear error. sdb2: res_bandwidth "0" instead of "TODO". An unknown key in stored
+  settings is named in the log. Dongle library **scanner-v8** (v7 code,
+  libusb 1.0.30: CVE-2026-47104, CVE-2026-23679) in `drivers/rtlsdr-scanner-v8` - not yet the
+  default. Portable build: LICENSE and a GPL / source section in README_PORTABLE, SHA-256 of the zip
+  next to it and in the release text. The old upstream workflows are gone; pytest collects only
+  `test_*.py`.
 - **V22.10** - **Noise check, IF filter, 25 kHz points, comb of the kit.** "Own gain per band" keeps
   a higher gain only when the floor referred to the input gets at least 1 dB lower (with the antenna
   on the air or compression of the tuner often sets the floor: more gain only raised it on the
@@ -495,6 +509,14 @@ Windows: быстрее, без собственных помех донгла �
   копируются из реестра). Настройки по умолчанию — в ядре; без tinydb. В ядре появились
   служба скана и события, сканы из нескольких проходов (основа режима «Точный») и
   интерфейс приёмника (основа для других приёмников). Проверено на V4 18.11.2026.
+- V22.11: закалка по внешним аудитам. Экспорт пишется во временный файл и ставится на место
+  одним шагом, во время скана — со снимка точек; имя, которое Windows держит за устройством
+  («NUL.csv», «COM1.sdb2»), отклоняется. sdb3 и CSV для WSM несут время скана, при импорте оно
+  восстанавливается. .npz хранит сырые уровни и проходы. CRC проходов sdb3 проверяется при
+  импорте (неверный — предупреждение, данные читаются). Лимиты импорта (512 МБ, 20 млн точек и в
+  CSV/WSM). Запись истории без файла точек — понятная ошибка. Драйвер **scanner-v8** (код v7 на
+  libusb 1.0.30) в `drivers/rtlsdr-scanner-v8`, пока не по умолчанию. Портативная сборка: LICENSE,
+  раздел о GPL и исходниках, SHA-256 архива.
 - V22.10: шумовая проверка «Own gain per band» (более высокое усиление полосы — только если пол,
   приведённый ко входу, ниже хотя бы на 1 дБ; из усилений в пределах 0,5 дБ от лучшего берётся
   меньшее; каждая полоса проверяется на усилении скана). Фильтр ПЧ тюнера не шире 2,4 МГц (выше

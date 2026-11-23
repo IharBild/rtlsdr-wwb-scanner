@@ -915,6 +915,9 @@ def h8d_calibrate_clean(lab, s):
                                    'пол выровнен' if info.get('flatten') else 'пол НЕ выровнен: %s' % info.get('floor_skipped')))
 
 
+H9_MIN_POINTS = 10       # V22.11: quiet points needed for the repeatability (was 20, gave nan)
+
+
 @guard('H9', 'автоусиление при перегрузке (V17)')
 def h9_auto_gain(lab, h2):
     import numpy as np
@@ -947,14 +950,20 @@ def h9_auto_gain(lab, h2):
     def quiet(s1, s2):
         return z & (s1['y'] < floor_level(s1['y']) + 3) & (s2['y'] < floor_level(s2['y']) + 3)
     q_off, q_on = quiet(h2[0], h2[1]), quiet(a, b)
-    rep_off = float(np.std((h2[0]['y'] - h2[1]['y'])[q_off])) if q_off.sum() > 20 else float('nan')
-    rep_on = float(np.std((a['y'] - b['y'])[q_on])) if q_on.sum() > 20 else float('nan')
+    # V22.11 (hod-rabot-34): after auto gain the quiet points next to narrow
+    # zones may be few; "nan" in the summary looked like an error
+    def rep(s1, s2, q):
+        n = int(q.sum())
+        if n < H9_MIN_POINTS:
+            return 'мало точек (%d)' % n
+        return '%.2f' % float(np.std((s1['y'] - s2['y'])[q]))
+    rep_off, rep_on = rep(h2[0], h2[1], q_off), rep(a, b, q_on)
     top = np.argsort(np.where(z, h2[0]['y'], -999))[-20:]
     dl = float(np.median(a['y'][top] - h2[0]['y'][top]))
     still = a['still_clipped'] + b['still_clipped']
     result('H9', 'PASS' if still == 0 else 'WARN', 'автоусиление при перегрузке (470-800)',
            'зоны %s МГц; перемеряно плиток %d + %d, осталось с перегрузкой %d; пол рядом с зонами: повторяемость '
-           '%.2f -> %.2f дБ; уровень сильнейших точек %+.1f дБ (для сведения: эфир меняется); время %.1f -> %.1f с'
+           '%s -> %s дБ; уровень сильнейших точек %+.1f дБ (для сведения: эфир меняется); время %.1f -> %.1f с'
            % (zones, a['remeasured'], b['remeasured'], still, rep_off, rep_on, dl, t_off, t_on))
     return scans
 
@@ -1348,8 +1357,27 @@ th.start()
 time.sleep(float(sys.argv[2]))
 sc.sdr_wrapper.close_sdr()
 th.join(60)
+coll = getattr(sc, 'sample_collection', None)
 print('H15 alive=%s error=%r points=%d' % (th.is_alive(), sc.error, sc.spectrum.sample_data.size), flush=True)
+print('H15x %s' % json.dumps({'aborted': bool(getattr(coll, 'aborted', False)),
+                              'reason': str(getattr(coll, 'abort_reason', '') or ''),
+                              'tiles_done': len(getattr(coll, 'processed_keys', ()) or ()),
+                              'tiles_total': len(getattr(coll, 'sample_sets', {}) or {})}), flush=True)
 '''
+
+
+def h15_note(points, full, extra):
+    """V22.11 (hod-rabot-34): what a run of H15 that ended without an
+    error measured - whole, not at all, or part of the range (the dongle was
+    closed before the end; the points measured until then are kept)."""
+    if not points:
+        return 'закрыт до первой плитки, 0 точек'
+    if full and points >= full:
+        return 'скан до конца'
+    why = (extra or {}).get('reason') or ('чтение прервано' if (extra or {}).get('aborted') else '')
+    td, tt = (extra or {}).get('tiles_done'), (extra or {}).get('tiles_total')
+    tiles = ', плиток %s из %s' % (td, tt) if td is not None and tt else ''
+    return 'скан неполный: точек %d из %s%s%s' % (points, full or '?', tiles, ' (%s)' % why if why else '')
 
 
 @guard('H15', 'закрытие донгла во время чтения (V22.9)')
@@ -1365,7 +1393,7 @@ def h15_close_during_read(lab):
         return
     conf = json.dumps(lab.config(470, 478))
     env = dict(os.environ, PYTHONPATH=os.pathsep.join(p for p in sys.path if p))
-    rows, bad = [], 0
+    rows, bad, runs = [], 0, []
     for delay in (1.4, 1.7, 1.9, 1.7, 1.9):
         t0 = time.time()
         try:
@@ -1375,13 +1403,23 @@ def h15_close_during_read(lab):
         except subprocess.TimeoutExpired:
             rc, out = 'timeout', ''
         line = [l for l in out.splitlines() if l.startswith('H15 ')]
+        ext = [l for l in out.splitlines() if l.startswith('H15x ')]
+        try:
+            extra = json.loads(ext[-1][5:]) if ext else {}
+        except ValueError:
+            extra = {}
+        m = re.search(r'points=(\d+)', line[-1]) if line else None
         crash = 'Assertion failed' in out or rc != 0
         bad += bool(crash)
-        rows.append('%.1f с: rc=%s%s (%.0f с)' % (delay, rc, ' ' + line[-1][4:] if line else '',
-                                               time.time() - t0))
+        runs.append((delay, rc, line[-1][4:] if line else '', int(m.group(1)) if m else None, extra,
+                     time.time() - t0, crash))
         if crash:
             print(out[-2000:])
         time.sleep(1.0)
+    full = max([r[3] for r in runs if r[3]] or [0]) or None
+    for delay, rc, text, points, extra, dt, crash in runs:
+        note = '' if crash or points is None else ', ' + h15_note(points, full, extra)
+        rows.append('%.1f с: rc=%s%s%s (%.0f с)' % (delay, rc, ' ' + text if text else '', note, dt))
     result('H15', 'FAIL' if bad else 'PASS', 'закрытие донгла из другого потока во время чтения, 5 раз',
            '; '.join(rows))
 

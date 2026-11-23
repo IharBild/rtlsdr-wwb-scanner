@@ -1,0 +1,136 @@
+From fa7729dfb08102f88fb96cb1326bd926e677aab0 Mon Sep 17 00:00:00 2001
+From: rtlsdr-wwb-scanner <noreply@example.invalid>
+Date: Tue, 10 Nov 2026 13:00:54 +0100
+Subject: [PATCH] scanner-v5: retry tuner I2C transfers (repeater on again,
+ short pause), rtlsdr_get_i2c_stats()
+
+On the user's RTL-SDR Blog V4 tuner I2C writes failed now and then with
+LIBUSB_ERROR_PIPE (i2c wr failed=-9), often under many gain/frequency
+writes; pyrtlsdr then closes the device. A failed transfer is now tried
+again up to 3 times after 1-3 ms, with the I2C repeater switched on again
+first. rtlsdr_get_i2c_stats() reports retries and failures.
+---
+ include/rtl-sdr.h | 11 ++++++++
+ src/librtlsdr.c   | 69 ++++++++++++++++++++++++++++++++++++++++++-----
+ 2 files changed, 74 insertions(+), 6 deletions(-)
+
+diff --git a/include/rtl-sdr.h b/include/rtl-sdr.h
+index 05db01b..6ba410e 100644
+--- a/include/rtl-sdr.h
++++ b/include/rtl-sdr.h
+@@ -432,6 +432,17 @@ RTLSDR_API int rtlsdr_get_tuner_pll_lock(rtlsdr_dev_t *dev, uint32_t *late_locks
+  */
+ RTLSDR_API const char *rtlsdr_get_build_info(void);
+ 
++/*!
++ * scanner-v5: tuner I2C transfers that were retried, and those that still
++ * failed after the retries, since the device was opened.
++ *
++ * \param dev the device handle given by rtlsdr_open()
++ * \param retries number of retried transfers (may be NULL)
++ * \param failures number of transfers that failed after all retries (may be NULL)
++ * \return 0 on success
++ */
++RTLSDR_API int rtlsdr_get_i2c_stats(rtlsdr_dev_t *dev, uint32_t *retries, uint32_t *failures);
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/src/librtlsdr.c b/src/librtlsdr.c
+index 105235c..05efb3a 100644
+--- a/src/librtlsdr.c
++++ b/src/librtlsdr.c
+@@ -117,6 +117,9 @@ struct rtlsdr_dev {
+ 	struct r82xx_priv r82xx_p;
+ 	/* scanner-v4: cached I2C repeater state, -1 unknown, 0 off, 1 on */
+ 	int i2c_repeater_state;
++	/* scanner-v5: tuner I2C transfers retried / failed after all retries */
++	uint32_t i2c_retries;
++	uint32_t i2c_failures;
+ 	/* status */
+ 	int dev_lost;
+ 	int driver_active;
+@@ -2121,20 +2124,74 @@ uint32_t rtlsdr_get_tuner_clock(void *dev)
+ 	return tuner_freq;
+ }
+ 
++/* scanner-v5: a tuner I2C transfer that fails (on the user's V4 under many
++ * gain/frequency writes: LIBUSB_ERROR_PIPE, "i2c wr failed=-9") is tried
++ * again up to I2C_RETRIES times after a short pause, with the I2C repeater
++ * switched on again first (a failed transfer may have left the cached
++ * repeater state wrong). Before this, one failure made pyrtlsdr close the
++ * device. */
++#define I2C_RETRIES 3
++
++static void i2c_retry_pause(int attempt)
++{
++#ifdef _WIN32
++	Sleep(1 + attempt);
++#else
++	usleep(1000 * (1 + attempt));
++#endif
++}
++
+ int rtlsdr_i2c_write_fn(void *dev, uint8_t addr, uint8_t *buf, int len)
+ {
+-	if (dev)
+-		return rtlsdr_i2c_write(((rtlsdr_dev_t *)dev), addr, buf, len);
++	rtlsdr_dev_t *d = (rtlsdr_dev_t *)dev;
++	int r, i;
++
++	if (!d)
++		return -1;
+ 
+-	return -1;
++	r = rtlsdr_i2c_write(d, addr, buf, len);
++	for (i = 0; i < I2C_RETRIES && r != len; i++) {
++		d->i2c_retries++;
++		i2c_retry_pause(i);
++		d->i2c_repeater_state = -1;
++		rtlsdr_set_i2c_repeater(d, 1);
++		r = rtlsdr_i2c_write(d, addr, buf, len);
++	}
++	if (r != len)
++		d->i2c_failures++;
++	return r;
+ }
+ 
+ int rtlsdr_i2c_read_fn(void *dev, uint8_t addr, uint8_t *buf, int len)
+ {
+-	if (dev)
+-		return rtlsdr_i2c_read(((rtlsdr_dev_t *)dev), addr, buf, len);
++	rtlsdr_dev_t *d = (rtlsdr_dev_t *)dev;
++	int r, i;
+ 
+-	return -1;
++	if (!d)
++		return -1;
++
++	r = rtlsdr_i2c_read(d, addr, buf, len);
++	for (i = 0; i < I2C_RETRIES && r != len; i++) {
++		d->i2c_retries++;
++		i2c_retry_pause(i);
++		d->i2c_repeater_state = -1;
++		rtlsdr_set_i2c_repeater(d, 1);
++		r = rtlsdr_i2c_read(d, addr, buf, len);
++	}
++	if (r != len)
++		d->i2c_failures++;
++	return r;
++}
++
++int rtlsdr_get_i2c_stats(rtlsdr_dev_t *dev, uint32_t *retries, uint32_t *failures)
++{
++	if (!dev)
++		return -1;
++	if (retries)
++		*retries = dev->i2c_retries;
++	if (failures)
++		*failures = dev->i2c_failures;
++	return 0;
+ }
+ 
+ int rtlsdr_set_bias_tee_gpio(rtlsdr_dev_t *dev, int gpio, int on)
+-- 
+2.43.0
+

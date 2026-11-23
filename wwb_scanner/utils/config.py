@@ -13,6 +13,18 @@ from wwb_scanner.core import JSONMixin
 
 logger = logging.getLogger(__name__)
 
+# V22.11 (external audit 22.11, "a typo in a stored key is dropped without a
+# word"): keys that earlier versions stored and this one no longer has. They
+# are dropped quietly (log at DEBUG); any other unknown key is most likely a
+# typo in a hand-made or damaged settings file and is named in the log as a
+# WARNING, with the keys that exist (``unknown_keys``).
+RETIRED_KEYS = frozenset([
+    '_child_conf_keys', 'save_raw_values', 'is_remote', 'remote_hostname', 'remote_port',
+    'fft_size', 'rtl_bin_size', 'rtl_crop', 'rtl_fir_size',
+    'smoothing_enabled', 'smoothing_factor', 'scaling_enabled', 'scaling_min_db',
+    'scaling_max_db',
+])
+
 
 class Config(JSONMixin):
     DEFAULTS = {}
@@ -27,16 +39,23 @@ class Config(JSONMixin):
         data.pop('_child_conf_keys', None)        # written by versions before V22.0
         object.__setattr__(self, '_data', {})
         object.__setattr__(self, 'dropped_keys', [])
+        object.__setattr__(self, 'unknown_keys', [])
         for key, val in self.DEFAULTS.items():
             data.setdefault(key, val)
         for key, val in data.items():
             if not self._known(key):
                 self.dropped_keys.append(key)
+                if key not in RETIRED_KEYS:
+                    self.unknown_keys.append(key)
                 continue
             self[key] = val
         if self.dropped_keys:
             logger.debug('%s: settings of an earlier version ignored: %s',
-                         type(self).__name__, ', '.join(sorted(self.dropped_keys)))
+                         type(self).__name__, ', '.join(sorted(map(str, self.dropped_keys))))
+        if self.unknown_keys:
+            logger.warning('%s: unknown setting(s) %s ignored - a typo? Known: %s',
+                           type(self).__name__, ', '.join(sorted(map(repr, self.unknown_keys))),
+                           ', '.join(sorted(self.keys_allowed())))
     @classmethod
     def keys_allowed(cls):
         return set(cls.DEFAULTS) | set(cls.CHILD_KEYS) | set(cls.META_KEYS)
@@ -78,7 +97,7 @@ class Config(JSONMixin):
             return None             # a meta key not set yet (eid, datetime)
         raise AttributeError('%s has no setting %r' % (type(self).__name__, attr))
     def __setattr__(self, attr, value):
-        if attr in ('_data', 'dropped_keys'):
+        if attr in ('_data', 'dropped_keys', 'unknown_keys'):
             object.__setattr__(self, attr, value)
         else:
             self[attr] = value

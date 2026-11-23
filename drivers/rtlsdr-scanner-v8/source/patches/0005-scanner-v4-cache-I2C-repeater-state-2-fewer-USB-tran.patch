@@ -1,0 +1,65 @@
+From cda6b29f12ccad11f8833fda8d22806a10c87f30 Mon Sep 17 00:00:00 2001
+From: build <build@local>
+Date: Mon, 2 Nov 2026 12:28:17 +0100
+Subject: [PATCH 5/5] scanner-v4: cache I2C repeater state (2 fewer USB
+ transfers per retune), invalidated on any write to demod reg 1:0x01
+
+---
+ src/librtlsdr.c | 20 +++++++++++++++++++-
+ 1 file changed, 19 insertions(+), 1 deletion(-)
+
+diff --git a/src/librtlsdr.c b/src/librtlsdr.c
+index fa80e89..105235c 100644
+--- a/src/librtlsdr.c
++++ b/src/librtlsdr.c
+@@ -115,6 +115,8 @@ struct rtlsdr_dev {
+ 	struct e4k_state e4k_s;
+ 	struct r82xx_config r82xx_c;
+ 	struct r82xx_priv r82xx_p;
++	/* scanner-v4: cached I2C repeater state, -1 unknown, 0 off, 1 on */
++	int i2c_repeater_state;
+ 	/* status */
+ 	int dev_lost;
+ 	int driver_active;
+@@ -535,6 +537,11 @@ int rtlsdr_demod_write_reg(rtlsdr_dev_t *dev, uint8_t page, uint16_t addr, uint1
+ 	int r;
+ 	unsigned char data[2];
+ 	uint16_t index = 0x10 | page;
++
++	/* scanner-v4: any write to the register that holds the I2C repeater bit
++	 * (including demod soft resets) makes the cached repeater state unknown */
++	if (page == 1 && addr == 0x01)
++		dev->i2c_repeater_state = -1;
+ 	addr = (addr << 8) | 0x20;
+ 
+ 	if (len == 1)
+@@ -577,7 +584,17 @@ void rtlsdr_set_gpio_output(rtlsdr_dev_t *dev, uint8_t gpio)
+ 
+ void rtlsdr_set_i2c_repeater(rtlsdr_dev_t *dev, int on)
+ {
+-	rtlsdr_demod_write_reg(dev, 1, 0x01, on ? 0x18 : 0x10, 1);
++	int r;
++
++	on = on ? 1 : 0;
++
++	/* scanner-v4: skip the two USB transfers if the repeater is already in
++	 * the requested state (saves ~2 of ~11 transfers per retune) */
++	if (dev->i2c_repeater_state == on)
++		return;
++
++	r = rtlsdr_demod_write_reg(dev, 1, 0x01, on ? 0x18 : 0x10, 1);
++	dev->i2c_repeater_state = (r == 0) ? on : -1;
+ }
+ 
+ int rtlsdr_set_fir(rtlsdr_dev_t *dev)
+@@ -1537,6 +1554,7 @@ int rtlsdr_open(rtlsdr_dev_t **out_dev, uint32_t index)
+ 		return -ENOMEM;
+ 
+ 	memset(dev, 0, sizeof(rtlsdr_dev_t));
++	dev->i2c_repeater_state = -1;
+ 	memcpy(dev->fir, fir_default, sizeof(fir_default));
+ 
+ 	r = libusb_init(&dev->ctx);
+-- 
+2.43.0
+

@@ -3,6 +3,7 @@ import os.path
 import logging
 import datetime
 import re
+import struct
 import xml.etree.ElementTree as ET
 
 import numpy as np
@@ -15,6 +16,21 @@ logger = logging.getLogger(__name__)
 # 0.5-1766 MHz scan has ~70 000; an sdb3 header asking for 2e9 points hung
 # the window in np.arange.
 MAX_IMPORT_POINTS = 20000000
+# V22.11 (external audit P2-CSV1): the largest file that is read at all. A
+# full scan is ~2 MB as CSV, ~0.3 MB as sdb3; 20 million CSV lines are
+# ~400 MB. Anything bigger is refused before it is read into memory.
+MAX_IMPORT_BYTES = 512 * 1024 * 1024
+
+
+def check_file_size(filename):
+    try:
+        size = os.path.getsize(filename)
+    except OSError as exc:
+        raise ValueError('%s: the file can not be read (%s)' % (os.path.basename(str(filename)), exc))
+    if size > MAX_IMPORT_BYTES:
+        raise ValueError('%s: the file is too large for a scan (%d MB, at most %d MB)'
+                         % (os.path.basename(str(filename)), size // (1 << 20), MAX_IMPORT_BYTES >> 20))
+    return size
 
 
 def decode_text(raw):
@@ -35,6 +51,42 @@ def decode_text(raw):
     if text is None:
         text = raw.decode('latin-1')
     return text.replace('\r\n', '\n').replace('\r', '\n')
+
+
+def local_timestamp(dt):
+    """Naive local time (as WWB, WSM and our exports write it) -> epoch
+    seconds for Spectrum.timestamp_utc."""
+    import time as _time
+    return _time.mktime(dt.timetuple()) + dt.microsecond / 1e6
+
+
+def parse_wsm_time(text):
+    """'08-11-2026 02-44-57 PM' (exporters.wsm_time) -> local time, or None."""
+    text = (text or '').strip()
+    for fmt in ('%d-%m-%Y %I-%M-%S %p', '%d-%m-%Y %H-%M-%S'):
+        try:
+            if fmt.endswith('%p'):
+                parts = text.rsplit(' ', 1)
+                if len(parts) != 2 or parts[1].upper() not in ('AM', 'PM'):
+                    continue
+                d = datetime.datetime.strptime(parts[0], '%d-%m-%Y %I-%M-%S')
+                h = d.hour % 12 + (12 if parts[1].upper() == 'PM' else 0)
+                return d.replace(hour=h)
+            return datetime.datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def parse_sdb3_time(date, time_):
+    """sdb3 header 'StartDate' '11/04/2026' and 'StartTime' '14:21:22'
+    (local, as exporters.sdb3_bytes and WWB write them) -> local time, or None."""
+    try:
+        d = datetime.datetime.strptime('%s %s' % (str(date).strip(), str(time_).strip().split('.')[0]),
+                                       '%m/%d/%Y %H:%M:%S')
+    except (ValueError, TypeError):
+        return None
+    return d
 
 
 class BaseImporter(object):
@@ -70,6 +122,7 @@ class BaseImporter(object):
                              % (os.path.basename(str(self.filename)), type(exc).__name__, exc))
         return self.spectrum
     def load_file(self):
+        check_file_size(self.filename)
         with open(self.filename, 'rb') as f:
             raw = f.read()
         return decode_text(raw)
@@ -79,23 +132,46 @@ class BaseImporter(object):
 class NumpyImporter(BaseImporter):
     """V22.9 (external audit P3-05, P3-12): the size in the file is checked
     before it is read, no Python objects, and every problem is one clear
-    ValueError with the file name (a missing key gave a bare KeyError)."""
+    ValueError with the file name (a missing key gave a bare KeyError).
+    V22.11 (P2-NPZ1): the values as measured (``raw_dbFS``) and the passes
+    of the scan come in too when the file has them (history files, our
+    own .npz export); before only the points were read."""
     _extension = 'npz'
+    KEYS = ('sample_data', 'raw_dbFS', 'pass_freqs', 'pass_levels', 'pass_times')
     def __call__(self):
-        from wwb_scanner.utils.numpyjson import load_npz_member
+        from wwb_scanner.utils.numpyjson import load_npz_members
+        from wwb_scanner.scan_objects.passes import ScanPasses
         name = os.path.basename(str(self.filename))
         try:
-            data = load_npz_member(self.filename, 'sample_data', name)
+            arrays = load_npz_members(self.filename, self.KEYS, name, required=('sample_data',))
         except ValueError as exc:
             raise ValueError('%s - the file is damaged or not a scan of this program' % (exc,))
-        except OSError as exc:
-            raise ValueError('%s: the file can not be read (%s)' % (name, exc))
+        data = arrays['sample_data']
         if data.dtype.names is None or not {'frequency', 'dbFS'} <= set(data.dtype.names):
             raise ValueError('%s: the file is damaged or not a scan of this program (no frequency/'
                              'dbFS points)' % name)
         spectrum = self.spectrum
         spectrum.name = name
         spectrum.add_sample_set(data=data)
+        raw = arrays.get('raw_dbFS')
+        if raw is not None:
+            raw = np.asarray(raw, dtype=np.float64)
+            if raw.ndim == 1 and raw.shape == (spectrum.sample_data.size,):
+                spectrum.raw_dbFS = raw
+            else:
+                logger.warning('%s: raw_dbFS of %s values for %d points, not used',
+                               name, raw.shape, spectrum.sample_data.size)
+        if {'pass_freqs', 'pass_levels', 'pass_times'} <= set(arrays):
+            try:
+                pf = np.asarray(arrays['pass_freqs'], dtype=np.float64)
+                pl = np.asarray(arrays['pass_levels'], dtype=np.float64)
+                pt = np.asarray(arrays['pass_times'], dtype=np.float64)
+                if pl.ndim != 2 or pf.ndim != 1 or pl.shape[1] != pf.size or pt.shape != (pl.shape[0],):
+                    raise ValueError('shapes %s %s %s' % (pf.shape, pl.shape, pt.shape))
+                spectrum.passes = ScanPasses.from_arrays(
+                    {'pass_freqs': pf, 'pass_levels': pl, 'pass_times': pt})
+            except (ValueError, TypeError) as exc:
+                logger.warning('%s: the passes of the scan are damaged, not used (%s)', name, exc)
         return spectrum
 
 
@@ -108,11 +184,17 @@ class CSVImporter(BaseImporter):
         if self.file_data.lstrip('\ufeff \r\n\t').startswith('Receiver;'):
             return self.parse_wsm()
         bad = []
+        good = [0]
         def iter_lines():
             for n, line in enumerate(self.file_data.splitlines(), 1):
                 line = line.strip()
                 if not line:
                     continue
+                # V22.11 (external audit P2-CSV1): a limit on the points, as
+                # for sdb3 (before: any number of lines went into memory)
+                if good[0] >= MAX_IMPORT_POINTS:
+                    raise ValueError('%s: too many points (more than %d)'
+                                     % (os.path.basename(self.filename), MAX_IMPORT_POINTS))
                 parts = line.split(',')
                 try:
                     if len(parts) != 2:
@@ -124,6 +206,7 @@ class CSVImporter(BaseImporter):
                 except ValueError:
                     bad.append((n, line[:40]))
                     continue
+                good[0] += 1
                 yield f
                 yield v
         a = np.fromiter(iter_lines(), dtype=np.float64)
@@ -171,8 +254,22 @@ class CSVImporter(BaseImporter):
                 continue
             freqs.append(f)
             levels.append(v)
+            if len(freqs) > MAX_IMPORT_POINTS:
+                raise ValueError('%s: too many points (more than %d)'
+                                 % (os.path.basename(self.filename), MAX_IMPORT_POINTS))
         if len(freqs) < 2:
             raise ValueError('%s: no scan data in the WSM file' % os.path.basename(self.filename))
+        # V22.11: the time of the scan from the "Date/Time;" line (WSM writes
+        # '08-11-2026 02-44-57 PM'); before, an imported scan got the time
+        # of the import
+        for l in lines[:head[0]]:
+            if l.startswith('Date/Time;'):
+                dt = parse_wsm_time(l.split(';', 1)[1])
+                if dt is not None:
+                    self.spectrum.timestamp_utc = local_timestamp(dt)
+                else:
+                    logger.warning('%s: date %r not understood', self.filename, l)
+                break
         receiver = lines[0].split(';', 1)[1].strip() if ';' in lines[0] else ''
         self.spectrum.name = '%s (WSM%s)' % (os.path.basename(self.filename), ', ' + receiver if receiver else '')
         dbFS = self.WSM_FLOOR_DBFS + np.asarray(levels, dtype=np.float64) / WSM_LEVEL_SCALE
@@ -184,6 +281,7 @@ class BaseWWBImporter(BaseImporter):
         # V17.1 (security): WWB files never carry a DTD. A DTD with entities
         # can blow a few KB up to gigabytes ("XML bomb") on the expat of
         # Python 3.7 and hang the program, so such files are refused.
+        check_file_size(self.filename)
         with open(self.filename, 'rb') as f:
             data = f.read()
         refuse = ValueError('%s: XML with a DTD / entity declarations is not a WWB file and is not '
@@ -226,7 +324,9 @@ class WWBImporter(BaseWWBImporter):
             # WWB 7.9 writes 'Wed Nov 4 2026' and '14:21:22.182'
             dt_str = ' '.join([root.get('date'), root.get('time').split('.')[0]])
             try:
-                spectrum.datetime_utc = datetime.datetime.strptime(dt_str, '%a %b %d %Y %H:%M:%S')
+                # V22.11: the date and time are local (as WWB writes them), not UTC
+                spectrum.timestamp_utc = local_timestamp(
+                    datetime.datetime.strptime(dt_str, '%a %b %d %Y %H:%M:%S'))
             except ValueError:
                 logger.warning('%s: date %r not understood', self.filename, dt_str)
         freqs = np.fromiter((float(t.text) / 1000. for t in freq_set), dtype=np.float64)
@@ -254,10 +354,12 @@ class WWB3Importer(BaseImporter):
     like WWB shows a scan made with a Shure receiver."""
     _extension = 'sdb3'
     def load_file(self):
+        check_file_size(self.filename)
         with open(self.filename, 'rb') as f:
             return f.read()
     def parse_file_data(self):
         import json
+        from wwb_scanner.file_handlers.exporters import _crc16_arc_np
         b = self.file_data
         if not b.startswith(b'//@ShureScan'):
             raise ValueError('%s: not a WWB sdb3 file' % os.path.basename(self.filename))
@@ -310,12 +412,33 @@ class WWB3Importer(BaseImporter):
         if nsweeps < 1:
             raise ValueError('%s: no sweeps' % os.path.basename(self.filename))
         sweeps = []
+        bad_crc = 0
+        crc_at = None
+        off = 0
+        for name, size in layout:
+            if name == 'crc16' and size == 2:
+                crc_at = off
+            off += size
         for k in range(nsweeps):
             pos = k * rec
+            # V22.11 (external audit P3-11): CRC-16/ARC of each sweep (from
+            # "@Swp" to the last value), the same sum WWB 7.9 writes
+            # (tests/reference/wwb79_sdb3_from_our_sdb2.sdb3). A wrong sum is
+            # reported, the sweep is still read: whether WWB itself refuses
+            # such a file is not known.
+            if crc_at is not None:
+                want = struct.unpack('>H', body[pos + crc_at:pos + crc_at + 2])[0]
+                if _crc16_arc_np(body[pos:pos + crc_at]) != want:
+                    bad_crc += 1
             for name, size in layout:
                 if name == 'curve':
                     sweeps.append(np.frombuffer(body[pos:pos + size], dtype=dtype).astype(np.float64))
                 pos += size
+        if bad_crc:
+            logging.getLogger('wwb_scanner.status').warning(
+                '%s: check sum wrong in %d of %d sweeps - the file may be damaged',
+                os.path.basename(self.filename), bad_crc, nsweeps)
+        self.bad_crc = bad_crc
         data = np.vstack(sweeps)
         if nodata is not None:
             data[data == nodata] = np.nan
@@ -336,6 +459,13 @@ class WWB3Importer(BaseImporter):
         f_mhz = f_khz / {'khz': 1000., 'mhz': 1., 'hz': 1e6}.get(unit, 1000.)
         spectrum = self.spectrum
         spectrum.name = header.get('Title') or os.path.basename(self.filename)
+        if header.get('StartDate') and header.get('StartTime'):
+            dt = parse_sdb3_time(header.get('StartDate'), header.get('StartTime'))
+            if dt is not None:
+                spectrum.timestamp_utc = local_timestamp(dt)
+            else:
+                logger.warning('%s: date %r %r not understood', self.filename,
+                               header.get('StartDate'), header.get('StartTime'))
         if nsweeps > 1:
             logger.info('%s: %d sweeps, peak hold used', self.filename, nsweeps)
         spectrum.add_sample_set(frequency=f_mhz, dbFS=dB)

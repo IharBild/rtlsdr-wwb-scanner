@@ -498,15 +498,36 @@ class DBStore(object):
         if name:
             from wwb_scanner.scan_objects.samplearray import SampleArray
             from wwb_scanner.scan_objects.passes import ScanPasses
-            with np.load(os.path.join(self.scans_dir, name)) as z:
+            from wwb_scanner.utils.numpyjson import load_npz_members
+            # V22.11 (external audit P3-19): the points file of a record can
+            # be missing or damaged (deleted by hand, a copy of the index
+            # without scans/). That was a bare FileNotFoundError / BadZipFile
+            # from deep inside; now the record comes back without points,
+            # with the reason, and the file's size is checked before reading.
+            try:
+                z = load_npz_members(os.path.join(self.scans_dir, name),
+                                     ('sample_data', 'raw_dbFS', 'pass_freqs', 'pass_levels',
+                                      'pass_times'),
+                                     'scan %s, points file %s' % (eid, name),
+                                     required=('sample_data',))
                 rec['sample_data'] = SampleArray(data=z['sample_data'])
-                if 'raw_dbFS' in z.files:
-                    raw = np.asarray(z['raw_dbFS'], dtype=np.float64)
-                    if raw.shape == (rec['sample_data'].size,):
-                        rec['raw_dbFS'] = raw      # V22.8 (audit B1): read back too
+            except (ValueError, TypeError, KeyError) as exc:
+                import logging
+                logging.getLogger(__name__).error('%s', exc)
+                rec['points_error'] = str(exc)
+                return rec
+            if 'raw_dbFS' in z:
+                raw = np.asarray(z['raw_dbFS'], dtype=np.float64)
+                if raw.shape == (rec['sample_data'].size,):
+                    rec['raw_dbFS'] = raw          # V22.8 (audit B1): read back too
+            try:
                 p = ScanPasses.from_arrays(z)
-                if p is not None:
-                    rec['passes'] = p              # V22.2
+            except (ValueError, TypeError, KeyError) as exc:
+                import logging
+                logging.getLogger(__name__).warning('scan %s: passes not read (%s)', eid, exc)
+                p = None
+            if p is not None:
+                rec['passes'] = p                  # V22.2
         return rec
     def update_scan(self, eid, **kwargs):
         table = self.scan_db.table('scans_performed')

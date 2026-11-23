@@ -37,6 +37,73 @@ def _epoch_ms(local_dt):
     return int(round(time.mktime(local_dt.timetuple()) * 1000 + local_dt.microsecond / 1000.))
 
 
+def scan_local_dt(spectrum, dt=None):
+    """V22.11 (P2-DATE1 for sdb3 and WSM): the local time of the scan for
+    the date in an exported file; ``dt`` when given; now() only for a scan
+    without a time. V22.9 did this for sdb2 only - sdb3 and the WSM CSV
+    still carried the time of the export."""
+    if dt is not None:
+        return dt
+    ts = getattr(spectrum, 'timestamp_utc', None)
+    try:
+        dt = datetime.datetime.fromtimestamp(float(ts)) if ts else None
+    except (TypeError, ValueError, OverflowError, OSError):
+        dt = None
+    return dt or datetime.datetime.now()
+
+
+# V22.11 (external audit P2-RES1): names Windows keeps for devices. "NUL.csv"
+# was "exported" and no file appeared (the data went to the NUL device).
+_RESERVED_NAMES = {'CON', 'PRN', 'AUX', 'NUL', 'CONIN$', 'CONOUT$'} | \
+    {'COM%d' % i for i in range(10)} | {'LPT%d' % i for i in range(10)} | \
+    {'COM\u00b9', 'COM\u00b2', 'COM\u00b3', 'LPT\u00b9', 'LPT\u00b2', 'LPT\u00b3'}
+
+
+def reserved_name(filename):
+    """True for a file name Windows reads as a device (NUL, CON, COM1 ...),
+    with any extension, case, or trailing dots and spaces."""
+    base = os.path.basename(str(filename))
+    stem = base.split('.', 1)[0].rstrip(' .').upper()
+    return stem in _RESERVED_NAMES
+
+
+def write_atomic(path, data):
+    """V22.11: write ``data`` (bytes) to a new file next to ``path`` and put
+    it in place in one step: a failed export (disk full, USB stick pulled)
+    no longer leaves a half-written file under the user's name; the file is
+    checked to be there afterwards."""
+    from wwb_scanner.utils.dbstore import _replace
+    folder = os.path.dirname(os.path.abspath(path)) or '.'
+    base = os.path.basename(path)
+    tmp = os.path.join(folder, '~%s.%d.part' % (base, os.getpid()))
+    try:
+        with open(tmp, 'wb') as fh:
+            fh.write(data)
+            fh.flush()
+            try:
+                os.fsync(fh.fileno())
+            except OSError:
+                pass
+        _replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+    if not os.path.isfile(path) or os.path.getsize(path) != len(data):
+        raise OSError('Export: %s was not written (the file is not there after saving)'
+                      % os.path.basename(path))
+
+
+def _text_bytes(text, newline=None):
+    """``text`` as UTF-8 bytes the way a text-mode file with this newline
+    would write it (None: line ends of this system)."""
+    if newline is None and os.linesep != '\n':
+        text = text.replace('\n', os.linesep)
+    return text.encode('utf-8')
+
+
 def gap_mask(grid_khz, freqs_khz):
     """V18: True for grid points inside a gap of the scan (a scan of several
     ranges): between two measured points more than ``max(200 kHz, 4 x point
@@ -139,8 +206,18 @@ class BaseExporter(object):
         found = find_exporter(cls)
         if found is None:                                            # V18.1 (audit 3.2)
             raise ValueError('Export: format ".%s" is not supported - use .csv, .sdb2, .sdb3 or .npz' % ext)
+        if reserved_name(filename):
+            raise ValueError('Export: "%s" is a name Windows keeps for a device - choose another '
+                             'file name' % os.path.basename(str(filename)))
         fh = found(**kwargs)
-        fh()
+        # V22.11: export during a scan - the points must not change while
+        # the file is made (the scan waits for the lock, export takes < 1 s)
+        lock = getattr(fh.spectrum, 'data_update_lock', None)
+        if lock is not None:
+            with lock:
+                fh()
+        else:
+            fh()
         return fh
     @property
     def filename(self):
@@ -159,15 +236,26 @@ class BaseExporter(object):
     def write_file(self):
         s = self.build_data()
         # V20.8: always UTF-8, not the code page of this Windows
-        with open(self.filename, 'w', encoding='utf-8') as f:
-            f.write(s)
+        write_atomic(self.filename, _text_bytes(s))
 
 class NumpyExporter(BaseExporter):
     _extension = 'npz'
     def build_data(self):
         pass
     def write_file(self):
-        np.savez(self.filename, sample_data=self.spectrum.sample_data)
+        # V22.11 (P2-NPZ1): with the values as measured and the passes, so
+        # that File > Import gives back the whole scan (like the history)
+        sp = self.spectrum
+        arrays = {'sample_data': sp.sample_data}
+        raw = getattr(sp, 'raw_dbFS', None)
+        if raw is not None and np.shape(raw) == (sp.sample_data.size,):
+            arrays['raw_dbFS'] = np.asarray(raw, dtype=np.float64)
+        passes = getattr(sp, 'passes', None)
+        if passes is not None and len(passes):
+            arrays.update(passes.to_arrays())
+        buf = io.BytesIO()
+        np.savez(buf, **arrays)
+        write_atomic(self.filename, buf.getvalue())
 
 class CSVExporter(BaseExporter):
     """Plain two column CSV.
@@ -197,8 +285,7 @@ class CSVExporter(BaseExporter):
         # file; with the code page of Windows (cp1251, cp1250...) a name with
         # other letters stopped the export ('charmap' codec can't encode).
         # A file with a plain Latin name is byte for byte as before.
-        with open(self.filename, 'w', encoding='utf-8', newline='') as f:
-            f.write(s)
+        write_atomic(self.filename, _text_bytes(s, newline=''))
     @property
     def is_khz(self):
         fmt = self.frequency_format
@@ -267,7 +354,7 @@ def wsm_levels(spectrum, step=WSM_STEP_KHZ, scale=WSM_LEVEL_SCALE):
 
 def wsm_csv(spectrum, dt=None, receiver=None, scale=WSM_LEVEL_SCALE, squelch=WSM_SQUELCH_DB):
     grid, lv, floor = wsm_levels(spectrum, scale=scale)
-    dt = dt or datetime.datetime.now()
+    dt = scan_local_dt(spectrum, dt)
     name = receiver or ('RTL-SDR %s' % (spectrum.name or 'scan')).strip()
     name = name.replace(';', ',').replace('\r', ' ').replace('\n', ' ')[:60]
     sq_pct = '%g' % min(100.0, squelch * 2.5)
@@ -296,14 +383,7 @@ class BaseWWBExporter(BaseExporter):
         # P2-DATE1): the time of the scan, not of the export - an old scan
         # exported today showed today's date in WWB. The WWB receiver scan
         # tests/data/572-636.sdb2 carries the time it was scanned.
-        dt = kwargs.get('dt')
-        if dt is None:
-            ts = getattr(self.spectrum, 'timestamp_utc', None)
-            try:
-                dt = datetime.datetime.fromtimestamp(float(ts)) if ts else None
-            except (TypeError, ValueError, OverflowError, OSError):
-                dt = None
-        self.dt = dt or datetime.datetime.now()
+        self.dt = scan_local_dt(self.spectrum, kwargs.get('dt'))
         self.epoch_ms = kwargs.get('epoch_ms')
     def set_filename(self, value):
         ext = self._extension
@@ -344,7 +424,11 @@ class BaseWWBExporter(BaseExporter):
             start_freq='%.1f' % grid[0],
             stop_freq='%.1f' % grid[-1],
             step_freq='%.3f' % (step,),
-            res_bandwidth='TODO',
+            # V22.11 (external audit AUD-15): a number, not the word 'TODO'
+            # left from the original code. 0 = not given: the value WWB 7.9
+            # itself writes ("ResolutionBandWidth" 0 in the sdb3 it made of
+            # our sdb2, tests/reference/wwb79_sdb3_from_our_sdb2.sdb3).
+            res_bandwidth='0',
             scale_factor='1',
             date=d['scan_data_source']['date'],
             time=d['scan_data_source']['time'],
@@ -374,8 +458,7 @@ class BaseWWBExporter(BaseExporter):
         # the code page of Windows: a folder with Cyrillic or Polish letters
         # (the path is in the name attribute) gave a file that is not XML, or
         # no file at all. Line ends stay as before (text mode).
-        with open(self.filename, 'w', encoding='utf-8') as f:
-            f.write(s)
+        write_atomic(self.filename, _text_bytes(s))
 
 
 class WWBLegacyExporter(BaseWWBExporter):
@@ -554,7 +637,7 @@ class WWB3Exporter(BaseExporter):
     def __init__(self, **kwargs):
         super(WWB3Exporter, self).__init__(**kwargs)
         self.scale_factor = kwargs.get('scale_factor', 1)
-        self.dt = kwargs.get('dt')
+        self.dt = scan_local_dt(self.spectrum, kwargs.get('dt'))
     def build_data(self):
         grid, values, step = wwb_points(self.spectrum)
         if np.unique(np.diff(grid)).size != 1:
@@ -567,5 +650,4 @@ class WWB3Exporter(BaseExporter):
                           scale_factor=self.scale_factor, no_data=no_data)
     def write_file(self):
         data = self.build_data()
-        with open(self.filename, 'wb') as f:
-            f.write(data)
+        write_atomic(self.filename, data)

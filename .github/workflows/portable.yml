@@ -70,6 +70,9 @@ jobs:
           grep -q "OK   data folder: .*WWB-Scanner.data" "$app/data/logs/selftest.txt"
           grep -q "OK   dongle library" "$app/data/logs/selftest.txt"
           test -f "$app/rtl-tools/rtl_eeprom.exe"
+          test -f "$app/LICENSE"
+          grep -q "GNU General Public License" "$app/README_PORTABLE.txt"
+          (cd dist && sha256sum -c WWB-Scanner-*-win64-portable.zip.sha256)
           ls "$app"
           du -sh "$app" || true
 
@@ -79,6 +82,7 @@ jobs:
           name: WWB-Scanner-portable-win64
           path: |
             dist/WWB-Scanner-*-win64-portable.zip
+            dist/WWB-Scanner-*-win64-portable.zip.sha256
             dist/selftest_build.txt
             dist/size_report.txt
           retention-days: 30
@@ -88,4 +92,15 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.event.release.tag_name }}" dist/WWB-Scanner-*-win64-portable.zip --clobber
+        run: |
+          set -e
+          tag="${{ github.event.release.tag_name }}"
+          gh release upload "$tag" dist/WWB-Scanner-*-win64-portable.zip dist/WWB-Scanner-*-win64-portable.zip.sha256 --clobber
+          # SHA-256 of the zip in the release text (external audit 22.11), once
+          line=$(cat dist/WWB-Scanner-*-win64-portable.zip.sha256)
+          body=$(gh release view "$tag" --json body -q .body)
+          case "$body" in
+            *"$line"*) ;;
+            *) printf '%s\n\nSHA-256:\n```\n%s\n```\n' "$body" "$line" > "$RUNNER_TEMP/notes.md"
+               gh release edit "$tag" --notes-file "$RUNNER_TEMP/notes.md" ;;
+          esac
