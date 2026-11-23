@@ -58,7 +58,8 @@ def test_band_gain_is_on_by_default():
 
 
 def test_window_switches_it_on_once():
-    p = os.path.join(ROOT, 'wwb_scanner', 'ui', 'pyside', 'qml', 'main.qml')
+    import wwb_scanner                     # the installed package (the qa-kit has no wwb_scanner/)
+    p = os.path.join(os.path.dirname(wwb_scanner.__file__), 'ui', 'pyside', 'qml', 'main.qml')
     qml = open(p, encoding='utf-8').read()
     assert 'property bool bandGainOn2212: false' in qml
     assert 'function enableBandGainOnce()' in qml
