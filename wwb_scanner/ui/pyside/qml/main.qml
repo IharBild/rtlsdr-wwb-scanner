@@ -380,6 +380,21 @@ ApplicationWindow {
         id: defaultsSettings
         category: 'Defaults'
         property int version: 0
+        // V22.12: "Own gain per band" switched on once in settings saved by
+        // an earlier version (there it was off by default, now it is on)
+        property bool bandGainOn2212: false
+    }
+    function enableBandGainOnce() {
+        if (defaultsSettings.bandGainOn2212)
+            return false;
+        defaultsSettings.bandGainOn2212 = true;
+        if (scanConfig.bandGain)
+            return false;
+        scanConfig.bandGain = true;
+        scanner.statusNote('"Own gain per band" is on now (Scan settings): each band gets the '
+                           + 'gain that gives it the lowest floor. Switch it off there if you need one '
+                           + 'gain for the whole scan');
+        return true;
     }
     function replaceOldFactorySettings() {
         if (defaultsSettings.version >= 208)
@@ -406,7 +421,7 @@ ApplicationWindow {
                            + n.sweepOverlapRatio + ' (Device Settings and Scan settings)');
         return true;
     }
-    Component.onCompleted: replaceOldFactorySettings()
+    Component.onCompleted: { replaceOldFactorySettings(); enableBandGainOnce(); }
 
     ScannerInterface {
         id: scanner

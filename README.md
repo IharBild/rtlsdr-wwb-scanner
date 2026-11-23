@@ -10,7 +10,7 @@ company in Poland and for sound engineers across Europe. Most of the code in thi
 written with Claude (Anthropic); every release is checked on a real V4 dongle by the
 maintainer.
 
-Current version: **V22.11** in the branch `v4-fixes` (installed by the command below). Last tagged
+Current version: **V22.12** in the branch `v4-fixes` (installed by the command below). Last tagged
 release: [v22.3](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v22.3)
 (branch `v4-fixes`). The `master` branch is the original upstream code and is not used here.
 
@@ -183,6 +183,13 @@ release: [v22.3](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v22
   - Checked: the window check U1-U41 passes on PySide2 5.15 (Python 3.8) and PySide6 6.12
     (Python 3.13, also from a clean install with only Essentials + Addons); all tests on
     both. **Not yet on Windows with the dongle.**
+- **V22.12** - **Own gain per band on, driver v8** (23.11.2026, after qa_pc on the V4 with V22.11:
+  0 FAIL). "Own gain per band" is on by default: on the V4 it lowered the floor of 470-560 MHz by
+  about 4 dB and of 174-240 MHz by 7.9 dB with the levels of strong signals kept; a window that
+  kept settings of an earlier version switches it on once (it can be switched off in Scan
+  settings). The dongle library **scanner-v8** (libusb 1.0.30) passed on the V4 and is now the
+  default: the portable build and the installation steps use it. qa_hw H13 compares with one-gain
+  scans before and right after and checks levels only where the air stayed the same.
 - **V22.11** - **Hardening after the external audits** (23.11.2026). Exported files are written to a
   temporary file and put in place in one step, during a scan from a snapshot of the points; a name
   Windows keeps for a device ("NUL.csv", "COM1.sdb2") is refused (it was "exported" and no file
@@ -359,11 +366,11 @@ release: [v22.3](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v22
 | Hardware | RTL-SDR Blog V4 (R828D tuner) |
 | System | Windows 11, Python 3.13.17 64-bit |
 | Libraries | numpy 2.5.4, scipy 1.18.1, pyrtlsdr 0.5.1, PySide6 6.12.0 |
-| Driver | `rtlsdr-scanner-v7` (checked on the V4 15.11.2026) |
+| Driver | `rtlsdr-scanner-v8` = v7 on libusb 1.0.30 (checked on the V4 23.11.2026) |
 | Automatic tests | GitHub Actions: Linux, Python 3.11, 3.13 and 3.14; Windows, Python 3.13; simulator instead of the dongle |
 
 Python 3.11 or newer; the window runs on PySide6. pyrtlsdr 0.4 and newer need the
-`rtlsdr-scanner-v7` driver. V22.3 is checked on the V4 (18.11.2026, see the version list
+`rtlsdr-scanner-v8` driver (or v7: the same driver code on libusb 1.0.29). V22.3 is checked on the V4 (18.11.2026, see the version list
 above).
 
 ## Installation (Windows)
@@ -393,7 +400,7 @@ above).
    For a fixed release use `.../archive/refs/tags/v22.3.zip` instead.
 
 4. **rtlsdr.dll.** Unpack the same source archive, then with the environment active:
-   `python drivers\rtlsdr-scanner-v7\install_dll.py` (puts the DLL into
+   `python drivers\rtlsdr-scanner-v8\install_dll.py` (puts the DLL into
    `C:\wwb-scanner\Scripts`; `... install_dll.py where` shows which DLL is loaded,
    `... install_dll.py rollback` restores the previous one).
 5. **Start:** `C:\wwb-scanner\Scripts\wwb_scanner-ui`. You can make a desktop shortcut to it.
@@ -509,6 +516,11 @@ Windows: быстрее, без собственных помех донгла �
   копируются из реестра). Настройки по умолчанию — в ядре; без tinydb. В ядре появились
   служба скана и события, сканы из нескольких проходов (основа режима «Точный») и
   интерфейс приёмника (основа для других приёмников). Проверено на V4 18.11.2026.
+- V22.12: «Own gain per band» включено по умолчанию (на V4 пол 470–560 МГц ниже примерно на
+  4 дБ, 174–240 МГц — на 7,9 дБ, уровни сильных сигналов те же); у сохранённых настроек
+  прошлых версий включается один раз, выключить можно в Scan settings. Драйвер scanner-v8
+  проверен на V4 и стал драйвером по умолчанию (портативная сборка, установка). H13 в qa_hw
+  сравнивает со сканами с одним усилением до и сразу после.
 - V22.11: закалка по внешним аудитам. Экспорт пишется во временный файл и ставится на место
   одним шагом, во время скана — со снимка точек; имя, которое Windows держит за устройством
   («NUL.csv», «COM1.sdb2»), отклоняется. sdb3 и CSV для WSM несут время скана, при импорте оно

@@ -321,6 +321,7 @@ def main():
     v227_checks(app, win, si)
     v228_checks(app, win, si)
     v229_checks(app, win, si)
+    v2212_checks(app, win, si)
     v209_checks(app, win, si)
     v208_checks(app, win, controls, si, fresh, first_start)
     win.close()
@@ -1122,7 +1123,7 @@ def v224_checks(app, win, si):
 
 def v227_checks(app, win, si):
     """V22.6 / V22.7. U43: three FFT windows; the switch "Own gain per band"
-    reaches the scan settings (off by default until checked on the PC)."""
+    reaches the scan settings (V22.12: on by default)."""
     try:
         sw = win.findChild(QtCore.QObject, 'bandGainSwitch')
         sc = si.scanConfig
@@ -1133,7 +1134,7 @@ def v227_checks(app, win, si):
         off = si.user_scan_config().sampling.band_gain
         sc.bandGain = default
         from wwb_scanner.scanner.sample_processing import WINDOW_TYPES
-        ok = sw is not None and on is True and off is False and default is False and \
+        ok = sw is not None and on is True and off is False and default is True and \
             WINDOW_TYPES == ['hann', 'blackmanharris', 'flattop']
         check('U43', ok, 'switch %s, on -> %r, off -> %r, default %r, windows %s'
               % ('found' if sw is not None else 'MISSING', on, off, default, WINDOW_TYPES))
@@ -1201,6 +1202,34 @@ def v228_checks(app, win, si):
         check('U45', False, 'error: %s' % exc)
     finally:
         cfg.startFreq, cfg.endFreq = old
+
+
+def v2212_checks(app, win, si):
+    """V22.12. U47: settings saved by an earlier version with "Own gain per
+    band" off get it switched on once; a later "off" of the user stays."""
+    try:
+        if not _qml_eval(win, 'typeof enableBandGainOnce === "function"'):
+            check('U47', False, 'no enableBandGainOnce in main.qml (V22.12 not installed)')
+            return
+        was_flag = bool(_qml_eval(win, 'defaultsSettings.bandGainOn2212'))
+        was_on = bool(_qml_eval(win, 'scanConfig.bandGain'))
+        _qml_eval(win, 'defaultsSettings.bandGainOn2212 = false')
+        _qml_eval(win, 'scanConfig.bandGain = false')
+        pump(app, 0.1)
+        first = bool(_qml_eval(win, 'enableBandGainOnce()'))
+        pump(app, 0.1)
+        on_after = bool(_qml_eval(win, 'scanConfig.bandGain')) and bool(si.user_scan_config().sampling.band_gain)
+        _qml_eval(win, 'scanConfig.bandGain = false')          # the user switches it off
+        second = bool(_qml_eval(win, 'enableBandGainOnce()'))
+        stays_off = not bool(_qml_eval(win, 'scanConfig.bandGain'))
+        _qml_eval(win, 'scanConfig.bandGain = %s' % ('true' if was_on else 'false'))
+        _qml_eval(win, 'defaultsSettings.bandGainOn2212 = %s' % ('true' if was_flag else 'false'))
+        pump(app, 0.1)
+        ok = first and on_after and not second and stays_off
+        check('U47', ok, 'old settings with the switch off: switched on %s (on %s); second call %s, the '
+              'user\'s "off" stays %s' % (first, on_after, second, stays_off))
+    except Exception as exc:
+        check('U47', False, 'error: %s' % exc)
 
 
 def v229_checks(app, win, si):

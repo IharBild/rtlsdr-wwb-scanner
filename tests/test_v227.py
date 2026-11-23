@@ -180,10 +180,11 @@ def test_calibrations_never_use_band_gain():
     assert conf.sampling.band_gain is True
 
 
-def test_default_is_off_until_checked_on_the_pc():
+def test_default_is_on_after_the_check_on_the_pc():
+    """V22.12: on by default (decision of 23.11.2026 after qa_pc on the V4)."""
     from wwb_scanner.scanner import config
-    assert config.TESTED['band_gain'] is False
-    assert config.SamplingConfig().band_gain is False
+    assert config.TESTED['band_gain'] is True
+    assert config.SamplingConfig().band_gain is True
 
 
 def test_merge_band_infos():

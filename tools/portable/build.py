@@ -7,7 +7,7 @@ Makes DIST/WWB-Scanner (wwb_scanner.exe, _internal, rtl-tools, README) and
 DIST/WWB-Scanner-<version>-<platform>.zip, then runs the exe with --selftest
 (window loads, dongle library loads). Exit code 0 when the build passed.
 
-On Windows the dongle library is drivers/rtlsdr-scanner-v7/x64/rtlsdr.dll
+On Windows the dongle library is drivers/rtlsdr-scanner-v8/x64/rtlsdr.dll
 (the scanner build). Elsewhere (a test of the build) give --dll.
 """
 import argparse
@@ -24,7 +24,8 @@ import zipfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 WIN = sys.platform == 'win32'
-DRIVER = os.path.join(ROOT, 'drivers', 'rtlsdr-scanner-v7', 'x64')
+# V22.12: scanner-v8 (v7 code on libusb 1.0.30), checked on the V4 23.11.2026
+DRIVER = os.path.join(ROOT, 'drivers', 'rtlsdr-scanner-v8', 'x64')
 RTL_TOOLS = ('rtl_test.exe', 'rtl_eeprom.exe')
 
 

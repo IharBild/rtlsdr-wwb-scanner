@@ -655,7 +655,7 @@ def security(out):
         good = bool(vt) and vt >= (0, 4)
         st = 'INFO' if not loc else ('PASS' if good else 'WARN')
         R.add('SE5', 'SECURITY', st, 'зависимости: pyrtlsdr >= 0.4 из ожидаемого места',
-              'pyrtlsdr %s, %s%s' % (ver, loc, '' if good else '; нужен pyrtlsdr 0.4+ и DLL scanner-v7'))
+              'pyrtlsdr %s, %s%s' % (ver, loc, '' if good else '; нужен pyrtlsdr 0.4+ и DLL scanner-v7 или v8'))
     except Exception as exc:
         R.add('SE5', 'SECURITY', 'INFO', 'зависимости: pyrtlsdr', repr(exc))
 

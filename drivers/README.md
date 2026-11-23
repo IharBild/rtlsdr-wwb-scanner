@@ -50,5 +50,6 @@ instead of 1.0.29: libusb 1.0.30 fixes CVE-2026-47104 (one-byte out-of-bounds re
 crash from a malformed USB descriptor (external audit of 22.11.2026, B6 / AUD-10). Same 51
 exports; the command line tools are bit-identical to v7; two builds gave bit-identical
 files. `install_dll.py` keeps `.before-v8` (v7) for `rollback`.
-Status: built 23.11.2026 in the sandbox; NOT yet tested on the real dongle. The program
-and the portable build stay on v7 until the check on the PC.
+Status: built 23.11.2026 in the sandbox; tested on the real dongle 23.11.2026 (qa_pc
+standard: 0 FAIL, full scan 31-1766 MHz in 155 s). The default driver since V22.12 (the
+portable build and the installation steps use it).

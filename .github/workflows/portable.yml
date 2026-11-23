@@ -15,7 +15,7 @@ on:
     paths:
       - 'wwb_scanner/**'
       - 'tools/portable/**'
-      - 'drivers/rtlsdr-scanner-v7/x64/**'
+      - 'drivers/rtlsdr-scanner-v8/x64/**'
       - 'setup.cfg'
       - 'setup.py'
       - '.github/workflows/portable.yml'

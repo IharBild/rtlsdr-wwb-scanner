@@ -163,7 +163,7 @@ def check_environment(args):
                 result('E2', 'PASS', 'версия pyrtlsdr', '%s, DLL с rtlsdr_set_dithering (scanner-v7+)' % v)
             else:
                 result('E2', 'WARN', 'версия pyrtlsdr', '%s: нужна DLL с rtlsdr_set_dithering - '
-                       'drivers\\rtlsdr-scanner-v7\\install_dll.py' % v)
+                       'drivers\\rtlsdr-scanner-v8\\install_dll.py' % v)
         else:
             result('E2', 'PASS', 'версия pyrtlsdr', v)
     except ValueError:
@@ -1215,13 +1215,58 @@ def v227_installed():
         return False
 
 
+H13_STABLE_DB = 1.5       # V22.12: a strong point is "stable air" when the two references agree this well
+H13_MIN_STABLE = 20       # ... and the level check needs at least this many such points
+
+
+def h13_compare(f, y, plan_bands, ref_gain, before, after):
+    """V22.12 (PC 23.11: two DVB-T-like bands vanished between H9 and H13 and
+    H13 reported -16.5 dB). The scan with own gain per band is compared with
+    the mean of two scans with one gain, one before (H9) and one right after;
+    levels only on strong points where those two agree within
+    H13_STABLE_DB (the air did not change there). Returns (status, text)."""
+    import numpy as np
+    bf, by = before['f'], before['y']
+    ay = np.interp(bf, after['f'], after['y'])
+    yi = np.interp(bf, f, y)
+    ref = (by + ay) / 2.
+    fl = floor_level(ref)
+    strong = (by > floor_level(by) + 20) | (ay > floor_level(ay) + 20)
+    stable = strong & (np.abs(by - ay) <= H13_STABLE_DB)
+    n_strong, n_stable = int(strong.sum()), int(stable.sum())
+    med = float(np.median((yi - ref)[stable])) if n_stable >= H13_MIN_STABLE else None
+    rows, worse = [], False
+    for lo, hi, gain in plan_bands:
+        if gain <= ref_gain + 0.05:
+            continue
+        m_new = (f >= lo) & (f <= hi)
+        m_ref = (bf >= lo) & (bf <= hi)
+        if m_new.sum() < 50 or m_ref.sum() < 50:
+            continue
+        q_new = float(np.percentile(y[m_new], 20))
+        q_b = float(np.percentile(by[m_ref], 20))
+        q_a = float(np.percentile(ay[m_ref], 20))
+        q_ref = (q_b + q_a) / 2.
+        worse = worse or q_new > q_ref + 0.5
+        rows.append('%g-%g: пол %.1f / %.1f (до / после) -> %.1f дБ (%+.1f)' % (lo, hi, q_b, q_a, q_new,
+                                                                              q_new - q_ref))
+    if med is None:
+        levels = ('уровни: эфир менялся - стабильных сильных точек %d из %d (нужно %d), '
+                  'уровни не сравнивались' % (n_stable, n_strong, H13_MIN_STABLE))
+        status = 'WARN' if worse else 'INFO'
+    else:
+        levels = 'сильные точки, где эфир стабилен (%d из %d): разница %+.2f дБ' % (n_stable, n_strong, med)
+        status = 'PASS' if abs(med) <= 1.5 and not worse else 'WARN'
+    return status, '%s; %s' % (levels, '; '.join(rows) or 'нет поднятых полос')
+
+
 @guard('H13', 'своё усиление на полосу (V22.7)')
 def h13_band_gain(lab, ref):
     """The same scan as H9/H11 (470-800, clean, Overload) with "Own gain per
     band": which gains the probe chose, whether strong carriers keep their
     level (at the gain of the scan) and how much lower the floor of the
-    raised bands is. The air changes between the two scans: medians only."""
-    import numpy as np
+    raised bands is. V22.12: compared with one-gain scans before (H9) and
+    right after, levels only where the air stayed the same."""
     s = lab.scan('band_gain', 470, 800, clean=True, auto_gain=True, band_gain=True)
     plan = getattr(s['scanner'], 'gain_plan', None)
     if s['hung'] or s['error'] or plan is None:
@@ -1233,33 +1278,16 @@ def h13_band_gain(lab, ref):
         result('H13', 'INFO', 'своё усиление на полосу: усиление нигде не поднято',
                'проба %.1f с; %s' % (plan.seconds, plan.note or bands))
         return s
-    f, y = s['f'], s['y']
-    rf, ry = ref['f'], ref['y']
-    yi = np.interp(rf, f, y)
-    fl = floor_level(ry)
-    strong = ry > fl + 20
-    d_strong = yi[strong] - ry[strong]
-    med = float(np.median(d_strong)) if d_strong.size else None
-    rows = []
-    worse = False
-    for b in plan.bands:
-        if b.gain <= plan.ref_gain + 0.05:
-            continue
-        m_new = (f >= b.lo) & (f <= b.hi)
-        m_ref = (rf >= b.lo) & (rf <= b.hi)
-        if m_new.sum() < 50 or m_ref.sum() < 50:
-            continue
-        q_new = float(np.percentile(y[m_new], 20))
-        q_ref = float(np.percentile(ry[m_ref], 20))
-        worse = worse or q_new > q_ref + 0.5
-        rows.append('%g-%g: пол %.1f -> %.1f дБ (%+.1f)' % (b.lo, b.hi, q_ref, q_new, q_new - q_ref))
-    ok_levels = med is not None and abs(med) <= 1.5
-    status = 'PASS' if ok_levels and not worse else 'WARN'
+    after = lab.scan('band_gain_ref_after', 470, 800, clean=True, auto_gain=True, band_gain=False)
+    if after['hung'] or after['error']:
+        result('H13', 'FAIL', 'скан с одним усилением после скана со своим на полосу',
+               'завис %s, ошибка %r' % (after['hung'], after['error']))
+        return s
+    status, text = h13_compare(s['f'], s['y'], [(b.lo, b.hi, b.gain) for b in plan.bands],
+                               plan.ref_gain, ref, after)
     result('H13', status, 'своё усиление на полосу (470-800)',
-           'проба %.1f с; полосы: %s; сильные точки (> пол + 20 дБ): разница с H9 медиана %s дБ (n=%d); '
-           '%s; время %.0f с против %.0f с в H9' % (
-               plan.seconds, bands, '%+.2f' % med if med is not None else '?', int(strong.sum()),
-               '; '.join(rows) or 'нет поднятых полос', s['time'], ref['time']))
+           'проба %.1f с; полосы: %s; %s; время %.0f с против %.0f с с одним усилением' % (
+               plan.seconds, bands, text, s['time'], after['time']))
     try:
         lab.save(s, 'scan_band_gain')
     except Exception as exc:

@@ -78,6 +78,7 @@ MARKERS = [
     ('V22.9', 'receivers/gate.py', 'class DongleClosed'),
     ('V22.10', 'scanner/gain_plan.py', 'def noise_choice'),
     ('V22.11', 'file_handlers/exporters.py', 'def write_atomic'),
+    ('V22.12', 'scanner/config.py', 'band_gain=True,'),
 ]
 
 
