@@ -205,7 +205,7 @@ class FakeRtlSdr(object):
 
     def __init__(self, serial_number=None, air=None, faults=(), quantize=True,
                  tune_delay=0.0, read_delay=0.0, fail_open=False, gain_affects=False,
-                 wide_adc=None, gain_error=None, lna=None):
+                 wide_adc=None, gain_error=None, lna=None, rx_noise=0., compress_above=None):
         if fail_open:
             raise IOError('No devices found')
         self.air = air if air is not None else Air()
@@ -215,6 +215,12 @@ class FakeRtlSdr(object):
         self.wide_adc = wide_adc              # V20: WideAdc model (None = old model)
         self.gain_error = gain_error          # V20.5: f(fc_hz, gain) -> dB the real gain differs
         self.lna = lna                        # V21.2: Lna model (tuner intermodulation)
+        # V22.10: noise of the dongle after the gain (rms, full scale = 1): more
+        # gain lowers the floor referred to the input until the air dominates
+        self.rx_noise = float(rx_noise)
+        # V22.10: above this gain the floor rises by 2 dB per dB of gain (compression
+        # / intermodulation that does not clip - 200 MHz on the user's dongle)
+        self.compress_above = compress_above
         self.gains_set = []
         self.read_gains = []                  # V20: gain of every read_samples call
         self.tune_delay = tune_delay
@@ -333,11 +339,30 @@ class FakeRtlSdr(object):
             x = self.air.iq(self._fc, self._fs, int(num_samples), seed)
             if self.gain_affects:
                 x = x * gf
+        if self.rx_noise or self.compress_above is not None:
+            rng = np.random.RandomState(seed + 99991)
+            n = x.size
+            sd = self.rx_noise
+            if self.compress_above is not None and self._gain > self.compress_above:
+                # an extra floor that grows 3 dB per dB above the knee (2 dB over the gain)
+                extra = 0.004 * 10. ** (3. * (self._gain - self.compress_above) / 20.)
+                sd = np.hypot(sd, extra)
+            if sd:
+                x = x + (rng.randn(n) + 1j * rng.randn(n)) * (sd / np.sqrt(2))
         if self.quantize:
             i = np.clip(np.round((x.real + 1) * 127.5), 0, 255)
             q = np.clip(np.round((x.imag + 1) * 127.5), 0, 255)
             x = (i + 1j * q) / 127.5 - (1 + 1j)
         return x
+
+    def set_bandwidth(self, bw):
+        """V22.10: the tuner IF filter (rtlsdr_set_tuner_bandwidth); 0 = automatic."""
+        self._check_open()
+        self.bandwidths = getattr(self, 'bandwidths', []) + [int(bw)]
+        self._bw = int(bw)
+
+    def get_bandwidth(self):
+        return getattr(self, '_bw', 0)
 
     def close(self):
         if self.in_call and self.device_opened:

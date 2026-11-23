@@ -365,11 +365,11 @@ class Lab(object):
             self.home_report = os.path.join(os.path.expanduser('~'), 'wwb_scan_timing.txt')
 
     def config(self, start, end, window_type='hann', overlap=0.65, sweeps=40, auto_gain=False, clean=False,
-               ranges=None, band_gain=False):
+               ranges=None, band_gain=False, sample_rate=2.4e6):
         c = {
             'scan_range': [float(start), float(end)],
             'device': {'gain': 33.8},
-            'sampling': {'sample_rate': 2.4e6, 'sweep_overlap_ratio': overlap,
+            'sampling': {'sample_rate': float(sample_rate), 'sweep_overlap_ratio': overlap,
                          'sweeps_per_scan': sweeps, 'samples_per_sweep': 2048,
                          'window_size': 96, 'window_type': window_type,
                          # V22.0: the core defaults are the window's (all on);
@@ -1098,6 +1098,106 @@ def h11_clean(lab, s):
               else 'пол не выровнен: %s' % info.get('floor_skipped'), int(big.sum())))
 
 
+def v2210_installed():
+    try:
+        from wwb_scanner.scanner.gain_plan import noise_choice  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+@guard('H13b', 'шумовая проверка своего усиления, 174-240 МГц (V22.10)')
+def h13b_band_gain_vhf(lab):
+    """V22.10 (A4): DAB / TV band III, where more gain made the floor
+    referred to the input worse on the user's dongle (200 MHz, 20.11: -7 dB at
+    49.6 without clipping). The same range at the gain of the scan and with
+    "Own gain per band": the gains the noise check kept and the floor of the
+    raised bands. PASS: no raised band whose floor got higher than the gain
+    says (floor referred to the input worse)."""
+    import numpy as np
+    ref = lab.scan('vhf_ref', 174, 240, clean=True, auto_gain=True)
+    s = lab.scan('vhf_band_gain', 174, 240, clean=True, auto_gain=True, band_gain=True)
+    plan = getattr(s['scanner'], 'gain_plan', None)
+    if s['hung'] or s['error'] or ref['error'] or plan is None:
+        result('H13b', 'FAIL', 'своё усиление на полосу, 174-240',
+               'завис %s, ошибка %r / %r, план %r' % (s['hung'], s['error'], ref['error'], plan))
+        return
+    bands = '; '.join('%g-%g %.1f дБ (%s)' % (b.lo, b.hi, b.gain, b.why) for b in plan.bands)
+    if not plan.banded:
+        result('H13b', 'INFO', 'своё усиление на полосу, 174-240: усиление нигде не поднято',
+               'проба %.1f с; %s' % (plan.seconds, plan.note or bands))
+        return
+    f, y, rf, ry = s['f'], s['y'], ref['f'], ref['y']
+    rows, worse = [], False
+    for b in plan.bands:
+        if b.gain <= plan.ref_gain + 0.05:
+            continue
+        m_new = (f >= b.lo) & (f <= b.hi)
+        m_ref = (rf >= b.lo) & (rf <= b.hi)
+        if m_new.sum() < 50 or m_ref.sum() < 50:
+            continue
+        # levels of the band are given at the gain of the scan: a lower floor
+        # there = a lower floor referred to the input
+        d = float(np.percentile(y[m_new], 20) - np.percentile(ry[m_ref], 20))
+        worse = worse or d > 0.5
+        rows.append('%g-%g: пол %+.1f дБ' % (b.lo, b.hi, d))
+    result('H13b', 'WARN' if worse else 'PASS', 'своё усиление на полосу, 174-240 (шумовая проверка)',
+           'проба %.1f с; полосы: %s; %s' % (plan.seconds, bands, '; '.join(rows) or 'нет полос для сравнения'))
+
+
+@guard('H16', 'частота дискретизации 3,2 МС/с: фильтр ПЧ, точки 25 кГц, гребёнка (V22.10)')
+def h16_rates(lab):
+    """V22.10 on the real dongle: 470-480 MHz at 2.4 and 3.2 MS/s.
+    a) the IF filter of the tuner is 2.4 MHz at 3.2 MS/s (23.11: the 6 MHz mode
+       made the output 4-6 dB lower);
+    b) the points are 25 kHz wide at both rates (window 96 -> 128);
+    c) for the record: the floor at 3.2 against 2.4 MS/s (23.11 with the 6 MHz
+       filter: -17 dB; expected now about -12 dB, the rest depends on the rate),
+       the tile shape and the comb lines of the kit that were hidden."""
+    import numpy as np
+    from wwb_scanner.receivers import rtlsdr as rr
+    rows, bad = [], []
+    got = {}
+    real_set = rr.set_if_bandwidth
+    for fs in (2.4e6, 3.2e6):
+        seen = []
+
+        def spy(dev, sample_rate=None, _seen=seen):
+            ok = real_set(dev, sample_rate)
+            try:
+                _seen.append(int(dev.get_bandwidth()) if ok else None)
+            except Exception:
+                _seen.append(None)
+            return ok
+        rr.set_if_bandwidth = spy
+        try:
+            s = lab.scan('rate_%.1f' % (fs / 1e6), 470, 480, clean=True, sample_rate=fs)
+        finally:
+            rr.set_if_bandwidth = real_set
+        sc = s['scanner']
+        if s['hung'] or s['error']:
+            bad.append('%.1f МС/с: ошибка %r' % (fs / 1e6, s['error']))
+            continue
+        f, y = s['f'], s['y']
+        step = float(np.median(np.diff(f))) if f.size > 2 else 0.
+        bw = seen[-1] if seen else 'не задан'
+        info = getattr(sc.spectrum, 'cleanup_info', None) or {}
+        comb = info.get('comb') or {}
+        got[fs] = float(np.median(y)) if y.size else None
+        rows.append('%.1f МС/с: окно %s, точка %.1f кГц, пол %.1f дБ, линий гребёнки скрыто %d' % (
+            fs / 1e6, sc.window_size, step * 1e3, got[fs] if got[fs] is not None else float('nan'),
+            len(comb.get('hidden') or [])))
+        if abs(step - 0.025) > 0.001:
+            bad.append('%.1f МС/с: точка %.1f кГц, а не 25' % (fs / 1e6, step * 1e3))
+        rows[-1] += ', фильтр ПЧ %s Гц' % bw
+        if fs > 2.5e6 and bw != 2400000:
+            bad.append('фильтр ПЧ %s, а не 2400000 Гц' % bw)
+    if got.get(2.4e6) is not None and got.get(3.2e6) is not None:
+        rows.append('3.2 против 2.4: %+.1f дБ (23.11 до V22.10: -16.7)' % (got[3.2e6] - got[2.4e6]))
+    result('H16', 'FAIL' if bad else 'PASS', '3,2 МС/с: фильтр ПЧ 2,4 МГц и точки 25 кГц',
+           '; '.join(bad + rows))
+
+
 def v227_installed():
     try:
         from wwb_scanner.scanner import gain_plan  # noqa: F401
@@ -1415,6 +1515,9 @@ def main():
                 h14_open(lab)
             if v229_installed():
                 h15_close_during_read(lab)
+            if v2210_installed():
+                h13b_band_gain_vhf(lab)
+                h16_rates(lab)
             if v18_installed():
                 h12_bands(lab, h2)
             v10 = any(r[0] == 'E3' and r[1] == 'PASS' for r in RESULTS)

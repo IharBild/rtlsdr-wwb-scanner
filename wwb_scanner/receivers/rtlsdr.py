@@ -11,6 +11,39 @@ from wwb_scanner import scan_dll
 from wwb_scanner.receivers import Receiver
 from wwb_scanner.receivers.gate import call
 
+# V22.10 (decision of 23.11.2026): the IF filter of the R82xx tuner is at most
+# this wide. The driver sets it to the sample rate; above 2.43 MHz the tuner
+# goes to its 6 MHz mode (IF 3.57 MHz) and the output is 4-6 dB lower
+# (measured on the user's V4, 23.11: 2.56 MS/s -96.3 -> -90.3 dBFS/Hz,
+# 2.8 and 3.2 MS/s 4.4 dB). Only the centre third of a tile is used, so the
+# narrow filter cuts nothing that is kept. At 2.4 MS/s and below nothing
+# changes (the same filter as before).
+IF_BW_MAX_HZ = 2400000
+
+
+def if_bandwidth_for(sample_rate):
+    """The IF filter for ``sample_rate`` (Hz): min(sample rate, IF_BW_MAX_HZ)."""
+    try:
+        fs = int(round(float(sample_rate)))
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(fs, IF_BW_MAX_HZ))
+
+
+def set_if_bandwidth(dev, sample_rate=None):
+    """Set the IF filter of ``dev`` for its sample rate; False when the
+    library can not (old pyrtlsdr / DLL)."""
+    fn = getattr(dev, 'set_bandwidth', None)
+    if fn is None:
+        return False
+    if sample_rate is None:
+        sample_rate = dev.sample_rate
+    try:
+        fn(if_bandwidth_for(sample_rate))
+        return True
+    except Exception:
+        return False
+
 
 class RtlSdrReceiver(Receiver):
     name = 'rtlsdr'
@@ -41,6 +74,7 @@ class RtlSdrReceiver(Receiver):
     def sample_rate(self, hz):
         with call(self.dev) as d:
             d.sample_rate = hz
+            set_if_bandwidth(d, hz)       # V22.10
     @property
     def is_open(self):
         return getattr(self.dev, 'device_opened', True)

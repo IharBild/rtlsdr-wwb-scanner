@@ -235,9 +235,13 @@ def test_K20_low_edge(monkeypatch, tmpdir, rng):
     pytest.param(2.56e6, marks=pytest.mark.xfail(reason='fs/nfft = 25.098 kHz: tiles do not share bins, near-duplicate points (QA finding)', strict=True)),
     3.2e6])
 def test_K21_sample_rates(monkeypatch, tmpdir, fs):
-    window = int(round(fs / 25e3))
+    # V22.10: the window size of the settings is for 2.4 MS/s (96) and follows
+    # the sample rate (config.effective_window): 25 kHz points at every rate
+    from wwb_scanner.scanner.config import effective_window
+    window = effective_window(96, fs)
     air = sim.Air(noise=0.03).tone(480.0e6, 0.02)
-    f, y, scanner, sdr, dt = scan(monkeypatch, tmpdir, 470, 490, air, fs=fs, window=window)
+    f, y, scanner, sdr, dt = scan(monkeypatch, tmpdir, 470, 490, air, fs=fs, window=96)
+    assert scanner.window_size == window
     df = np.diff(f)
     fp = peak_near(f, y, 480.0)[0]
     print('K21 fs %.3f MHz win %d: %d points, step min/max %.4f/%.4f MHz, peak %.4f, %d tiles, %.2f s'

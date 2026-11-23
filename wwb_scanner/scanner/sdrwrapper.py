@@ -87,6 +87,9 @@ class SdrWrapper(object):
                 sdr_val = getattr(sdr, key)
             if sdr_val != scanner_val:
                 setattr(scanner, key, sdr_val)
+        # V22.10: the IF filter follows the sample rate, at most 2.4 MHz
+        from wwb_scanner.receivers.rtlsdr import set_if_bandwidth
+        set_if_bandwidth(sdr)
     def _lock(self, what):
         if self.device_lock.acquire(timeout=LOCK_WAIT_S):
             return True

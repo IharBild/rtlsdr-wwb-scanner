@@ -36,12 +36,35 @@ SAMPLE_RATE_RANGES_HZ = ((225001., 300000.), (900001., 3200000.))
 STABLE_SAMPLE_RATE_HZ = 2.56e6
 MAX_PPM = 300
 
+# V22.10 (decision of 23.11.2026): the window size is set for this sample
+# rate; at another rate the window grows or shrinks with it, so a point of
+# the scan stays as wide (96 points at 2.4 MS/s = 25 kHz -> 128 at 3.2,
+# 82 at 2.048, 102 at 2.56 MS/s). Off: the window size is used as it is.
+WINDOW_REF_RATE_HZ = 2.4e6
+
+
+def effective_window(window_size, sample_rate, follows=True):
+    """The FFT window used at ``sample_rate`` for the window size set at
+    WINDOW_REF_RATE_HZ (V22.10)."""
+    w = int(window_size)
+    if not follows:
+        return w
+    try:
+        fs = float(sample_rate)
+    except (TypeError, ValueError):
+        return w
+    if fs <= 0 or abs(fs - WINDOW_REF_RATE_HZ) < 1.:
+        return w
+    return max(8, int(round(w * fs / WINDOW_REF_RATE_HZ)))
+
+
 # The tested configuration in the units of the scanner core.
 TESTED = dict(
     sample_rate=2.4e6,
     gain=33.8,
     window_type='hann',
     window_size=96,
+    window_follows_rate=True,   # V22.10: 25 kHz points at every sample rate
     samples_per_sweep=2048,
     sweeps_per_scan=40,
     sweep_overlap_ratio=0.65,
@@ -175,6 +198,7 @@ class SamplingConfig(Config):
         sweeps_per_scan=TESTED['sweeps_per_scan'],
         samples_per_sweep=TESTED['samples_per_sweep'],
         window_size=TESTED['window_size'],
+        window_follows_rate=TESTED['window_follows_rate'],   # V22.10
         window_type=TESTED['window_type'],
         auto_gain=TESTED['auto_gain'],          # V17: re-measure clipped tiles with lower gain
         verify_peaks=TESTED['verify_peaks'],    # V21.2: check peaks next to strong carriers with less gain

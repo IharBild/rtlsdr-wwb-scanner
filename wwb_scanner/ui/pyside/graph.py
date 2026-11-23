@@ -354,7 +354,13 @@ class SpectrumGraphData(QtQuick.QQuickItem):
                 out.append({'f': float(fr), 'db': 0., 'kept': False})
             for item in info.get('spurs_kept') or []:
                 out.append({'f': float(item[0]), 'db': float(item[1]), 'kept': True})
-        except (TypeError, ValueError, IndexError):
+            # V22.10: lines of the comb of the own kit, marked like the spurs
+            comb = info.get('comb') or {}
+            for fr in comb.get('hidden') or []:
+                out.append({'f': float(fr), 'db': 0., 'kept': False})
+            for item in comb.get('kept') or []:
+                out.append({'f': float(item[0]), 'db': float(item[1]), 'kept': True})
+        except (TypeError, ValueError, IndexError, AttributeError):
             return []
         return sorted(out, key=lambda m: m['f'])
     def _update_marks(self):

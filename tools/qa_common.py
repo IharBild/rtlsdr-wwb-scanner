@@ -76,6 +76,7 @@ MARKERS = [
     ('V22.7', 'scanner/gain_plan.py', 'def make_plan'),
     ('V22.8', 'scanner/watchdog.py', 'class Watchdog'),
     ('V22.9', 'receivers/gate.py', 'class DongleClosed'),
+    ('V22.10', 'scanner/gain_plan.py', 'def noise_choice'),
 ]
 
 

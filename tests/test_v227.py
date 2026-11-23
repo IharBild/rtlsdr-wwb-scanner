@@ -10,6 +10,9 @@ from wwb_scanner.scanner import gain_plan as gp
 import sim
 
 NOMINAL = (lambda g_hi, g_lo, f=None: float(g_hi) - float(g_lo))
+# V22.10: noise of the dongle after the gain - without it more gain never
+# lowers the floor referred to the input and the noise check keeps g0
+RX_NOISE = 0.01
 
 
 def test_split_at_band_edges():
@@ -55,7 +58,7 @@ def _air():
 
 
 def test_probe_raises_the_gain_only_in_the_quiet_band():
-    rx = sim.FakeRtlSdr(air=_air(), gain_affects=True)
+    rx = sim.FakeRtlSdr(air=_air(), gain_affects=True, rx_noise=RX_NOISE)
     rx.sample_rate = 2.4e6
     rx.gain = 33.8
     plan = gp.make_plan(rx, [(470., 700.)], 33.8, _gains(rx), 2.4e6)
@@ -70,7 +73,7 @@ def test_probe_raises_the_gain_only_in_the_quiet_band():
 def test_probe_checks_the_new_gain(monkeypatch):
     """The probe step at 33.8 looked quiet, the check at the new gain clips:
     the next lower gain is used."""
-    rx = sim.FakeRtlSdr(air=_air(), gain_affects=True)
+    rx = sim.FakeRtlSdr(air=_air(), gain_affects=True, rx_noise=RX_NOISE)
     rx.sample_rate = 2.4e6
     rx.gain = 33.8
     real = rx.read_samples
@@ -87,7 +90,7 @@ def test_probe_checks_the_new_gain(monkeypatch):
 
 
 def test_no_calibrated_gain_above_means_one_gain():
-    rx = sim.FakeRtlSdr(air=_air(), gain_affects=True)
+    rx = sim.FakeRtlSdr(air=_air(), gain_affects=True, rx_noise=RX_NOISE)
     plan = gp.make_plan(rx, [(470., 700.)], 33.8, _gains(rx), 2.4e6, has_floor=lambda g: False)
     assert not plan.banded and 'floor calibration' in plan.note
     assert rx.calls['read_samples'] == 0        # nothing probed
@@ -108,7 +111,7 @@ def _peak(f, y, at, half=0.05):
 def test_banded_scan(monkeypatch, tmpdir, caplog):
     """The whole scan through the real Scanner: two bands, two gains, one
     spectrum; a carrier keeps its level (at the gain of the scan)."""
-    kw = dict(sdr_kwargs={'air': _air(), 'gain_affects': True}, auto_gain=True)
+    kw = dict(sdr_kwargs={'air': _air(), 'gain_affects': True, 'rx_noise': RX_NOISE}, auto_gain=True)
     plain, sdr0, _ = sim.run_scan(monkeypatch, tmpdir.mkdir('a'), 470., 700., **kw)
     f0, y0 = sim.spectrum_arrays(plain)
     with caplog.at_level(logging.INFO, logger='wwb_scanner.status'):
@@ -159,7 +162,7 @@ def test_one_gain_when_the_plan_is_flat(monkeypatch, tmpdir):
     """Nothing to raise (a strong carrier everywhere): the ordinary scan."""
     air = sim.Air(noise=0.004).tone(480e6, 0.4).tone(495e6, 0.4).tone(510e6, 0.4)
     sc, sdr, _ = sim.run_scan(monkeypatch, tmpdir, 470., 515., band_gain=True,
-                              sdr_kwargs={'air': air, 'gain_affects': True})
+                              sdr_kwargs={'air': air, 'gain_affects': True, 'rx_noise': RX_NOISE})
     assert sc.gain_plan is not None and not sc.gain_plan.banded
     assert 'gain_plan' not in (getattr(sc.spectrum, 'cleanup_info', None) or {})
     assert set(sdr.read_gains) == {33.8}
@@ -216,7 +219,7 @@ def test_banded_scan_levels_each_band_with_its_own_calibration(monkeypatch, tmpd
             cleanup.save_profile(_flat_profile(g), cleanup.profile_path(g, 2.4e6))
         sc, sdr, _ = sim.run_scan(monkeypatch, tmpdir, 470., 700., band_gain=True, auto_gain=True,
                                   clean={'clean_ripple': True, 'clean_spurs': True, 'clean_floor': True},
-                                  sdr_kwargs={'air': _air(), 'gain_affects': True})
+                                  sdr_kwargs={'air': _air(), 'gain_affects': True, 'rx_noise': RX_NOISE})
         plan = sc.gain_plan
         assert plan.banded and sorted({b.gain for b in plan.bands}) == [33.8, 49.6]
         info = sc.spectrum.cleanup_info

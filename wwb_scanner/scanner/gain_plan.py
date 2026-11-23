@@ -29,6 +29,19 @@ gain for every band, and each band is scanned with its own gain:
 
 Bands narrower than MIN_BAND_MHZ get the lower gain of their neighbour
 (no sub-scan of a few MHz).
+
+V22.10 (A4, decision of 22.11.2026): **noise check**. A higher gain only
+helps when the floor referred to the input gets lower: with the antenna
+on, the floor is often set by the air or by compression of the tuner, and
+then more gain only raises the floor on the screen (the user's dongle,
+20.11: no gain on 470-700 MHz above ~36 dB, 200 MHz worse by 7 dB at 49.6
+without any clipping). After the headroom check, the floor of the quietest
+probe steps of the band (median of a Welch spectrum, signals and narrow
+lines do not move it) is measured at ``g0`` and at up to NOISE_MAX_GAINS
+higher gains. The improvement referred to the input is the real gain
+difference minus the rise of the floor. A gain is kept only when it lowers
+the floor by NOISE_MIN_DB or more; of the gains within NOISE_TIE_DB of the
+best one, the lowest is taken (less risk of overload for the same floor).
 """
 import logging
 import time
@@ -47,6 +60,13 @@ STEP_RATIO = 0.9        # probe step = STEP_RATIO x sample rate
 MAX_CHECKS = 3
 MIN_BAND_MHZ = 5.
 
+# V22.10 (A4): noise check
+NOISE_MIN_DB = 1.0       # the floor referred to the input must get at least this much lower
+NOISE_TIE_DB = 0.5       # of the gains this close to the best one, the lowest is taken
+NOISE_STEPS = 2          # quietest probe steps of a band used for the floor
+NOISE_MAX_GAINS = 4      # higher gains tried per band
+NOISE_NPERSEG = 256
+
 
 class PlanBand(object):
     def __init__(self, lo, hi, gain, headroom_db=None, clipped=False, strongest_hz=None, why=''):
@@ -56,6 +76,7 @@ class PlanBand(object):
         self.clipped = bool(clipped)
         self.strongest_hz = strongest_hz
         self.why = why
+        self.noise = None       # V22.10: [[gain, improvement dB], ...] of the noise check
 
     def as_list(self):
         return [round(self.lo, 6), round(self.hi, 6), round(self.gain, 1)]
@@ -122,6 +143,48 @@ def peak_db(iq):
     m = np.maximum(np.abs(a.real), np.abs(a.imag))
     p = float(np.percentile(m, PEAK_PERCENTILE))
     return 20. * np.log10(max(p, 1e-10))
+
+
+def floor_db(iq, nperseg=NOISE_NPERSEG):
+    """Floor of the samples: median of the central half of a Welch spectrum
+    (Hann, ``nperseg``), dB (relative: only differences are used). Carriers
+    and narrow lines do not move a median; None when too few samples."""
+    x = np.asarray(iq)
+    k = x.size // nperseg
+    if k < 4:
+        return None
+    seg = x[:k * nperseg].reshape(k, nperseg)
+    seg = seg - seg.mean(axis=1, keepdims=True)
+    w = np.hanning(nperseg)
+    p = np.fft.fftshift((np.abs(np.fft.fft(seg * w, axis=1)) ** 2).mean(axis=0))
+    mid = np.r_[p[nperseg // 4:nperseg // 2 - 2], p[nperseg // 2 + 3:3 * nperseg // 4]]
+    return 10. * np.log10(max(float(np.median(mid)), 1e-30))
+
+
+def noise_choice(g0, results, min_db=None, tie_db=None):
+    """``results``: [(gain, improvement dB)] of the noise check. The gain to
+    use: the lowest of those within ``tie_db`` of the best improvement, when
+    the best is at least ``min_db``; else ``g0``."""
+    min_db = NOISE_MIN_DB if min_db is None else min_db
+    tie_db = NOISE_TIE_DB if tie_db is None else tie_db
+    ok = [(g, d) for g, d in results if d is not None]
+    if not ok:
+        return g0
+    best = max(d for _, d in ok)
+    if best < min_db:
+        return g0
+    return min(g for g, d in ok if d >= best - tie_db and d >= min_db)
+
+
+def noise_gains(g0, cands, g_top, n=None):
+    """The gains the noise check tries: ``g_top`` and up to ``n``-1 lower
+    candidates above ``g0``, spread evenly."""
+    n = NOISE_MAX_GAINS if n is None else n
+    pool = [c for c in cands if g0 + 0.05 < c <= g_top + 0.05]
+    if len(pool) <= n:
+        return sorted(pool, reverse=True)
+    idx = np.unique(np.round(np.linspace(0, len(pool) - 1, n)).astype(int))
+    return sorted((pool[i] for i in idx), reverse=True)
 
 
 def choose(g0, cands, headroom_db, drop, clipped=False):
@@ -198,15 +261,20 @@ def make_plan(rx, segments, g0, gains, sample_rate, has_floor=None, drop=None,
                 bands.append(PlanBand(lo, hi, g0, why='stopped'))
                 continue
             worst, worst_hz, clipped = None, None, False
+            floors = []                     # V22.10: (floor at g0, step) of the band
             for c in probe_steps(lo, hi, sample_rate):
                 run(rx.tune, sp.TUNE_TIMEOUT, c)
                 run(rx.read, sp.READ_TIMEOUT, sp.NUM_SAMPLES_DISCARDED)
                 x = run(rx.read, sp.READ_TIMEOUT, PROBE_SAMPLES)
-                if clip_ratio(x) >= overload_ratio:
+                step_clips = clip_ratio(x) >= overload_ratio
+                if step_clips:
                     clipped = True
                 h = -peak_db(x)
                 if worst is None or h < worst:
                     worst, worst_hz = h, c
+                fl = floor_db(x)
+                if fl is not None and not step_clips:
+                    floors.append((fl, c))
             fd = (lambda g, gg, f=worst_hz: drop(g, gg, f))
             g = choose(g0, cands, worst, fd, clipped)
             why = ('clips at %.1f dB' % g0 if clipped else
@@ -229,8 +297,41 @@ def make_plan(rx, segments, g0, gains, sample_rate, has_floor=None, drop=None,
             else:
                 if g > g0 + 0.05:
                     g = g0
-            bands.append(PlanBand(lo, hi, g, headroom_db=worst, clipped=clipped,
-                                  strongest_hz=worst_hz, why=why))
+            noise = None
+            if g > g0 + 0.05:
+                # V22.10 (A4): keep a higher gain only when the floor
+                # referred to the input gets lower by NOISE_MIN_DB
+                quiet = sorted(floors)[:NOISE_STEPS]
+                results = []
+                for gg in noise_gains(g0, cands, g):
+                    if should_stop is not None and should_stop():
+                        break
+                    imps = []
+                    for fl0, c in quiet:
+                        run(rx.tune, sp.TUNE_TIMEOUT, c)
+                        run(setattr, sp.TUNE_TIMEOUT, rx, 'gain', gg)
+                        run(rx.read, sp.READ_TIMEOUT, sp.NUM_SAMPLES_DISCARDED)
+                        x = run(rx.read, sp.READ_TIMEOUT, PROBE_SAMPLES)
+                        fl = floor_db(x)
+                        if fl is None or clip_ratio(x) >= overload_ratio:
+                            imps = None
+                            break
+                        imps.append(drop(gg, g0, c) - (fl - fl0))
+                    results.append((gg, float(np.mean(imps)) if imps else None))
+                g_noise = noise_choice(g0, results) if quiet else g0
+                noise = [[round(gg, 1), None if d is None else round(d, 2)] for gg, d in results]
+                why += '; noise: %s -> %.1f dB' % (
+                    ', '.join('%.1f dB %s' % (gg, 'n/a' if d is None else '%+.1f' % d)
+                              for gg, d in results) or 'no quiet step', g_noise)
+                g = g_noise
+            if not abs(_gain_now(rx, g0) - g0) <= 0.05:
+                # V22.10: the next band is probed at g0 again (before, it was
+                # probed at the gain the check of this band left set)
+                run(setattr, sp.TUNE_TIMEOUT, rx, 'gain', g0)
+            pb = PlanBand(lo, hi, g, headroom_db=worst, clipped=clipped,
+                          strongest_hz=worst_hz, why=why)
+            pb.noise = noise
+            bands.append(pb)
     finally:
         # V22.9 (external audit AUD-05): not on a dongle a USB error closed
         # (the scan opens it anew) or one with a call that still hangs
@@ -244,6 +345,13 @@ def make_plan(rx, segments, g0, gains, sample_rate, has_floor=None, drop=None,
     logger.info('gain plan (%.1f s): %s', plan.seconds, '; '.join(
         '%g-%g MHz %.1f dB (%s)' % (b.lo, b.hi, b.gain, b.why) for b in bands))
     return plan
+
+
+def _gain_now(rx, default):
+    try:
+        return float(rx.gain)
+    except Exception:
+        return float('nan')
 
 
 def level_shift(f_mhz, g_band, g0, drop):

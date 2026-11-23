@@ -403,6 +403,132 @@ def hide_spurs(f_mhz, y_db, limit_db=None, known=None):
     return to_db(p), removed, kept
 
 
+# V22.10 (decision of 23.11.2026): the comb of the user's own kit - narrow
+# lines at n x 4.16 MHz (fit 22.11: n x 4.15996 MHz + 0.4 kHz, 1 point wide,
+# +1.5 ... +6.5 dB over the floor), only with the antenna on, in scans from
+# several cities and days (the laptop, its power or USB). It is treated like
+# the dongle's own spurs: lines that fit the comb and look like one tone are
+# hidden under the same switch ("Hide dongle's own spurs"); stronger ones are
+# kept (may be a transmitter); the raw data stay untouched.
+COMB_F0_MHZ = 4.15996
+COMB_F0_SPAN_MHZ = 0.005      # the comb frequency is fitted within +-this
+COMB_F0_STEP_MHZ = 0.00005
+COMB_TOL_MHZ = 0.015          # a line within this of n x f0 (0.6 of a 25 kHz point)
+COMB_MIN_DB = 1.0             # a candidate line: this much over the floor ...
+COMB_HIDE_MAX_DB = 7.0        # ... hidden up to this much (stronger: kept, may be a transmitter)
+COMB_MIN_LINES = 5            # the comb is there when this many lines fit ...
+COMB_SIGMA = 5.0              # ... and that is this many sigma over chance
+COMB_MIN_LINES_KNOWN = 2      # short scans: lines exactly at n x COMB_F0_MHZ (no fit)
+
+
+def _tone(p, f, i, step):
+    """Shape test of hide_spurs at point ``i`` (powers ``p``): returns
+    (centre dB over the straight line under it, the line) or None when the
+    points around are not those of one narrow tone."""
+    if i < 10 or i > f.size - 11:
+        return None
+    if abs((f[i + 10] - f[i - 10]) - 20 * step) > 0.5 * step:
+        return None                 # gap in the scan here
+    left = float(np.median(p[i - 10:i - 4]))
+    right = float(np.median(p[i + 5:i + 11]))
+    x = np.arange(-4, 5)
+    line = left + (right - left) * (x + 7.5) / 15.0
+    seg = p[i - 4:i + 5]
+    centre_db = to_db(seg[3:6].max()) - to_db(line[3:6].mean())
+    shoulder_db = to_db(np.r_[seg[:2], seg[-2:]] / np.r_[line[:2], line[-2:]]).max()
+    mid_db = to_db(np.r_[seg[2], seg[6]] / np.r_[line[2], line[6]]).max()
+    if shoulder_db > SPUR_SHOULDER_DB or mid_db > max(SPUR_SHOULDER_DB, centre_db - 3.0):
+        return None
+    return float(centre_db), line
+
+
+def _comb_candidates(f, y):
+    """Local maxima COMB_MIN_DB or more over the running median: indices."""
+    med = running_median(y, 21)
+    up = y - med
+    i = np.arange(1, y.size - 1)
+    peak = (y[i] >= y[i - 1]) & (y[i] >= y[i + 1]) & (up[i] >= COMB_MIN_DB)
+    return i[peak]
+
+
+def find_comb(f_mhz, y_db, f0=None):
+    """The comb of the kit in a scan: (f0 MHz, [indices of its lines]) or
+    (None, []) when it is not there (V22.10).
+
+    Candidates are narrow local peaks; the comb frequency is fitted near
+    COMB_F0_MHZ. It is accepted only when at least COMB_MIN_LINES lines fit
+    and that is COMB_SIGMA standard deviations above what the same number
+    of peaks would give by chance (Poisson)."""
+    f = np.asarray(f_mhz, dtype=np.float64)
+    y = np.asarray(y_db, dtype=np.float64)
+    if f.size < 200:
+        return None, []
+    step = float(np.median(np.diff(f)))
+    if not (0.6 * BIN_MHZ <= step <= 1.4 * BIN_MHZ):
+        return None, []
+    cand = _comb_candidates(f, y)
+    if cand.size < COMB_MIN_LINES_KNOWN:
+        return None, []
+    fc = f[cand]
+    f0s = ([float(f0)] if f0 else
+           np.arange(COMB_F0_MHZ - COMB_F0_SPAN_MHZ, COMB_F0_MHZ + COMB_F0_SPAN_MHZ + 1e-12, COMB_F0_STEP_MHZ))
+    best = (0, None, None)
+    for g in f0s:
+        d = np.abs(fc - np.round(fc / g) * g)
+        hit = d <= COMB_TOL_MHZ
+        n = int(hit.sum())
+        if n > best[0]:
+            best = (n, float(g), cand[hit])
+    n, g, idx = best
+    if g is None:
+        return None, []
+    # chance: every candidate falls within +-tol of some line with p = 2 tol / f0;
+    # the f0 search is a few hundred tries, hence COMB_SIGMA
+    lam = cand.size * 2 * COMB_TOL_MHZ / g
+    if n >= COMB_MIN_LINES and n >= lam + COMB_SIGMA * np.sqrt(max(lam, 1.)) + 1:
+        return g, [int(i) for i in idx]
+    if f0:
+        return None, []
+    # a short scan has too few lines for the fit: the known comb frequency,
+    # every candidate there (chance of two at once in a 10 MHz scan ~1e-4)
+    d = np.abs(fc - np.round(fc / COMB_F0_MHZ) * COMB_F0_MHZ)
+    hit = d <= COMB_TOL_MHZ
+    lam = cand.size * 2 * COMB_TOL_MHZ / COMB_F0_MHZ
+    n = int(hit.sum())
+    if n >= COMB_MIN_LINES_KNOWN and n >= lam + 3. * np.sqrt(lam) + 1.5 and f[-1] - f[0] < 60.:
+        return COMB_F0_MHZ, [int(i) for i in cand[hit]]
+    return None, []
+
+
+def hide_comb(f_mhz, y_db, limit_db=None):
+    """Hide the lines of the kit's comb (find_comb) that look like one narrow
+    tone and stand at most ``limit_db`` (COMB_HIDE_MAX_DB) over the floor.
+    Returns (y_db, info) with info = {'f0_mhz', 'hidden': [MHz], 'kept':
+    [[MHz, dB]]} or None when there is no comb."""
+    f = np.asarray(f_mhz, dtype=np.float64)
+    y = np.asarray(y_db, dtype=np.float64).copy()
+    g, idx = find_comb(f, y)
+    if g is None:
+        return y, None
+    limit = COMB_HIDE_MAX_DB if limit_db is None else float(limit_db)
+    step = float(np.median(np.diff(f)))
+    p = from_db(y)
+    hidden, kept = [], []
+    for i in idx:
+        t = _tone(p, f, i, step)
+        if t is None:
+            continue
+        centre_db, line = t
+        if centre_db < SPUR_MIN_DB:
+            continue
+        if centre_db > limit:
+            kept.append([round(float(f[i]), 4), round(centre_db, 1)])
+            continue
+        p[i - 2:i + 3] = line[2:7]
+        hidden.append(round(float(f[i]), 4))
+    return to_db(p), {'f0_mhz': round(g, 5), 'hidden': hidden, 'kept': kept}
+
+
 def clean(f_mhz, y_db, start_mhz, period_bins, profile=None, ripple=True,
           spurs=True, flatten=True, default_ripple=None, spur_limit_db=None,
           spur_profile=None):
@@ -437,6 +563,10 @@ def clean(f_mhz, y_db, start_mhz, period_bins, profile=None, ripple=True,
         info['spurs_removed'] = gone
         info['spurs_kept'] = kept
         info['spur_limit_db'] = None if np.isinf(spur_limit_db) else float(spur_limit_db)
+        # V22.10: the comb of the kit, under the same switch
+        y, comb = hide_comb(f, y)
+        if comb is not None:
+            info['comb'] = comb
     if profile is not None and flatten:
         pf = np.asarray(profile['freq'], dtype=np.float64)
         inside = (f >= pf[0] - 0.5 * BIN_MHZ) & (f <= pf[-1] + 0.5 * BIN_MHZ)

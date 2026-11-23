@@ -527,7 +527,10 @@ class ScannerInterface(GenericQObject):
 
     @Slot(int, float, result=float)
     def getFreqResolution(self, nfft, fs):
-        return get_freq_resolution(nfft, fs*1e3) / 1e6
+        # V22.10: the window follows the sample rate (config.effective_window)
+        from wwb_scanner.scanner.config import effective_window
+        n = effective_window(nfft, fs * 1e3)
+        return get_freq_resolution(n, fs*1e3) / 1e6
 
     @Slot()
     def start(self):

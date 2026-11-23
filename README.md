@@ -10,7 +10,7 @@ company in Poland and for sound engineers across Europe. Most of the code in thi
 written with Claude (Anthropic); every release is checked on a real V4 dongle by the
 maintainer.
 
-Current version: **V22.9** in the branch `v4-fixes` (installed by the command below). Last tagged
+Current version: **V22.10** in the branch `v4-fixes` (installed by the command below). Last tagged
 release: [v22.3](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v22.3)
 (branch `v4-fixes`). The `master` branch is the original upstream code and is not used here.
 
@@ -183,6 +183,16 @@ release: [v22.3](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v22
   - Checked: the window check U1-U41 passes on PySide2 5.15 (Python 3.8) and PySide6 6.12
     (Python 3.13, also from a clean install with only Essentials + Addons); all tests on
     both. **Not yet on Windows with the dongle.**
+- **V22.10** - **Noise check, IF filter, 25 kHz points, comb of the kit.** "Own gain per band" keeps
+  a higher gain only when the floor referred to the input gets at least 1 dB lower (with the antenna
+  on the air or compression of the tuner often sets the floor: more gain only raised it on the
+  screen); of the gains within 0.5 dB of the best, the lowest is taken; every band is probed at the
+  gain of the scan. The IF filter of the tuner is at most 2.4 MHz (above 2.43 MS/s the driver
+  switched the tuner to its 6 MHz mode: 4-6 dB lower output; nothing changes at 2.4 MS/s and below).
+  The window size of the settings is for 2.4 MS/s and follows the sample rate, so a point stays
+  25 kHz wide (96 -> 128 at 3.2 MS/s). The 4.16 MHz comb of the own kit (laptop, its power or USB;
+  lines n x 4.15996 MHz) is found in a scan and its lines up to +7 dB are hidden like the dongle's
+  own spurs (same switch), stronger ones are kept and marked; the raw data stay untouched.
 - **V22.9** - **Reliability 2** (external audit of V22.8, three passes, 22.11.2026). No dongle is
   closed under a running USB call (the audit crashed libusb this way from another thread); a call
   on a closed dongle gives an error instead of reaching the freed handle. Opening the dongle has a
@@ -485,6 +495,14 @@ Windows: быстрее, без собственных помех донгла �
   копируются из реестра). Настройки по умолчанию — в ядре; без tinydb. В ядре появились
   служба скана и события, сканы из нескольких проходов (основа режима «Точный») и
   интерфейс приёмника (основа для других приёмников). Проверено на V4 18.11.2026.
+- V22.10: шумовая проверка «Own gain per band» (более высокое усиление полосы — только если пол,
+  приведённый ко входу, ниже хотя бы на 1 дБ; из усилений в пределах 0,5 дБ от лучшего берётся
+  меньшее; каждая полоса проверяется на усилении скана). Фильтр ПЧ тюнера не шире 2,4 МГц (выше
+  2,43 МС/с драйвер переключал тюнер в режим 6 МГц: выход ниже на 4–6 дБ; на 2,4 МС/с и ниже без
+  изменений). Размер окна задан для 2,4 МС/с и следует за частотой: точка всегда 25 кГц (на
+  3,2 МС/с окно 128). Гребёнка 4,16 МГц своего комплекта находится в скане, её линии до +7 дБ
+  скрываются тем же переключателем, что и свои спуры; более сильные остаются и помечаются; сырые
+  данные не меняются.
 - V22.9: надёжность-2 (три прохода внешнего аудита V22.8). Донгл не закрывается под идущим
   вызовом USB; вызов на закрытом донгле — ошибка, а не обращение к освобождённому handle.
   Открытие донгла с тайм-аутом 20 с. «Own gain per band»: после сбоя USB следующая полоса идёт

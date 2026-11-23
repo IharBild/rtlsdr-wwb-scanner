@@ -424,6 +424,7 @@ class ScannerBase(JSONMixin):
                 parts.append('kept on the spur grid: %s MHz' % ', '.join(
                     '%.3f (+%.0f dB)' % (k[0], k[1]) for k in kept[:4]) +
                     (' and %d more' % (len(kept) - 4) if len(kept) > 4 else ''))
+            parts += comb_note_parts(info)
         if info.get('ripple'):
             parts.append('tile ripple')
         if info.get('flatten'):
@@ -594,13 +595,18 @@ class Scanner(ScannerBase):
         return self._equal_spacing
     @property
     def window_size(self):
+        """The FFT window used for this scan. V22.10: the window size of the
+        settings is for 2.4 MS/s; at another rate it follows the rate, so a
+        point stays 25 kHz wide (config.effective_window)."""
         c = self.config
         w = c.sampling.get('window_size')
+        rs = c.sampling.get('sample_rate') or 2.4e6
         if not w:
             # not set: 25 kHz bins, like the UI default (None used to stop the scan)
-            rs = c.sampling.get('sample_rate') or 2.4e6
-            w = int(round(rs / 25e3))
-        return w
+            return int(round(rs / 25e3))
+        from wwb_scanner.scanner.config import effective_window
+        follows = c.sampling.get('window_follows_rate')
+        return effective_window(w, rs, True if follows is None else bool(follows))
     @window_size.setter
     def window_size(self, value):
         if value == self.sampling_config.get('window_size'):
@@ -1004,6 +1010,7 @@ class Scanner(ScannerBase):
         parts = []
         if info.get('spurs'):
             parts.append('%d own spurs hidden' % len(info.get('spurs_removed') or []))
+            parts += comb_note_parts(info)
         if info.get('ripple'):
             parts.append('tile ripple')
         if info.get('flatten'):
@@ -1065,6 +1072,23 @@ class Scanner(ScannerBase):
         self.spectrum.rebuild(tiles)
         logger.info('spectrum rebuilt from %d tiles in %.2f s', len(tiles), time.time() - t0)
 
+def comb_note_parts(info):
+    """V22.10: the comb of the kit in the status line of a scan."""
+    comb = info.get('comb') if isinstance(info, dict) else None
+    if not comb:
+        return []
+    out = []
+    hidden, kept = comb.get('hidden') or [], comb.get('kept') or []
+    if hidden:
+        out.append('%d line(s) of the %.3f MHz comb of the own kit hidden' % (
+            len(hidden), comb.get('f0_mhz', 4.16)))
+    if kept:
+        out.append('kept on the comb: %s MHz' % ', '.join(
+            '%.3f (+%.0f dB)' % (k[0], k[1]) for k in kept[:4]) +
+            (' and %d more' % (len(kept) - 4) if len(kept) > 4 else ''))
+    return out
+
+
 def merge_band_infos(infos, plan=None):
     """V22.7: one cleanup_info for a scan of several bands (one per gain)."""
     out = {'bands': infos}
@@ -1078,6 +1102,11 @@ def merge_band_infos(infos, plan=None):
             vals += list(i.get(key) or [])
         if vals:
             out[key] = vals
+    combs = [i['comb'] for i in infos if i.get('comb')]
+    if combs:       # V22.10
+        out['comb'] = {'f0_mhz': combs[0].get('f0_mhz'),
+                       'hidden': [x for c in combs for x in c.get('hidden') or []],
+                       'kept': [x for c in combs for x in c.get('kept') or []]}
     out['spurs'] = any(i.get('spurs') for i in infos)
     out['ripple'] = any(i.get('ripple') for i in infos)
     out['flatten'] = bool(infos) and all(i.get('flatten') for i in infos)
