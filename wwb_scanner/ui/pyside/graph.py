@@ -132,33 +132,52 @@ MAX_GRAPH_POINTS = 15000
 def group_size_for(num_points):
     """Points per chart point for a scan of ``num_points`` points. It is
     worked out once from the planned scan size, so it does not change
-    while the scan is running (a change would rebuild the whole chart)."""
-    return max(1, -(-int(num_points) // MAX_GRAPH_POINTS))
+    while the scan is running (a change would rebuild the whole chart).
+    V22.13 (external audit AUD-26): a fraction, not a whole number - 15 001
+    points gave 2 and only 7 501 chart points; now 15 000."""
+    n = float(num_points)
+    return 1 if n <= MAX_GRAPH_POINTS else n / MAX_GRAPH_POINTS
 
 def decimate_max(d_arr, k=None):
+    """One chart point per group of ``k`` points (the strongest one); point
+    i is in group floor(i / k), so the groups of the first points do not
+    change while the scan grows."""
     n = d_arr.size
     if k is None:
         k = group_size_for(n)
-    if k <= 1 or n < k:
+    if k <= 1 or n < 2:
         return d_arr
-    m = n // k * k
-    ix = np.argmax(d_arr['y'][:m].reshape(-1, k), axis=1) + np.arange(0, m, k)
-    if m < n:
-        ix = np.append(ix, m + np.argmax(d_arr['y'][m:]))
-    return d_arr[ix]
+    g = np.floor(np.arange(n, dtype=np.float64) / float(k)).astype(np.int64)
+    starts = np.flatnonzero(np.r_[True, g[1:] != g[:-1]])
+    if starts.size == n:
+        return d_arr
+    order = np.lexsort((-d_arr['y'], g))       # by group, the strongest first
+    return d_arr[order[starts]]
 
 GAP_Y = -300.     # below any axis: the line drops out of the plot in a gap
 
-def with_gaps(pts):
+def gap_limit(step_mhz, k):
+    """V22.13 (external audit AUD-25): the spacing of chart points that is a
+    hole: more than a group of ``k`` points can leave between two strongest
+    points (2k steps) - one missing tile (0.775 MHz) now counts."""
+    if not step_mhz or step_mhz <= 0:
+        return None
+    return (2. * max(float(k or 1), 1.) + 2.) * float(step_mhz)
+
+def with_gaps(pts, min_gap=None):
     """V18: a scan of several ranges has holes between them. A line chart
     would join the ends with a straight line (a "measurement" where there
-    was none); two points far below the plot make the hole visible."""
+    was none); two points far below the plot make the hole visible.
+    ``min_gap`` (MHz, V22.13): a smaller hole that also counts."""
     x = pts['x']
     if x.size < 3:
         return pts
     d = np.diff(x)
     med = float(np.median(d))
-    big = np.flatnonzero(d > max(1.0, 20 * med))
+    limit = max(1.0, 20 * med)
+    if min_gap is not None and 0 < min_gap < limit:
+        limit = min_gap
+    big = np.flatnonzero(d > limit)
     if not big.size:
         return pts
     ins = np.zeros(2 * big.size, dtype=pts.dtype)
@@ -195,6 +214,8 @@ class SpectrumGraphData(QtQuick.QQuickItem):
         self._color = None
         self._graphVisible = True
         self._decim_k = None
+        self._decim_span = None        # V22.13: MHz of the planned scan
+        self._decim_checked = False
         self._series = None
         self._mapper = None
         self._mapper_detached = False
@@ -435,11 +456,34 @@ class SpectrumGraphData(QtQuick.QQuickItem):
         self.minValue = QtCore.QPointF(self.xy_data['x'].min(), self.xy_data['y'].min())
         self.maxValue = QtCore.QPointF(self.xy_data['x'].max(), self.xy_data['y'].max())
 
+    def _point_step(self):
+        """Median spacing of the scan points (MHz), None while too few."""
+        x = self.xy_data['x']
+        if x.size < 32:
+            return None
+        d = np.diff(x[:4096])
+        d = d[d > 0]
+        return float(np.median(d)) if d.size else None
+
+    def _check_decimation(self):
+        """V22.13 (external audit AUD-11): the group size from the real
+        spacing of the points (Window size other than 25 kHz), once, with the
+        first points of the scan. Returns that spacing (MHz) or None."""
+        step = self._point_step()
+        if step and not self._decim_checked and self._decim_span:
+            self._decim_checked = True
+            k = group_size_for(self._decim_span / step)
+            if self._decim_k is None or abs(k - self._decim_k) > 0.05 * max(self._decim_k, 1):
+                self._decim_k = k
+        return step
+
     def _set_series_from_data(self):
+        self._check_decimation()
         if self.model is None:
             return
         t0 = time.time()
-        pts = with_gaps(decimate_max(self.xy_data, self._decim_k))
+        step = self._check_decimation()
+        pts = with_gaps(decimate_max(self.xy_data, self._decim_k), gap_limit(step, self._decim_k))
         if not self._replace_series(pts):
             self.model.set_from_graph_dtype(pts)
         dt = time.time() - t0
@@ -555,6 +599,8 @@ class LiveSpectrumGraphData(SpectrumGraphData):
             self.spectrum = self._scanner.spectrum
             total = (self._scanner.endFreq - self._scanner.startFreq) / 0.025
             self._decim_k = group_size_for(total)
+            self._decim_span = float(self._scanner.endFreq - self._scanner.startFreq)
+            self._decim_checked = False
             self._scanner.scannerRunState.connect(self.on_scanner_run_state)
             self.update_interval = .5 if total > 20000 else .1
         else:

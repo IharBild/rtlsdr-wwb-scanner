@@ -253,6 +253,14 @@ class NumpyExporter(BaseExporter):
         passes = getattr(sp, 'passes', None)
         if passes is not None and len(passes):
             arrays.update(passes.to_arrays())
+        # V22.13 (found on the PC 23.11): the time of the scan (an imported
+        # .npz got the time of the import) and the weights of the points
+        ts = getattr(sp, 'timestamp_utc', None)
+        if ts:
+            arrays['timestamp_utc'] = np.array([float(ts)], dtype=np.float64)
+        counts = sp.sample_data.counts_if_weighted() if hasattr(sp.sample_data, 'counts_if_weighted') else None
+        if counts is not None:
+            arrays['counts'] = counts
         buf = io.BytesIO()
         np.savez(buf, **arrays)
         write_atomic(self.filename, buf.getvalue())

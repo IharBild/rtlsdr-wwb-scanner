@@ -1224,6 +1224,14 @@ class SampleCollection(JSONMixin):
         except Exception:
             return 2.4e6
 
+    def _keep_ratio(self):
+        """V22.13 (external audit AUD-20): the keep ratio of the tiles as the
+        tiles were cut (tile_keep of the settings), not the default 0.39."""
+        try:
+            return tile_keep(self.scanner.sampling_config)[0]
+        except Exception:
+            return DEFAULT_TILE_KEEP_RATIO
+
     def far_tiles(self, reach=None):
         """V20: keys of normal tiles far from every strong carrier. V20.1:
         beyond DESENSE_HZ (the dongle can be deaf that far) if there are at
@@ -1768,7 +1776,8 @@ class SampleCollection(JSONMixin):
         if not low:
             return []
         fs = self._sample_rate()
-        half = DEFAULT_TILE_KEEP_RATIO * fs / 1e6
+        # V22.13 (external audit AUD-20): the tile keep ratio of the settings
+        half = self._keep_ratio() * fs / 1e6
         spans = []          # (lo, hi, loss) in MHz
         ref = self._reference_floor_db()
         spectrum = getattr(self.scanner, 'spectrum', None)
@@ -1932,7 +1941,7 @@ class SampleCollection(JSONMixin):
                     and getattr(s, 'clip_ratio', 0.) >= OVERLOAD_RATIO]
         if not keys:
             return []
-        half = DEFAULT_TILE_KEEP_RATIO * self._sample_rate()
+        half = self._keep_ratio() * self._sample_rate()       # V22.13 (AUD-20)
         try:
             lo_r, hi_r = [float(v) * 1e6 for v in self.scanner.config.scan_range]
         except Exception:
@@ -1983,7 +1992,7 @@ class SampleCollection(JSONMixin):
             fs = float(self.scanner.sample_rate)
         except Exception:
             fs = 2.4e6
-        half = 0.39 * fs
+        half = self._keep_ratio() * fs                         # V22.13 (AUD-20)
         groups = []
         for k, r in bad:
             if groups and k - groups[-1][1] <= 2.5 * step:

@@ -109,8 +109,13 @@ class SampleArray(JSONMixin):
         if self.keep_sorted:
             self.insert_sorted(other)
         else:
+            # V22.13 (external audit AUD-21): the weights go along
+            counts = self._get_counts()
             data = self._check_obj_type(other)
+            other_counts = other._get_counts() if isinstance(other, SampleArray) else \
+                np.ones(np.size(data), dtype=np.float64)
             self.data = np.append(self.data, data)
+            self._counts = np.concatenate([counts, other_counts])
     @staticmethod
     def _freq_keys(freqs):
         """Frequencies (MHz) as integer Hz, so that values which differ only
@@ -191,8 +196,28 @@ class SampleArray(JSONMixin):
         counts = self._get_counts()
         self.data = self.data[ix]
         self._counts = counts[ix]
+    def counts_if_weighted(self):
+        """V22.13 (external audit AUD-21): the weights of the points (1.0;
+        0.01 for a point measured again; 1e-3 for a product of the dongle)
+        when any differs from 1, else None - for saving with the points."""
+        counts = self.__dict__.get('_counts')
+        if counts is None or counts.size != self.data.size or np.all(counts == 1.):
+            return None
+        return np.asarray(counts, dtype=np.float64)
+    def set_counts(self, counts):
+        """Weights read back with the points (ignored when the size differs)."""
+        counts = np.asarray(counts, dtype=np.float64)
+        if counts.ndim == 1 and counts.size == self.data.size and np.all(np.isfinite(counts)) \
+                and np.all(counts > 0):
+            self._counts = counts.copy()
+            return True
+        return False
     def _serialize(self):
-        return {'data':self.data, 'keep_sorted':self.keep_sorted}
+        d = {'data':self.data, 'keep_sorted':self.keep_sorted}
+        counts = self.counts_if_weighted()
+        if counts is not None:
+            d['counts'] = counts                    # V22.13 (AUD-21)
+        return d
     def __repr__(self):
         return '<{self.__class__.__name__}: {self}>'.format(self=self)
     def __str__(self):
@@ -208,5 +233,8 @@ class JSONEncoder(object):
         return None
     def decode(self, d):
         if d.get('__class__') == 'SampleArray':
-            return SampleArray(d['data'], d['keep_sorted'])
+            a = SampleArray(d['data'], d['keep_sorted'])
+            if d.get('counts') is not None:
+                a.set_counts(d['counts'])           # V22.13 (AUD-21)
+            return a
         return d

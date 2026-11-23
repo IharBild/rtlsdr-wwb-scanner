@@ -221,9 +221,17 @@ class JsonDB(object):
             if bad:
                 events.console('!!! %s: %d damaged record(s) left out' % (self.path, bad))
             return tables
-        except (ValueError, UnicodeDecodeError) as exc:
+        except (OSError, MemoryError):
+            # V22.13: the file could not be read now (in use, no access, no
+            # memory) - not a damaged file: it must not be replaced by an
+            # empty history
+            raise
+        except Exception as exc:
             # A cut-off file (power loss, crash while saving) used to stop
             # the program from starting. Keep a copy and start a new one.
+            # V22.13 (external audit AUD-16): every error of reading it, not
+            # only ValueError - a damaged base64 array gave EOFError, a
+            # damaged pickled one UnpicklingError.
             backup = '%s.broken-%s' % (self.path, datetime.datetime.now().strftime('%Y%m%d-%H%M%S'))
             try:
                 import shutil
@@ -402,7 +410,7 @@ class DBStore(object):
         if bad_chars or os.path.basename(name) != name or name in ('.', '..') or os.path.isabs(name):
             return None
         return name
-    def _write_points(self, eid, data, sample_data, name=None, raw_dbFS=None, passes=None):
+    def _write_points(self, eid, data, sample_data, name=None, raw_dbFS=None, passes=None, counts=None):
         if not os.path.isdir(self.scans_dir):
             os.makedirs(self.scans_dir, exist_ok=True)
         own = self._safe_name(name)
@@ -422,6 +430,8 @@ class DBStore(object):
             arrays['raw_dbFS'] = np.asarray(raw_dbFS)
         if passes is not None:
             arrays.update(passes.to_arrays())       # V22.2: every pass of the scan
+        if counts is not None:
+            arrays['counts'] = np.asarray(counts, dtype=np.float64)   # V22.13 (AUD-21)
         np.savez_compressed(tmp, **arrays)
         _replace(tmp, path)
         return name
@@ -444,6 +454,7 @@ class DBStore(object):
             data['marks'] = marks
         sd = data.pop('sample_data', None)
         points = getattr(sd, 'data', sd)
+        self._counts = sd.counts_if_weighted() if hasattr(sd, 'counts_if_weighted') else None
         # V22.9 (external audit P3-03): number, points file and record under
         # one lock, with the index as it is on disk now
         with self.scan_db.lock:
@@ -464,7 +475,7 @@ class DBStore(object):
         if points is not None:
             data['sample_data_file'] = self._write_points(
                 eid, data, points, name, raw_dbFS=getattr(spectrum, 'raw_dbFS', None),
-                passes=getattr(spectrum, 'passes', None))
+                passes=getattr(spectrum, 'passes', None), counts=getattr(self, '_counts', None))
             if getattr(spectrum, 'passes', None) is not None:
                 data['passes'] = len(spectrum.passes)
         if new:
@@ -507,10 +518,12 @@ class DBStore(object):
             try:
                 z = load_npz_members(os.path.join(self.scans_dir, name),
                                      ('sample_data', 'raw_dbFS', 'pass_freqs', 'pass_levels',
-                                      'pass_times'),
+                                      'pass_times', 'counts'),
                                      'scan %s, points file %s' % (eid, name),
                                      required=('sample_data',))
                 rec['sample_data'] = SampleArray(data=z['sample_data'])
+                if 'counts' in z:
+                    rec['sample_data'].set_counts(z['counts'])     # V22.13 (AUD-21)
             except (ValueError, TypeError, KeyError) as exc:
                 import logging
                 logging.getLogger(__name__).error('%s', exc)

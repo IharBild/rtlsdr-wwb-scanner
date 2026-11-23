@@ -145,7 +145,7 @@ def test_decimate_keeps_peaks_and_limits_points(model):
     a['y'][70639] = -60.
     d = g.decimate_max(a)
     assert d.size <= g.MAX_GRAPH_POINTS + 1
-    assert g.group_size_for(70640) == 5
+    assert g.group_size_for(70640) == pytest.approx(70640 / 15000.)   # V22.13 (AUD-26)
     assert d['y'].max() == -50.
     assert -60. in d['y']
     assert np.all(np.diff(d['x']) > 0)

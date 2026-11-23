@@ -10,7 +10,7 @@ company in Poland and for sound engineers across Europe. Most of the code in thi
 written with Claude (Anthropic); every release is checked on a real V4 dongle by the
 maintainer.
 
-Current version: **V22.12** in the branch `v4-fixes` (installed by the command below). Last tagged
+Current version: **V22.13** in the branch `v4-fixes` (installed by the command below). Last tagged
 release: [v22.3](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v22.3)
 (branch `v4-fixes`). The `master` branch is the original upstream code and is not used here.
 
@@ -183,6 +183,15 @@ release: [v22.3](https://github.com/IharBild/rtlsdr-wwb-scanner/releases/tag/v22
   - Checked: the window check U1-U41 passes on PySide2 5.15 (Python 3.8) and PySide6 6.12
     (Python 3.13, also from a clean install with only Essentials + Addons); all tests on
     both. **Not yet on Windows with the dongle.**
+- **V22.13** - **Rest of the external audit** (23.11.2026). Chart: 15 001 points no longer drop to
+  7 501 on the chart; one missing tile is drawn as a hole; the number of chart points follows the
+  real spacing of the points (Window size other than 25 kHz). History and files: the weights of
+  points measured again or marked as products are kept (history, .npz, JSON); an empty set of
+  passes and a file without pass times are read; a damaged history index (bad arrays) is kept
+  aside and a new one started, while a file that can not be read now is never replaced. .npz keeps
+  the time of the scan. The bands of lost sensitivity use the tile keep ratio of the settings. A
+  damaged sdb3 header names the file. On Windows, a dongle library that is not the scanner build
+  is named in the status line (the PLL check is gone with it).
 - **V22.12** - **Own gain per band on, driver v8** (23.11.2026, after qa_pc on the V4 with V22.11:
   0 FAIL). "Own gain per band" is on by default: on the V4 it lowered the floor of 470-560 MHz by
   about 4 dB and of 174-240 MHz by 7.9 dB with the levels of strong signals kept; a window that
@@ -516,6 +525,12 @@ Windows: быстрее, без собственных помех донгла �
   копируются из реестра). Настройки по умолчанию — в ядре; без tinydb. В ядре появились
   служба скана и события, сканы из нескольких проходов (основа режима «Точный») и
   интерфейс приёмника (основа для других приёмников). Проверено на V4 18.11.2026.
+- V22.13: остаток внешнего аудита. График: 15 001 точка больше не превращается в 7 501, одна
+  пропущенная плитка рисуется разрывом, число точек графика — по реальному шагу. История и файлы:
+  веса перемеренных точек и продуктов сохраняются, пустые проходы читаются, испорченный индекс
+  истории откладывается (а недоступный сейчас файл не заменяется пустым). .npz хранит время скана.
+  Полосы потери чувствительности — по доле плитки из настроек. На Windows стандартная DLL вместо
+  нашей называется в строке состояния.
 - V22.12: «Own gain per band» включено по умолчанию (на V4 пол 470–560 МГц ниже примерно на
   4 дБ, 174–240 МГц — на 7,9 дБ, уровни сильных сигналов те же); у сохранённых настроек
   прошлых версий включается один раз, выключить можно в Scan settings. Драйвер scanner-v8

@@ -31,8 +31,15 @@ class ScanPasses(object):
             self.levels = np.empty((0, 0), dtype=np.float32)
             self.times = []
         else:
-            self.freqs = np.asarray(freqs, dtype=np.float64)
-            self.levels = np.asarray(levels, dtype=np.float32).reshape(-1, self.freqs.size)
+            self.freqs = np.asarray(freqs, dtype=np.float64).ravel()
+            levels = np.asarray(levels, dtype=np.float32)
+            if self.freqs.size == 0:
+                # V22.13 (external audit AUD-22): an empty set of passes comes
+                # back from a file as (0, 0) levels (reshape(-1, 0) failed)
+                n = levels.shape[0] if levels.ndim == 2 else 0
+                self.levels = np.empty((n, 0), dtype=np.float32)
+            else:
+                self.levels = levels.reshape(-1, self.freqs.size)
             self.times = list(times) if times is not None else [None] * self.levels.shape[0]
             if len(self.times) != self.levels.shape[0]:
                 raise ValueError('one time per pass')
@@ -99,5 +106,13 @@ class ScanPasses(object):
             files = list(z.keys())
         if 'pass_levels' not in files:
             return None
-        t = [None if not np.isfinite(v) else float(v) for v in np.asarray(z['pass_times'])]
-        return cls(z['pass_freqs'], z['pass_levels'], t)
+        # V22.13 (external audit AUD-22): no pass_times -> no times (was KeyError)
+        raw_t = np.asarray(z['pass_times'], dtype=np.float64) if 'pass_times' in files else None
+        freqs = z['pass_freqs'] if 'pass_freqs' in files else np.empty(0)
+        levels = np.asarray(z['pass_levels'])
+        if raw_t is None:
+            n = levels.shape[0] if levels.ndim == 2 else 0
+            t = [None] * n
+        else:
+            t = [None if not np.isfinite(v) else float(v) for v in raw_t]
+        return cls(freqs, levels, t)

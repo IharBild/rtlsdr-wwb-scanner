@@ -137,7 +137,8 @@ class NumpyImporter(BaseImporter):
     of the scan come in too when the file has them (history files, our
     own .npz export); before only the points were read."""
     _extension = 'npz'
-    KEYS = ('sample_data', 'raw_dbFS', 'pass_freqs', 'pass_levels', 'pass_times')
+    KEYS = ('sample_data', 'raw_dbFS', 'pass_freqs', 'pass_levels', 'pass_times', 'timestamp_utc',
+            'counts')
     def __call__(self):
         from wwb_scanner.utils.numpyjson import load_npz_members
         from wwb_scanner.scan_objects.passes import ScanPasses
@@ -153,6 +154,12 @@ class NumpyImporter(BaseImporter):
         spectrum = self.spectrum
         spectrum.name = name
         spectrum.add_sample_set(data=data)
+        # V22.13: the time of the scan and the weights of the points
+        ts = arrays.get('timestamp_utc')
+        if ts is not None and np.size(ts) == 1 and np.isfinite(np.ravel(ts)[0]) and np.ravel(ts)[0] > 0:
+            spectrum.timestamp_utc = float(np.ravel(ts)[0])
+        if arrays.get('counts') is not None:
+            spectrum.sample_data.set_counts(arrays['counts'])
         raw = arrays.get('raw_dbFS')
         if raw is not None:
             raw = np.asarray(raw, dtype=np.float64)
@@ -363,8 +370,17 @@ class WWB3Importer(BaseImporter):
         b = self.file_data
         if not b.startswith(b'//@ShureScan'):
             raise ValueError('%s: not a WWB sdb3 file' % os.path.basename(self.filename))
-        i = b.index(b'@Binary:')
-        header = json.loads(b[len(b'//@ShureScan'):i].decode('utf-8'))
+        name = os.path.basename(self.filename)
+        i = b.find(b'@Binary:')
+        if i < 0:
+            raise ValueError('%s: the sdb3 file has no data part (@Binary:)' % name)
+        # V22.13: a damaged header names the file (was a bare JSON error)
+        try:
+            header = json.loads(b[len(b'//@ShureScan'):i].decode('utf-8'))
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise ValueError('%s: the header of the sdb3 file is damaged (%s)' % (name, exc))
+        if not isinstance(header, dict):
+            raise ValueError('%s: the header of the sdb3 file is damaged' % name)
         j = b.rfind(b'@Extended:')
         body = b[i + len(b'@Binary:'):j if j > 0 else len(b)]
         width = int(header.get('BitWidth', 16)) // 8

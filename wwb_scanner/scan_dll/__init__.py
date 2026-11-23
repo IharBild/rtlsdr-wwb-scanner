@@ -67,11 +67,30 @@ def is_scanner_build():
     return _lib() is not None
 
 
+STOCK_WARNING = ('The dongle library is not the scanner build: tuning errors (PLL not locked) are not '
+                 'checked and tiles may be measured on a wrong frequency without a word. Install it: '
+                 'python drivers\\rtlsdr-scanner-v8\\install_dll.py')
+
+
+def warn_stock_once(platform=None):
+    """V22.13 (DLL audit 12.11, item 4): with the stock library the check
+    of the PLL is gone - say so in the window (status line, once per run),
+    not only in the console. Only on Windows, where our DLL is expected."""
+    import sys
+    if (platform or sys.platform) != 'win32' or _cache.get('stock_warned'):
+        return False
+    _cache['stock_warned'] = True
+    import logging
+    logging.getLogger('wwb_scanner.status').warning(STOCK_WARNING)
+    return True
+
+
 def configure(sdr):
     """Report which library is in use. Returns True for the scanner build."""
     info = build_info()
     if info is None:
         events.console('rtlsdr library: stock (no PLL lock check)')
+        warn_stock_once()
         return False
     events.console('rtlsdr library: %s' % info)
     return True
